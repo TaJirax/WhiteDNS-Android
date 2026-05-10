@@ -1,0 +1,1055 @@
+package shop.whitedns.client.model
+
+import java.io.Serializable
+import java.net.InetAddress
+
+enum class ConnectionStatus {
+    DISCONNECTED,
+    CONNECTING,
+    CONNECTED,
+}
+
+data class Choice<T>(
+    val value: T,
+    val label: String,
+)
+
+data class StormDnsServerProfile(
+    val id: String,
+    val label: String,
+    val domain: String,
+    val encryptionKey: String,
+    val encryptionMethod: Int,
+)
+
+data class ConnectionProfile(
+    val id: String,
+    val name: String,
+    val serverMode: String = "custom",
+    val customServerDomain: String = "",
+    val customServerEncryptionKey: String = "",
+    val customServerEncryptionMethod: Int = 1,
+    val resolverProfileId: String = "",
+    val connectionMode: String = "proxy",
+) : Serializable {
+    companion object {
+        const val DefaultId = "default"
+
+        fun defaultProfile(): ConnectionProfile {
+            return ConnectionProfile(
+                id = DefaultId,
+                name = "Connection",
+                serverMode = "custom",
+            )
+        }
+
+        fun fromSettings(settings: WhiteDnsSettings): ConnectionProfile {
+            return ConnectionProfile(
+                id = DefaultId,
+                name = "Connection",
+                serverMode = "custom",
+                customServerDomain = settings.customServerDomain,
+                customServerEncryptionKey = settings.customServerEncryptionKey,
+                customServerEncryptionMethod = settings.customServerEncryptionMethod,
+                resolverProfileId = settings.selectedResolverProfileId,
+                connectionMode = settings.connectionMode,
+            )
+        }
+    }
+}
+
+data class ResolverProfile(
+    val id: String,
+    val name: String,
+    val resolverText: String,
+) : Serializable {
+    companion object {
+        fun newId(): String = "resolver-${System.currentTimeMillis()}"
+    }
+}
+
+data class ResolverTextValidation(
+    val normalizedResolvers: List<String>,
+    val invalidEntries: List<String>,
+) {
+    val normalizedText: String
+        get() = normalizedResolvers.joinToString("\n")
+
+    val isValid: Boolean
+        get() = normalizedResolvers.isNotEmpty() && invalidEntries.isEmpty()
+}
+
+data class WhiteDnsSettings(
+    val selectedConnectionProfileId: String = ConnectionProfile.DefaultId,
+    val connectionProfiles: List<ConnectionProfile> = listOf(ConnectionProfile.defaultProfile()),
+    val selectedResolverProfileId: String = "",
+    val resolverProfiles: List<ResolverProfile> = emptyList(),
+    val serverMode: String = "custom",
+    val customServerDomain: String = "",
+    val customServerEncryptionKey: String = "",
+    val customServerEncryptionMethod: Int = 1,
+    val connectionMode: String = "proxy",
+    val protocolType: String = "SOCKS5",
+    val resolverText: String = "",
+    val listenIp: String = "127.0.0.1",
+    val listenPort: String = "10886",
+    val httpProxyEnabled: Boolean = true,
+    val httpProxyPort: String = "10887",
+    val socks5Authentication: Boolean = false,
+    val socksUsername: String = "master_dns_vpn",
+    val socksPassword: String = "master_dns_vpn",
+    val balancingStrategy: Int = 3,
+    val uploadDuplication: String = "3",
+    val downloadDuplication: String = "7",
+    val uploadCompression: Int = 2,
+    val downloadCompression: Int = 2,
+    val baseEncodeData: Boolean = false,
+    val minUploadMtu: String = "40",
+    val minDownloadMtu: String = "100",
+    val maxUploadMtu: String = "64",
+    val maxDownloadMtu: String = "140",
+    val mtuTestRetriesResolvers: String = "3",
+    val mtuTestTimeoutResolvers: String = "2.0",
+    val mtuTestParallelismResolvers: String = "100",
+    val mtuTestRetriesLogs: String = "5",
+    val mtuTestTimeoutLogs: String = "2.0",
+    val mtuTestParallelismLogs: String = "32",
+    val rxTxWorkers: String = "4",
+    val tunnelProcessWorkers: String = "4",
+    val tunnelPacketTimeoutSeconds: String = "8.0",
+    val dispatcherIdlePollIntervalSeconds: String = "0.020",
+    val txChannelSize: String = "2048",
+    val rxChannelSize: String = "2048",
+    val resolverUdpConnectionPoolSize: String = "64",
+    val streamQueueInitialCapacity: String = "128",
+    val orphanQueueInitialCapacity: String = "32",
+    val dnsResponseFragmentStoreCapacity: String = "256",
+    val socksUdpAssociateReadTimeoutSeconds: String = "30.0",
+    val clientTerminalStreamRetentionSeconds: String = "45.0",
+    val clientCancelledSetupRetentionSeconds: String = "120.0",
+    val sessionInitRetryBaseSeconds: String = "1.0",
+    val sessionInitRetryStepSeconds: String = "1.0",
+    val sessionInitRetryLinearAfter: String = "5",
+    val sessionInitRetryMaxSeconds: String = "60.0",
+    val sessionInitBusyRetryIntervalSeconds: String = "60.0",
+    val localDnsEnabled: Boolean = false,
+    val localDnsPort: String = "53",
+    val startupMode: String = "resolvers",
+    val pingWatchdogSeconds: String = "300",
+    val trafficWarmupEnabled: Boolean = true,
+    val trafficWarmupProbeCount: String = "4",
+    val trafficKeepaliveIntervalSeconds: String = "5",
+    val fullVpnPerformanceWarningDismissed: Boolean = false,
+    val splitTunnelMode: String = WhiteDnsOptions.SplitTunnelModeOff,
+    val splitTunnelPackages: List<String> = emptyList(),
+    val logLevel: String = "WARN",
+) : Serializable
+
+data class ResolvedWhiteDnsSettings(
+    val connectionMode: String,
+    val protocolType: String,
+    val resolverEntries: List<String>,
+    val listenIp: String,
+    val listenPort: Int,
+    val httpProxyEnabled: Boolean,
+    val httpProxyPort: Int,
+    val socks5Authentication: Boolean,
+    val socksUsername: String,
+    val socksPassword: String,
+    val balancingStrategy: Int,
+    val uploadDuplication: Int,
+    val downloadDuplication: Int,
+    val uploadCompression: Int,
+    val downloadCompression: Int,
+    val baseEncodeData: Boolean,
+    val minUploadMtu: Int,
+    val minDownloadMtu: Int,
+    val maxUploadMtu: Int,
+    val maxDownloadMtu: Int,
+    val mtuTestRetriesResolvers: Int,
+    val mtuTestTimeoutResolvers: Double,
+    val mtuTestParallelismResolvers: Int,
+    val mtuTestRetriesLogs: Int,
+    val mtuTestTimeoutLogs: Double,
+    val mtuTestParallelismLogs: Int,
+    val rxTxWorkers: Int,
+    val tunnelProcessWorkers: Int,
+    val tunnelPacketTimeoutSeconds: Double,
+    val dispatcherIdlePollIntervalSeconds: Double,
+    val txChannelSize: Int,
+    val rxChannelSize: Int,
+    val resolverUdpConnectionPoolSize: Int,
+    val streamQueueInitialCapacity: Int,
+    val orphanQueueInitialCapacity: Int,
+    val dnsResponseFragmentStoreCapacity: Int,
+    val socksUdpAssociateReadTimeoutSeconds: Double,
+    val clientTerminalStreamRetentionSeconds: Double,
+    val clientCancelledSetupRetentionSeconds: Double,
+    val sessionInitRetryBaseSeconds: Double,
+    val sessionInitRetryStepSeconds: Double,
+    val sessionInitRetryLinearAfter: Int,
+    val sessionInitRetryMaxSeconds: Double,
+    val sessionInitBusyRetryIntervalSeconds: Double,
+    val localDnsEnabled: Boolean,
+    val localDnsPort: Int,
+    val startupMode: String,
+    val pingWatchdogSeconds: Int,
+    val trafficWarmupEnabled: Boolean,
+    val trafficWarmupProbeCount: Int,
+    val trafficKeepaliveIntervalSeconds: Int,
+    val splitTunnelMode: String,
+    val splitTunnelPackages: List<String>,
+    val logLevel: String,
+)
+
+data class ConnectionStats(
+    val downloadBytes: Long = 0,
+    val uploadBytes: Long = 0,
+    val totalDataUsageBytes: Long = 0,
+    val downloadSpeedBytesPerSecond: Long = 0,
+    val uploadSpeedBytesPerSecond: Long = 0,
+    val peakSpeedBytesPerSecond: Long = 0,
+    val connectedApps: Int = 0,
+)
+
+data class ResolverRuntimeState(
+    val activeResolvers: List<String> = emptyList(),
+    val standbyResolvers: List<String> = emptyList(),
+    val validResolvers: List<String> = emptyList(),
+)
+
+data class ConnectionProgressState(
+    val phase: String = "idle",
+    val percent: Int = 0,
+    val completed: Int = 0,
+    val total: Int = 0,
+    val valid: Int = 0,
+    val rejected: Int = 0,
+) {
+    val fraction: Float
+        get() = percent.coerceIn(0, 100) / 100f
+
+    val label: String
+        get() = when (phase.lowercase()) {
+            "preparing" -> "Preparing"
+            "starting" -> "Starting"
+            "mtu" -> if (total > 0) {
+                "Scanning $completed/$total"
+            } else {
+                "Scanning"
+            }
+            "selecting" -> "Selecting resolver"
+            "session" -> "Starting session"
+            "runtime" -> "Starting runtime"
+            "retry" -> "Retrying"
+            "connected" -> "Connected"
+            else -> "Preparing"
+        }
+}
+
+data class WhiteDnsUiState(
+    val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
+    val settings: WhiteDnsSettings = WhiteDnsSettings(),
+    val serverPool: List<StormDnsServerProfile> = emptyList(),
+    val networkIpAddress: String = "127.0.0.1",
+    val batteryOptimizationIgnored: Boolean = true,
+    val notificationsEnabled: Boolean = true,
+    val activeConnectionProfileId: String? = null,
+    val connectionLogs: List<String> = listOf("Idle"),
+    val connectionStats: ConnectionStats = ConnectionStats(),
+    val resolverRuntimeState: ResolverRuntimeState = ResolverRuntimeState(),
+    val connectionProgress: ConnectionProgressState = ConnectionProgressState(),
+)
+
+object WhiteDnsRuntimeProxy {
+    const val ListenIp = "127.0.0.1"
+    const val ListenPort = "10886"
+    const val ListenPortInt = 10886
+    const val HttpProxyPort = "10887"
+    const val HttpProxyPortInt = 10887
+}
+
+object WhiteDnsOptions {
+    const val SplitTunnelModeOff = "off"
+    const val SplitTunnelModeInclude = "include"
+    const val SplitTunnelModeExclude = "exclude"
+
+    val connectionModes = listOf(
+        Choice("proxy", "Proxy Mode"),
+        Choice("vpn", "Full VPN"),
+    )
+
+    val splitTunnelModes = listOf(
+        Choice(SplitTunnelModeOff, "All Apps"),
+        Choice(SplitTunnelModeInclude, "Only Selected"),
+        Choice(SplitTunnelModeExclude, "Bypass Selected"),
+    )
+
+    val encryptionMethods = listOf(
+        Choice(0, "None"),
+        Choice(1, "XOR"),
+        Choice(2, "ChaCha20"),
+        Choice(3, "AES-128-GCM"),
+        Choice(4, "AES-192-GCM"),
+        Choice(5, "AES-256-GCM"),
+    )
+
+    val balancingStrategies = listOf(
+        Choice(1, "Random"),
+        Choice(2, "Round Robin"),
+        Choice(3, "Least Loss"),
+        Choice(4, "Lowest Latency"),
+    )
+
+    val compressionTypes = listOf(
+        Choice(0, "OFF"),
+        Choice(1, "ZSTD"),
+        Choice(2, "LZ4"),
+        Choice(3, "ZLIB"),
+    )
+
+    val startupModes = listOf(
+        Choice("ask", "Ask each time"),
+        Choice("resolvers", "Full scan"),
+        Choice("logs", "From logs (fast)"),
+    )
+
+    val logLevels = listOf(
+        Choice("DEBUG", "DEBUG"),
+        Choice("INFO", "INFO"),
+        Choice("WARN", "WARN"),
+        Choice("ERROR", "ERROR"),
+    )
+
+    fun encryptionMethodLabel(methodId: Int): String {
+        return encryptionMethods.firstOrNull { it.value == methodId }?.label ?: "Unknown"
+    }
+
+    fun connectionModeLabel(mode: String): String {
+        return connectionModes.firstOrNull { it.value == mode }?.label ?: "Proxy Mode"
+    }
+
+    fun splitTunnelModeLabel(mode: String): String {
+        return splitTunnelModes.firstOrNull { it.value == mode }?.label ?: "All Apps"
+    }
+}
+
+fun WhiteDnsSettings.normalizedConnectionProfiles(): List<ConnectionProfile> {
+    val resolverIds = resolverProfiles.map { it.id }.toSet()
+    val source = connectionProfiles.ifEmpty {
+        listOf(ConnectionProfile.fromSettings(this))
+    }
+    val normalizedProfiles = source
+        .filter { it.id.isNotBlank() }
+        .distinctBy { it.id }
+        .mapIndexed { index, profile ->
+            profile.copy(
+                name = profile.name.ifBlank { "Connection ${index + 1}" },
+                serverMode = "custom",
+                customServerEncryptionMethod = profile.customServerEncryptionMethod.coerceIn(0, 5),
+                resolverProfileId = profile.resolverProfileId.takeIf { it in resolverIds }.orEmpty(),
+                connectionMode = when (profile.connectionMode) {
+                    "proxy", "vpn" -> profile.connectionMode
+                    else -> "proxy"
+                },
+            )
+        }
+
+    val customProfiles = normalizedProfiles
+        .mapIndexed { index, profile ->
+            profile.copy(
+                id = profile.id,
+                name = profile.name.ifBlank { "Connection ${index + 1}" },
+                serverMode = "custom",
+            )
+        }
+        .distinctBy { it.id }
+
+    return customProfiles.ifEmpty {
+        listOf(ConnectionProfile.defaultProfile())
+    }
+}
+
+fun WhiteDnsSettings.normalizedResolverProfiles(): List<ResolverProfile> {
+    return resolverProfiles
+        .filter { it.id.isNotBlank() }
+        .distinctBy { it.id }
+        .mapIndexed { index, profile ->
+            profile.copy(
+                name = profile.name.ifBlank { "Resolvers ${index + 1}" },
+                resolverText = normalizeResolverText(profile.resolverText),
+            )
+        }
+        .filter { it.resolverText.isNotBlank() }
+}
+
+fun WhiteDnsSettings.selectedConnectionProfile(): ConnectionProfile {
+    val profiles = normalizedConnectionProfiles()
+    return profiles.firstOrNull { it.id == selectedConnectionProfileId } ?: profiles.first()
+}
+
+fun WhiteDnsSettings.selectedResolverProfile(): ResolverProfile? {
+    return normalizedResolverProfiles().firstOrNull { it.id == selectedResolverProfileId }
+}
+
+fun WhiteDnsSettings.syncSelectedConnectionProfileFields(): WhiteDnsSettings {
+    val resolverProfiles = normalizedResolverProfiles()
+    val resolverIds = resolverProfiles.map { it.id }.toSet()
+    val profiles = normalizedConnectionProfiles()
+    val selected = profiles.firstOrNull { it.id == selectedConnectionProfileId } ?: profiles.first()
+    val selectedConnectionMode = normalizeConnectionMode(connectionMode)
+    val modeSyncedProfiles = profiles.map { profile ->
+        if (profile.id == selected.id) {
+            profile.copy(connectionMode = selectedConnectionMode)
+        } else {
+            profile
+        }
+    }
+    val selectedResolverId = selected.resolverProfileId
+        .takeIf { it in resolverIds }
+        ?: selectedResolverProfileId.takeIf { it in resolverIds }
+        ?: ""
+    val selectedResolver = resolverProfiles.firstOrNull { it.id == selectedResolverId }
+    return copy(
+        selectedConnectionProfileId = selected.id,
+        connectionProfiles = modeSyncedProfiles,
+        selectedResolverProfileId = selectedResolverId,
+        resolverProfiles = resolverProfiles,
+        resolverText = selectedResolver?.resolverText ?: resolverText,
+        serverMode = selected.serverMode,
+        customServerDomain = selected.customServerDomain,
+        customServerEncryptionKey = selected.customServerEncryptionKey,
+        customServerEncryptionMethod = selected.customServerEncryptionMethod,
+        connectionMode = selectedConnectionMode,
+        splitTunnelMode = normalizeSplitTunnelMode(splitTunnelMode),
+        splitTunnelPackages = normalizePackageNames(splitTunnelPackages),
+    )
+}
+
+fun WhiteDnsSettings.runtimeConnectionSettings(): WhiteDnsSettings {
+    val settings = syncSelectedConnectionProfileFields()
+    return if (settings.connectionMode == "vpn") {
+        settings.copy(
+            listenIp = WhiteDnsRuntimeProxy.ListenIp,
+            listenPort = WhiteDnsRuntimeProxy.ListenPort,
+            httpProxyEnabled = false,
+            httpProxyPort = WhiteDnsRuntimeProxy.HttpProxyPort,
+            socks5Authentication = false,
+            socksUsername = "",
+            socksPassword = "",
+        )
+    } else {
+        settings
+    }
+}
+
+fun WhiteDnsSettings.selectConnectionProfile(profileId: String): WhiteDnsSettings {
+    val profiles = normalizedConnectionProfiles()
+    val resolverProfiles = normalizedResolverProfiles()
+    val selected = profiles.firstOrNull { it.id == profileId } ?: profiles.first()
+    val resolverProfile = resolverProfiles.firstOrNull { it.id == selected.resolverProfileId }
+    return copy(
+        selectedConnectionProfileId = selected.id,
+        connectionProfiles = profiles,
+        selectedResolverProfileId = resolverProfile?.id.orEmpty(),
+        resolverProfiles = resolverProfiles,
+        resolverText = resolverProfile?.resolverText ?: resolverText,
+    ).syncSelectedConnectionProfileFields()
+}
+
+fun WhiteDnsSettings.upsertConnectionProfile(profile: ConnectionProfile): WhiteDnsSettings {
+    val resolverIds = normalizedResolverProfiles().map { it.id }.toSet()
+    val normalizedProfile = profile.copy(
+        id = profile.id.ifBlank { "profile-${System.currentTimeMillis()}" },
+        name = profile.name.ifBlank { "Connection" },
+        serverMode = "custom",
+        customServerEncryptionMethod = profile.customServerEncryptionMethod.coerceIn(0, 5),
+        resolverProfileId = profile.resolverProfileId.takeIf { it in resolverIds }.orEmpty(),
+        connectionMode = when (profile.connectionMode) {
+            "proxy", "vpn" -> profile.connectionMode
+            else -> "proxy"
+        },
+    )
+    val profiles = normalizedConnectionProfiles()
+    val updatedProfiles = if (profiles.any { it.id == normalizedProfile.id }) {
+        profiles.map { existing ->
+            if (existing.id == normalizedProfile.id) normalizedProfile else existing
+        }
+    } else {
+        profiles + normalizedProfile
+    }
+    return copy(
+        connectionProfiles = updatedProfiles,
+        selectedConnectionProfileId = if (selectedConnectionProfileId.isBlank()) {
+            normalizedProfile.id
+        } else {
+            selectedConnectionProfileId
+        },
+    ).syncSelectedConnectionProfileFields()
+}
+
+fun WhiteDnsSettings.upsertResolverProfile(profile: ResolverProfile): WhiteDnsSettings {
+    val normalizedProfile = profile.copy(
+        id = profile.id.ifBlank { ResolverProfile.newId() },
+        name = profile.name.ifBlank { "Resolvers" },
+        resolverText = normalizeResolverText(profile.resolverText),
+    )
+    if (normalizedProfile.resolverText.isBlank()) {
+        return syncSelectedConnectionProfileFields()
+    }
+    val profiles = normalizedResolverProfiles()
+    val updatedProfiles = if (profiles.any { it.id == normalizedProfile.id }) {
+        profiles.map { existing ->
+            if (existing.id == normalizedProfile.id) normalizedProfile else existing
+        }
+    } else {
+        profiles + normalizedProfile
+    }
+    return copy(
+        resolverProfiles = updatedProfiles,
+        selectedResolverProfileId = normalizedProfile.id,
+        resolverText = normalizedProfile.resolverText,
+    ).applyResolverProfileToSelectedConnection(normalizedProfile.id)
+}
+
+fun WhiteDnsSettings.moveConnectionProfile(profileId: String, direction: Int): WhiteDnsSettings {
+    if (direction == 0) {
+        return syncSelectedConnectionProfileFields()
+    }
+    val profiles = normalizedConnectionProfiles()
+    val customProfiles = profiles.filter { it.serverMode == "custom" }
+    val fromIndex = customProfiles.indexOfFirst { it.id == profileId }
+    if (fromIndex == -1) {
+        return copy(connectionProfiles = profiles).syncSelectedConnectionProfileFields()
+    }
+    return moveConnectionProfileToIndex(profileId, fromIndex + direction)
+}
+
+fun WhiteDnsSettings.moveConnectionProfileToIndex(profileId: String, targetIndex: Int): WhiteDnsSettings {
+    val profiles = normalizedConnectionProfiles()
+    val customProfiles = profiles.filter { it.serverMode == "custom" }
+    val fromIndex = customProfiles.indexOfFirst { it.id == profileId }
+    if (fromIndex == -1) {
+        return copy(connectionProfiles = profiles).syncSelectedConnectionProfileFields()
+    }
+    val toIndex = targetIndex.coerceIn(0, customProfiles.lastIndex)
+    if (fromIndex == toIndex) {
+        return copy(connectionProfiles = profiles).syncSelectedConnectionProfileFields()
+    }
+    return copy(
+        connectionProfiles = customProfiles.moved(fromIndex, toIndex),
+    ).syncSelectedConnectionProfileFields()
+}
+
+fun WhiteDnsSettings.moveResolverProfile(profileId: String, direction: Int): WhiteDnsSettings {
+    if (direction == 0) {
+        return syncSelectedConnectionProfileFields()
+    }
+    val profiles = normalizedResolverProfiles()
+    val fromIndex = profiles.indexOfFirst { it.id == profileId }
+    if (fromIndex == -1) {
+        return copy(resolverProfiles = profiles).syncSelectedConnectionProfileFields()
+    }
+    return moveResolverProfileToIndex(profileId, fromIndex + direction)
+}
+
+fun WhiteDnsSettings.moveResolverProfileToIndex(profileId: String, targetIndex: Int): WhiteDnsSettings {
+    val profiles = normalizedResolverProfiles()
+    val fromIndex = profiles.indexOfFirst { it.id == profileId }
+    if (fromIndex == -1) {
+        return copy(resolverProfiles = profiles).syncSelectedConnectionProfileFields()
+    }
+    val toIndex = targetIndex.coerceIn(0, profiles.lastIndex)
+    if (fromIndex == toIndex) {
+        return copy(resolverProfiles = profiles).syncSelectedConnectionProfileFields()
+    }
+    return copy(
+        resolverProfiles = profiles.moved(fromIndex, toIndex),
+    ).syncSelectedConnectionProfileFields()
+}
+
+fun WhiteDnsSettings.applyResolverProfileToSelectedConnection(profileId: String): WhiteDnsSettings {
+    val resolverProfiles = normalizedResolverProfiles()
+    val resolverProfile = resolverProfiles.firstOrNull { it.id == profileId }
+        ?: return copy(selectedResolverProfileId = "").syncSelectedConnectionProfileFields()
+    val connectionProfiles = normalizedConnectionProfiles()
+    val selectedConnection = connectionProfiles.firstOrNull { it.id == selectedConnectionProfileId }
+        ?: connectionProfiles.first()
+    val updatedConnectionProfiles = connectionProfiles.map { profile ->
+        if (profile.id == selectedConnection.id) {
+            profile.copy(resolverProfileId = resolverProfile.id)
+        } else {
+            profile
+        }
+    }
+    return copy(
+        connectionProfiles = updatedConnectionProfiles,
+        resolverProfiles = resolverProfiles,
+        selectedResolverProfileId = resolverProfile.id,
+        resolverText = resolverProfile.resolverText,
+    ).syncSelectedConnectionProfileFields()
+}
+
+fun WhiteDnsSettings.clearSelectedResolverProfile(): WhiteDnsSettings {
+    val connectionProfiles = normalizedConnectionProfiles()
+    val selectedConnection = connectionProfiles.firstOrNull { it.id == selectedConnectionProfileId }
+        ?: connectionProfiles.first()
+    val updatedConnectionProfiles = connectionProfiles.map { profile ->
+        if (profile.id == selectedConnection.id) {
+            profile.copy(resolverProfileId = "")
+        } else {
+            profile
+        }
+    }
+    return copy(
+        connectionProfiles = updatedConnectionProfiles,
+        selectedConnectionProfileId = selectedConnection.id,
+        selectedResolverProfileId = "",
+    ).syncSelectedConnectionProfileFields()
+}
+
+fun WhiteDnsSettings.updateManualResolverText(resolverText: String): WhiteDnsSettings {
+    return clearSelectedResolverProfile()
+        .copy(resolverText = resolverText)
+        .syncSelectedConnectionProfileFields()
+}
+
+fun WhiteDnsSettings.deleteResolverProfile(profileId: String): WhiteDnsSettings {
+    val profiles = normalizedResolverProfiles()
+    if (profiles.none { it.id == profileId }) {
+        return syncSelectedConnectionProfileFields()
+    }
+    val remainingProfiles = profiles.filterNot { it.id == profileId }
+    val updatedConnectionProfiles = normalizedConnectionProfiles().map { profile ->
+        if (profile.resolverProfileId == profileId) {
+            profile.copy(resolverProfileId = "")
+        } else {
+            profile
+        }
+    }
+    return copy(
+        resolverProfiles = remainingProfiles,
+        connectionProfiles = updatedConnectionProfiles,
+        selectedResolverProfileId = if (selectedResolverProfileId == profileId) "" else selectedResolverProfileId,
+    ).syncSelectedConnectionProfileFields()
+}
+
+fun WhiteDnsSettings.deleteConnectionProfile(profileId: String): WhiteDnsSettings {
+    val profiles = normalizedConnectionProfiles()
+    if (profiles.size <= 1 || profiles.none { it.id == profileId }) {
+        return syncSelectedConnectionProfileFields()
+    }
+    val remainingProfiles = profiles.filterNot { it.id == profileId }
+    val nextSelectedId = if (selectedConnectionProfileId == profileId) {
+        remainingProfiles.first().id
+    } else {
+        selectedConnectionProfileId
+    }
+    return copy(
+        connectionProfiles = remainingProfiles,
+        selectedConnectionProfileId = nextSelectedId,
+    ).syncSelectedConnectionProfileFields()
+}
+
+private fun <T> List<T>.moved(fromIndex: Int, toIndex: Int): List<T> {
+    val reordered = toMutableList()
+    val item = reordered.removeAt(fromIndex)
+    reordered.add(toIndex, item)
+    return reordered
+}
+
+fun WhiteDnsSettings.resetAdvancedSettings(): WhiteDnsSettings {
+    val defaults = WhiteDnsSettings()
+    return copy(
+        listenIp = defaults.listenIp,
+        listenPort = defaults.listenPort,
+        httpProxyEnabled = defaults.httpProxyEnabled,
+        httpProxyPort = defaults.httpProxyPort,
+        socks5Authentication = defaults.socks5Authentication,
+        socksUsername = defaults.socksUsername,
+        socksPassword = defaults.socksPassword,
+        balancingStrategy = defaults.balancingStrategy,
+        uploadDuplication = defaults.uploadDuplication,
+        downloadDuplication = defaults.downloadDuplication,
+        uploadCompression = defaults.uploadCompression,
+        downloadCompression = defaults.downloadCompression,
+        baseEncodeData = defaults.baseEncodeData,
+        minUploadMtu = defaults.minUploadMtu,
+        minDownloadMtu = defaults.minDownloadMtu,
+        maxUploadMtu = defaults.maxUploadMtu,
+        maxDownloadMtu = defaults.maxDownloadMtu,
+        mtuTestRetriesResolvers = defaults.mtuTestRetriesResolvers,
+        mtuTestTimeoutResolvers = defaults.mtuTestTimeoutResolvers,
+        mtuTestParallelismResolvers = defaults.mtuTestParallelismResolvers,
+        mtuTestRetriesLogs = defaults.mtuTestRetriesLogs,
+        mtuTestTimeoutLogs = defaults.mtuTestTimeoutLogs,
+        mtuTestParallelismLogs = defaults.mtuTestParallelismLogs,
+        rxTxWorkers = defaults.rxTxWorkers,
+        tunnelProcessWorkers = defaults.tunnelProcessWorkers,
+        tunnelPacketTimeoutSeconds = defaults.tunnelPacketTimeoutSeconds,
+        dispatcherIdlePollIntervalSeconds = defaults.dispatcherIdlePollIntervalSeconds,
+        txChannelSize = defaults.txChannelSize,
+        rxChannelSize = defaults.rxChannelSize,
+        resolverUdpConnectionPoolSize = defaults.resolverUdpConnectionPoolSize,
+        streamQueueInitialCapacity = defaults.streamQueueInitialCapacity,
+        orphanQueueInitialCapacity = defaults.orphanQueueInitialCapacity,
+        dnsResponseFragmentStoreCapacity = defaults.dnsResponseFragmentStoreCapacity,
+        socksUdpAssociateReadTimeoutSeconds = defaults.socksUdpAssociateReadTimeoutSeconds,
+        clientTerminalStreamRetentionSeconds = defaults.clientTerminalStreamRetentionSeconds,
+        clientCancelledSetupRetentionSeconds = defaults.clientCancelledSetupRetentionSeconds,
+        sessionInitRetryBaseSeconds = defaults.sessionInitRetryBaseSeconds,
+        sessionInitRetryStepSeconds = defaults.sessionInitRetryStepSeconds,
+        sessionInitRetryLinearAfter = defaults.sessionInitRetryLinearAfter,
+        sessionInitRetryMaxSeconds = defaults.sessionInitRetryMaxSeconds,
+        sessionInitBusyRetryIntervalSeconds = defaults.sessionInitBusyRetryIntervalSeconds,
+        localDnsEnabled = defaults.localDnsEnabled,
+        localDnsPort = defaults.localDnsPort,
+        startupMode = defaults.startupMode,
+        pingWatchdogSeconds = defaults.pingWatchdogSeconds,
+        trafficWarmupEnabled = defaults.trafficWarmupEnabled,
+        trafficWarmupProbeCount = defaults.trafficWarmupProbeCount,
+        trafficKeepaliveIntervalSeconds = defaults.trafficKeepaliveIntervalSeconds,
+        logLevel = defaults.logLevel,
+    ).syncSelectedConnectionProfileFields()
+}
+
+fun validateResolverText(raw: String): ResolverTextValidation {
+    val normalizedResolvers = mutableListOf<String>()
+    val invalidEntries = mutableListOf<String>()
+    val seen = mutableSetOf<String>()
+
+    resolverTextTokens(raw).forEach { entry ->
+        val normalized = normalizeResolverEntry(entry)
+        if (normalized == null) {
+            invalidEntries += entry
+            return@forEach
+        }
+        if (seen.add(normalized)) {
+            normalizedResolvers += normalized
+        }
+    }
+
+    return ResolverTextValidation(
+        normalizedResolvers = normalizedResolvers,
+        invalidEntries = invalidEntries.distinct(),
+    )
+}
+
+private fun normalizeResolverText(raw: String): String {
+    return validateResolverText(raw).normalizedText
+}
+
+private fun resolverTextTokens(raw: String): Sequence<String> {
+    return raw
+        .replace("\r\n", "\n")
+        .replace('\r', '\n')
+        .lineSequence()
+        .map(String::trim)
+        .filter { it.isNotEmpty() && !it.startsWith("#") }
+        .flatMap { line -> line.split(',', ';').asSequence() }
+        .map(String::trim)
+        .filter { it.isNotEmpty() && !it.startsWith("#") }
+}
+
+private fun normalizeResolverEntry(entry: String): String? {
+    normalizeResolverTarget(entry)?.let { return it }
+
+    val hostPort = splitResolverHostPort(entry) ?: return null
+    val target = normalizeResolverTarget(hostPort.first) ?: return null
+    val port = hostPort.second.toIntOrNull()?.takeIf { it in 1..65535 } ?: return null
+    return if (resolverTargetNeedsBrackets(target)) {
+        "[$target]:$port"
+    } else {
+        "$target:$port"
+    }
+}
+
+private fun splitResolverHostPort(entry: String): Pair<String, String>? {
+    val text = entry.trim()
+    if (text.startsWith("[")) {
+        val end = text.indexOf(']')
+        if (end <= 1) {
+            return null
+        }
+        val hostPart = text.substring(1, end).trim()
+        val remainder = text.substring(end + 1).trim()
+        if (!remainder.startsWith(":")) {
+            return null
+        }
+        val portPart = remainder.substring(1).trim()
+        return if (hostPart.isNotEmpty() && portPart.isNotEmpty()) hostPart to portPart else null
+    }
+
+    if (text.count { it == ':' } != 1) {
+        return null
+    }
+    val separator = text.indexOf(':')
+    val hostPart = text.substring(0, separator).trim()
+    val portPart = text.substring(separator + 1).trim()
+    return if (hostPart.isNotEmpty() && portPart.isNotEmpty()) hostPart to portPart else null
+}
+
+private fun normalizeResolverTarget(target: String): String? {
+    val text = target.trim()
+    if (text.isEmpty()) {
+        return null
+    }
+
+    val slashIndex = text.indexOf('/')
+    if (slashIndex == -1) {
+        return normalizeIpAddress(text)
+    }
+    if (slashIndex != text.lastIndexOf('/')) {
+        return null
+    }
+
+    val ip = normalizeIpAddress(text.substring(0, slashIndex).trim()) ?: return null
+    val prefixBits = text.substring(slashIndex + 1).trim().toIntOrNull() ?: return null
+    val maxBits = if (ip.contains(':')) 128 else 32
+    if (prefixBits !in 0..maxBits) {
+        return null
+    }
+    val hostBits = maxBits - prefixBits
+    if (hostBits > 16) {
+        return null
+    }
+    return "$ip/$prefixBits"
+}
+
+private fun normalizeIpAddress(raw: String): String? {
+    val text = raw.trim()
+    if (text.isEmpty()) {
+        return null
+    }
+
+    if (!text.contains(':')) {
+        return normalizeIpv4Address(text)
+    }
+
+    if (!ResolverIpv6Chars.matches(text)) {
+        return null
+    }
+    return runCatching {
+        InetAddress.getByName(text)
+    }.getOrNull()?.hostAddress?.takeIf { it.contains(':') }
+}
+
+private fun normalizeIpv4Address(raw: String): String? {
+    val parts = raw.split('.')
+    if (parts.size != 4) {
+        return null
+    }
+    return parts
+        .map { part ->
+            if (part.isEmpty() || part.any { !it.isDigit() }) {
+                return null
+            }
+            part.toIntOrNull()?.takeIf { it in 0..255 } ?: return null
+        }
+        .joinToString(".")
+}
+
+private fun resolverTargetNeedsBrackets(target: String): Boolean {
+    return target.substringBefore('/').contains(':')
+}
+
+private val ResolverIpv6Chars = Regex("^[0-9A-Fa-f:.]+$")
+
+private fun normalizeSplitTunnelMode(raw: String): String {
+    return when (raw) {
+        WhiteDnsOptions.SplitTunnelModeInclude -> raw
+        WhiteDnsOptions.SplitTunnelModeExclude -> raw
+        WhiteDnsOptions.SplitTunnelModeOff -> raw
+        else -> WhiteDnsOptions.SplitTunnelModeOff
+    }
+}
+
+private fun normalizeConnectionMode(raw: String): String {
+    return when (raw) {
+        "proxy", "vpn" -> raw
+        else -> "proxy"
+    }
+}
+
+private fun normalizePackageNames(raw: List<String>): List<String> {
+    return raw
+        .asSequence()
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .distinct()
+        .sorted()
+        .toList()
+}
+
+fun WhiteDnsSettings.resolve(): ResolvedWhiteDnsSettings {
+    fun boundedInt(raw: String, defaultValue: Int, minValue: Int, maxValue: Int): Int {
+        return raw.trim().toIntOrNull()?.coerceIn(minValue, maxValue) ?: defaultValue
+    }
+
+    fun positiveDouble(raw: String, defaultValue: Double): Double {
+        val value = raw.trim().toDoubleOrNull() ?: return defaultValue
+        return if (value > 0.0) value else defaultValue
+    }
+
+    fun boundedDouble(raw: String, defaultValue: Double, minValue: Double, maxValue: Double): Double {
+        val value = raw.trim().toDoubleOrNull() ?: return defaultValue
+        return value.coerceIn(minValue, maxValue)
+    }
+
+    val resolvers = resolverText
+        .lineSequence()
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .distinct()
+        .toList()
+
+    val resolvedRxTxWorkers = boundedInt(rxTxWorkers, defaultValue = 4, minValue = 1, maxValue = 64)
+    val resolvedTunnelProcessWorkers = boundedInt(
+        tunnelProcessWorkers,
+        defaultValue = 4,
+        minValue = 1,
+        maxValue = 64,
+    ).coerceAtLeast(resolvedRxTxWorkers)
+    val resolvedSessionRetryBaseSeconds = boundedDouble(
+        sessionInitRetryBaseSeconds,
+        defaultValue = 1.0,
+        minValue = 0.1,
+        maxValue = 60.0,
+    )
+
+    return ResolvedWhiteDnsSettings(
+        connectionMode = when (connectionMode) {
+            "proxy", "vpn" -> connectionMode
+            else -> "proxy"
+        },
+        protocolType = protocolType,
+        resolverEntries = resolvers,
+        listenIp = listenIp.trim().ifEmpty { "127.0.0.1" },
+        listenPort = boundedInt(listenPort, defaultValue = 10886, minValue = 1, maxValue = 65535),
+        httpProxyEnabled = httpProxyEnabled,
+        httpProxyPort = boundedInt(httpProxyPort, defaultValue = 10887, minValue = 1, maxValue = 65535),
+        socks5Authentication = socks5Authentication,
+        socksUsername = socksUsername.take(255),
+        socksPassword = socksPassword.take(255),
+        balancingStrategy = listOf(1, 2, 3, 4).firstOrNull { it == balancingStrategy } ?: 3,
+        uploadDuplication = boundedInt(uploadDuplication, defaultValue = 3, minValue = 1, maxValue = 8),
+        downloadDuplication = boundedInt(downloadDuplication, defaultValue = 7, minValue = 1, maxValue = 8),
+        uploadCompression = uploadCompression.coerceIn(0, 3),
+        downloadCompression = downloadCompression.coerceIn(0, 3),
+        baseEncodeData = baseEncodeData,
+        minUploadMtu = boundedInt(minUploadMtu, defaultValue = 40, minValue = 1, maxValue = 65535),
+        minDownloadMtu = boundedInt(minDownloadMtu, defaultValue = 100, minValue = 1, maxValue = 65535),
+        maxUploadMtu = boundedInt(maxUploadMtu, defaultValue = 64, minValue = 1, maxValue = 65535),
+        maxDownloadMtu = boundedInt(maxDownloadMtu, defaultValue = 140, minValue = 1, maxValue = 65535),
+        mtuTestRetriesResolvers = boundedInt(mtuTestRetriesResolvers, defaultValue = 3, minValue = 1, maxValue = 100),
+        mtuTestTimeoutResolvers = positiveDouble(mtuTestTimeoutResolvers, defaultValue = 2.0),
+        mtuTestParallelismResolvers = boundedInt(mtuTestParallelismResolvers, defaultValue = 100, minValue = 1, maxValue = 1024),
+        mtuTestRetriesLogs = boundedInt(mtuTestRetriesLogs, defaultValue = 5, minValue = 1, maxValue = 100),
+        mtuTestTimeoutLogs = positiveDouble(mtuTestTimeoutLogs, defaultValue = 2.0),
+        mtuTestParallelismLogs = boundedInt(mtuTestParallelismLogs, defaultValue = 32, minValue = 1, maxValue = 1024),
+        rxTxWorkers = resolvedRxTxWorkers,
+        tunnelProcessWorkers = resolvedTunnelProcessWorkers,
+        tunnelPacketTimeoutSeconds = boundedDouble(
+            tunnelPacketTimeoutSeconds,
+            defaultValue = 8.0,
+            minValue = 0.5,
+            maxValue = 120.0,
+        ),
+        dispatcherIdlePollIntervalSeconds = boundedDouble(
+            dispatcherIdlePollIntervalSeconds,
+            defaultValue = 0.020,
+            minValue = 0.001,
+            maxValue = 1.0,
+        ),
+        txChannelSize = boundedInt(txChannelSize, defaultValue = 2048, minValue = 64, maxValue = 65536),
+        rxChannelSize = boundedInt(rxChannelSize, defaultValue = 2048, minValue = 64, maxValue = 65536),
+        resolverUdpConnectionPoolSize = boundedInt(
+            resolverUdpConnectionPoolSize,
+            defaultValue = 64,
+            minValue = 1,
+            maxValue = 1024,
+        ),
+        streamQueueInitialCapacity = boundedInt(
+            streamQueueInitialCapacity,
+            defaultValue = 128,
+            minValue = 8,
+            maxValue = 65536,
+        ),
+        orphanQueueInitialCapacity = boundedInt(
+            orphanQueueInitialCapacity,
+            defaultValue = 32,
+            minValue = 4,
+            maxValue = 4096,
+        ),
+        dnsResponseFragmentStoreCapacity = boundedInt(
+            dnsResponseFragmentStoreCapacity,
+            defaultValue = 256,
+            minValue = 16,
+            maxValue = 16384,
+        ),
+        socksUdpAssociateReadTimeoutSeconds = boundedDouble(
+            socksUdpAssociateReadTimeoutSeconds,
+            defaultValue = 30.0,
+            minValue = 1.0,
+            maxValue = 3600.0,
+        ),
+        clientTerminalStreamRetentionSeconds = boundedDouble(
+            clientTerminalStreamRetentionSeconds,
+            defaultValue = 45.0,
+            minValue = 1.0,
+            maxValue = 3600.0,
+        ),
+        clientCancelledSetupRetentionSeconds = boundedDouble(
+            clientCancelledSetupRetentionSeconds,
+            defaultValue = 120.0,
+            minValue = 1.0,
+            maxValue = 3600.0,
+        ),
+        sessionInitRetryBaseSeconds = resolvedSessionRetryBaseSeconds,
+        sessionInitRetryStepSeconds = boundedDouble(
+            sessionInitRetryStepSeconds,
+            defaultValue = 1.0,
+            minValue = 0.0,
+            maxValue = 60.0,
+        ),
+        sessionInitRetryLinearAfter = boundedInt(
+            sessionInitRetryLinearAfter,
+            defaultValue = 5,
+            minValue = 0,
+            maxValue = 1000,
+        ),
+        sessionInitRetryMaxSeconds = boundedDouble(
+            sessionInitRetryMaxSeconds,
+            defaultValue = 60.0,
+            minValue = resolvedSessionRetryBaseSeconds,
+            maxValue = 3600.0,
+        ),
+        sessionInitBusyRetryIntervalSeconds = boundedDouble(
+            sessionInitBusyRetryIntervalSeconds,
+            defaultValue = 60.0,
+            minValue = 1.0,
+            maxValue = 3600.0,
+        ),
+        localDnsEnabled = localDnsEnabled,
+        localDnsPort = boundedInt(localDnsPort, defaultValue = 53, minValue = 1, maxValue = 65535),
+        startupMode = when (startupMode) {
+            "ask", "resolvers", "logs" -> startupMode
+            else -> "resolvers"
+        },
+        pingWatchdogSeconds = boundedInt(pingWatchdogSeconds, defaultValue = 300, minValue = 0, maxValue = 3600),
+        trafficWarmupEnabled = trafficWarmupEnabled,
+        trafficWarmupProbeCount = boundedInt(trafficWarmupProbeCount, defaultValue = 4, minValue = 0, maxValue = 10),
+        trafficKeepaliveIntervalSeconds = boundedInt(
+            trafficKeepaliveIntervalSeconds,
+            defaultValue = 5,
+            minValue = 2,
+            maxValue = 300,
+        ),
+        splitTunnelMode = normalizeSplitTunnelMode(splitTunnelMode),
+        splitTunnelPackages = normalizePackageNames(splitTunnelPackages),
+        logLevel = when (logLevel) {
+            "DEBUG", "INFO", "WARN", "ERROR" -> logLevel
+            else -> "WARN"
+        },
+    )
+}

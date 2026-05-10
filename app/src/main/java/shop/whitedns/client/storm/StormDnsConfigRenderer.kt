@@ -1,0 +1,79 @@
+package shop.whitedns.client.storm
+
+import shop.whitedns.client.model.StormDnsServerProfile
+import shop.whitedns.client.model.WhiteDnsSettings
+import shop.whitedns.client.model.resolve
+
+object StormDnsConfigRenderer {
+
+    fun renderClientToml(
+        serverProfile: StormDnsServerProfile,
+        settings: WhiteDnsSettings,
+    ): String {
+        val resolved = settings.resolve()
+
+        return buildString {
+            appendLine("""DOMAINS = ["${escape(serverProfile.domain)}"]""")
+            appendLine("DATA_ENCRYPTION_METHOD = ${serverProfile.encryptionMethod}")
+            appendLine("ENCRYPTION_KEY = \"${escape(serverProfile.encryptionKey)}\"")
+            appendLine("PROTOCOL_TYPE = \"${escape(resolved.protocolType)}\"")
+            appendLine("LISTEN_IP = \"${escape(resolved.listenIp)}\"")
+            appendLine("LISTEN_PORT = ${resolved.listenPort}")
+            appendLine("SOCKS5_AUTH = ${resolved.socks5Authentication}")
+            appendLine("SOCKS5_USER = \"${escape(resolved.socksUsername)}\"")
+            appendLine("SOCKS5_PASS = \"${escape(resolved.socksPassword)}\"")
+            appendLine("LOCAL_DNS_ENABLED = ${resolved.localDnsEnabled}")
+            appendLine("LOCAL_DNS_IP = \"127.0.0.1\"")
+            appendLine("LOCAL_DNS_PORT = ${resolved.localDnsPort}")
+            appendLine("RESOLVER_BALANCING_STRATEGY = ${resolved.balancingStrategy}")
+            appendLine("UPLOAD_PACKET_DUPLICATION_COUNT = ${resolved.uploadDuplication}")
+            appendLine("DOWNLOAD_PACKET_DUPLICATION_COUNT = ${resolved.downloadDuplication}")
+            appendLine("UPLOAD_COMPRESSION_TYPE = ${resolved.uploadCompression}")
+            appendLine("DOWNLOAD_COMPRESSION_TYPE = ${resolved.downloadCompression}")
+            appendLine("BASE_ENCODE_DATA = ${resolved.baseEncodeData}")
+            appendLine("MIN_UPLOAD_MTU = ${resolved.minUploadMtu}")
+            appendLine("MIN_DOWNLOAD_MTU = ${resolved.minDownloadMtu}")
+            appendLine("MAX_UPLOAD_MTU = ${resolved.maxUploadMtu}")
+            appendLine("MAX_DOWNLOAD_MTU = ${resolved.maxDownloadMtu}")
+            appendLine("MTU_TEST_RETRIES_RESOLVERS = ${resolved.mtuTestRetriesResolvers}")
+            appendLine("MTU_TEST_TIMEOUT_RESOLVERS = ${resolved.mtuTestTimeoutResolvers}")
+            appendLine("MTU_TEST_PARALLELISM_RESOLVERS = ${resolved.mtuTestParallelismResolvers}")
+            appendLine("MTU_TEST_RETRIES_LOGS = ${resolved.mtuTestRetriesLogs}")
+            appendLine("MTU_TEST_TIMEOUT_LOGS = ${resolved.mtuTestTimeoutLogs}")
+            appendLine("MTU_TEST_PARALLELISM_LOGS = ${resolved.mtuTestParallelismLogs}")
+            appendLine("RX_TX_WORKERS = ${resolved.rxTxWorkers}")
+            appendLine("TUNNEL_PROCESS_WORKERS = ${resolved.tunnelProcessWorkers}")
+            appendLine("TUNNEL_PACKET_TIMEOUT_SECONDS = ${resolved.tunnelPacketTimeoutSeconds}")
+            appendLine("DISPATCHER_IDLE_POLL_INTERVAL_SECONDS = ${resolved.dispatcherIdlePollIntervalSeconds}")
+            appendLine("TX_CHANNEL_SIZE = ${resolved.txChannelSize}")
+            appendLine("RX_CHANNEL_SIZE = ${resolved.rxChannelSize}")
+            appendLine("RESOLVER_UDP_CONNECTION_POOL_SIZE = ${resolved.resolverUdpConnectionPoolSize}")
+            appendLine("STREAM_QUEUE_INITIAL_CAPACITY = ${resolved.streamQueueInitialCapacity}")
+            appendLine("ORPHAN_QUEUE_INITIAL_CAPACITY = ${resolved.orphanQueueInitialCapacity}")
+            appendLine("DNS_RESPONSE_FRAGMENT_STORE_CAPACITY = ${resolved.dnsResponseFragmentStoreCapacity}")
+            appendLine("SOCKS_UDP_ASSOCIATE_READ_TIMEOUT_SECONDS = ${resolved.socksUdpAssociateReadTimeoutSeconds}")
+            appendLine("CLIENT_TERMINAL_STREAM_RETENTION_SECONDS = ${resolved.clientTerminalStreamRetentionSeconds}")
+            appendLine("CLIENT_CANCELLED_SETUP_RETENTION_SECONDS = ${resolved.clientCancelledSetupRetentionSeconds}")
+            appendLine("SESSION_INIT_RETRY_BASE_SECONDS = ${resolved.sessionInitRetryBaseSeconds}")
+            appendLine("SESSION_INIT_RETRY_STEP_SECONDS = ${resolved.sessionInitRetryStepSeconds}")
+            appendLine("SESSION_INIT_RETRY_LINEAR_AFTER = ${resolved.sessionInitRetryLinearAfter}")
+            appendLine("SESSION_INIT_RETRY_MAX_SECONDS = ${resolved.sessionInitRetryMaxSeconds}")
+            appendLine("SESSION_INIT_BUSY_RETRY_INTERVAL_SECONDS = ${resolved.sessionInitBusyRetryIntervalSeconds}")
+            appendLine("STARTUP_MODE = \"${escape(resolved.startupMode)}\"")
+            appendLine("PING_WATCHDOG_TIMEOUT_SECONDS = ${resolved.pingWatchdogSeconds}")
+            appendLine("LOG_LEVEL = \"${escape(resolved.logLevel)}\"")
+            appendLine("LOG_TO_FILE = true")
+            appendLine("LOG_DIR = \"logs\"")
+        }.trimEnd()
+    }
+
+    fun renderResolvers(settings: WhiteDnsSettings): String {
+        return settings.resolve().resolverEntries.joinToString(separator = "\n")
+    }
+
+    private fun escape(value: String): String {
+        return value
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+    }
+}
