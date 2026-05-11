@@ -1,12 +1,13 @@
 package shop.whitedns.client.ui
 
+import android.graphics.Bitmap
 import android.content.Intent
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.FileProvider
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -23,6 +24,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -70,6 +72,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -91,6 +94,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
@@ -114,6 +118,8 @@ import shop.whitedns.client.model.ConnectionProfile
 import shop.whitedns.client.model.ConnectionProgressState
 import shop.whitedns.client.model.ConnectionStats
 import shop.whitedns.client.model.ConnectionStatus
+import shop.whitedns.client.model.ConnectionVerificationState
+import shop.whitedns.client.model.ConnectionVerificationStatus
 import shop.whitedns.client.model.ResolverProfile
 import shop.whitedns.client.model.ResolverRuntimeState
 import shop.whitedns.client.model.WhiteDnsOptions
@@ -140,7 +146,10 @@ import shop.whitedns.client.model.updateManualResolverText
 import shop.whitedns.client.model.upsertConnectionProfile
 import shop.whitedns.client.model.upsertResolverProfile
 import shop.whitedns.client.model.validateResolverText
-import java.io.File
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import java.util.Locale
 
 @Composable
@@ -171,7 +180,7 @@ fun WhiteDnsScreen(
                     onConnectClick = onConnectClick,
                     onSettingsChange = onSettingsChange,
                 )
-                WhiteDnsTab.LOGS -> LogsTabContent(logs = uiState.connectionLogs)
+                WhiteDnsTab.LOGS -> LogsTabContent(uiState = uiState)
             }
         }
         BottomNavigationBar(
@@ -207,6 +216,13 @@ private fun ConnectTabContent(
     val selectedConnectionProfile = remember(settings) { settings.selectedConnectionProfile() }
     val resolverProfiles = remember(settings) { settings.normalizedResolverProfiles() }
     val selectedResolverProfile = remember(settings) { settings.selectedResolverProfile() }
+    val resolverValidation = remember(settings.resolverText) { validateResolverText(settings.resolverText) }
+    val manualResolverMessage = manualResolverValidationMessage(
+        resolverText = settings.resolverText,
+        invalidEntries = resolverValidation.invalidEntries,
+        validResolverCount = resolverValidation.normalizedResolvers.size,
+    )
+    val manualResolverMessageIsError = manualResolverMessage != null && !resolverValidation.isValid
     val context = LocalContext.current
     val splitTunnelApps = remember(context.packageName) {
         loadSplitTunnelAppOptions(context)
@@ -223,7 +239,7 @@ private fun ConnectTabContent(
         listOf(Choice("", "Manual resolvers")) +
             resolverProfiles.map { profile -> Choice(profile.id, profile.name) }
     }
-    val hasResolvers = resolvedSettings.resolverEntries.isNotEmpty()
+    val hasResolvers = resolverValidation.isValid
     val proxyIpAddress = displayProxyIpAddress(
         listenIp = resolvedSettings.listenIp,
         networkIpAddress = uiState.networkIpAddress,
@@ -232,6 +248,15 @@ private fun ConnectTabContent(
     val httpProxyAddress = "$proxyIpAddress:${resolvedSettings.httpProxyPort}"
     val showNotificationBanner = resolvedSettings.connectionMode == "vpn" && !uiState.notificationsEnabled
     val showBatteryBanner = !uiState.batteryOptimizationIgnored
+
+    fun normalizeManualResolverInput() {
+        if (selectedResolverProfile != null || !resolverValidation.isValid) {
+            return
+        }
+        if (resolverValidation.normalizedText != settings.resolverText) {
+            onSettingsChange(settings.updateManualResolverText(resolverValidation.normalizedText))
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -338,6 +363,9 @@ private fun ConnectTabContent(
                         showResolverRequiredMessage = true
                     } else {
                         showResolverRequiredMessage = false
+                        if (uiState.connectionStatus == ConnectionStatus.DISCONNECTED) {
+                            normalizeManualResolverInput()
+                        }
                         onConnectClick()
                     }
                 },
@@ -347,10 +375,17 @@ private fun ConnectTabContent(
                 enter = fadeIn(animationSpec = tween(180)) + expandVertically(animationSpec = tween(180)),
                 exit = fadeOut(animationSpec = tween(120)) + shrinkVertically(animationSpec = tween(120)),
             ) {
-                ResolverRuntimeSummary(
-                    modifier = Modifier.padding(top = 12.dp),
-                    resolverState = uiState.resolverRuntimeState,
-                )
+                Column(modifier = Modifier.padding(top = 12.dp)) {
+                    ResolverRuntimeSummary(
+                        resolverState = uiState.resolverRuntimeState,
+                        progressState = uiState.connectionProgress,
+                        connectionStatus = uiState.connectionStatus,
+                    )
+                    ConnectionVerificationSummary(
+                        modifier = Modifier.padding(top = 10.dp),
+                        verification = uiState.connectionVerification,
+                    )
+                }
             }
             AnimatedVisibility(
                 visible = showResolverRequiredMessage &&
@@ -428,17 +463,32 @@ private fun ConnectTabContent(
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 WhiteDnsTextField(
-                    label = "ONE IPV4/IPV6 RESOLVER PER LINE",
+                    label = "RESOLVERS",
                     value = settings.resolverText,
                     onValueChange = {
                         showResolverRequiredMessage = false
                         onSettingsChange(settings.updateManualResolverText(it))
                     },
-                    placeholder = "Enter resolver IPs, one per line",
+                    placeholder = "1.1.1.1, 8.8.8.8 or one per line",
                     singleLine = false,
                     minLines = 6,
                     maxLines = 10,
+                    onFocusChange = { focused ->
+                        if (!focused) {
+                            normalizeManualResolverInput()
+                        }
+                    },
                 )
+                manualResolverMessage?.let { message ->
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontSize = 10.sp,
+                            color = if (manualResolverMessageIsError) WhiteDnsPalette.Error else WhiteDnsPalette.Muted,
+                        ),
+                    )
+                }
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -471,16 +521,6 @@ private fun ConnectTabContent(
                 expanded = advancedOpen,
                 onToggle = { advancedOpen = !advancedOpen },
             ) {
-                ResolverActionButton(
-                    modifier = Modifier.fillMaxWidth(),
-                    label = "RESET ADVANCED SETTINGS",
-                    emphasized = true,
-                    enabled = uiState.connectionStatus == ConnectionStatus.DISCONNECTED,
-                    onClick = {
-                        onSettingsChange(settings.resetAdvancedSettings())
-                    },
-                )
-                SectionDivider()
                 GroupLabel("MTU")
                 MtuSettingsGroup(
                     settings = settings,
@@ -703,6 +743,17 @@ private fun ConnectTabContent(
                     options = WhiteDnsOptions.logLevels,
                     onValueChange = { onSettingsChange(settings.copy(logLevel = it)) },
                 )
+
+                SectionDivider()
+                ResolverActionButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    label = "RESET ADVANCED SETTINGS",
+                    emphasized = true,
+                    enabled = uiState.connectionStatus == ConnectionStatus.DISCONNECTED,
+                    onClick = {
+                        onSettingsChange(settings.resetAdvancedSettings())
+                    },
+                )
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -770,7 +821,7 @@ private enum class ProfileTab(val label: String) {
 }
 
 @Composable
-private fun LogsTabContent(logs: List<String>) {
+private fun LogsTabContent(uiState: WhiteDnsUiState) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -786,7 +837,7 @@ private fun LogsTabContent(logs: List<String>) {
                 .widthIn(max = 420.dp)
                 .padding(horizontal = 20.dp),
         ) {
-            ConnectionLogsBlock(logs = logs, expanded = true)
+            ConnectionLogsBlock(uiState = uiState, expanded = true)
             Spacer(modifier = Modifier.height(24.dp))
             FooterLink()
         }
@@ -1020,6 +1071,7 @@ private fun ConnectionProfilesSettings(
     var dragStartIndex by remember { mutableStateOf(0) }
     var dragOffsetY by remember { mutableStateOf(0f) }
     var measuredItemHeightPx by remember { mutableStateOf(0) }
+    val canManageProfiles = connectionStatus != ConnectionStatus.CONNECTING
     val draggedIndex = draggedProfileId?.let { profileId ->
         customProfiles.indexOfFirst { it.id == profileId }.takeIf { it >= 0 }
     }
@@ -1049,7 +1101,7 @@ private fun ConnectionProfilesSettings(
             null
         }
         clearDragState()
-        if (commit && profileId != null && targetIndex != null && connectionStatus == ConnectionStatus.DISCONNECTED) {
+        if (commit && profileId != null && targetIndex != null && canManageProfiles) {
             onSettingsChange(settings.moveConnectionProfileToIndex(profileId, targetIndex))
         }
     }
@@ -1062,7 +1114,7 @@ private fun ConnectionProfilesSettings(
             modifier = Modifier.weight(1f),
             label = "CREATE",
             emphasized = true,
-            enabled = connectionStatus == ConnectionStatus.DISCONNECTED,
+            enabled = canManageProfiles,
             onClick = {
                 showCreateDialog = true
             },
@@ -1071,7 +1123,7 @@ private fun ConnectionProfilesSettings(
             modifier = Modifier.weight(1f),
             label = "IMPORT",
             emphasized = false,
-            enabled = connectionStatus == ConnectionStatus.DISCONNECTED,
+            enabled = canManageProfiles,
             onClick = {
                 showImportDialog = true
             },
@@ -1103,8 +1155,8 @@ private fun ConnectionProfilesSettings(
     customProfiles.forEachIndexed { index, profile ->
         val isActive = profile.id == activeConnectionProfileId &&
             connectionStatus != ConnectionStatus.DISCONNECTED
-        val canEdit = connectionStatus == ConnectionStatus.DISCONNECTED
-        val canDelete = connectionStatus == ConnectionStatus.DISCONNECTED && !isActive
+        val canEdit = canManageProfiles
+        val canDelete = canManageProfiles && !isActive
         val isDragging = profile.id == draggedProfileId
         val targetTranslationY = profileDragTranslationY(
             itemIndex = index,
@@ -1136,10 +1188,10 @@ private fun ConnectionProfilesSettings(
                 active = isActive,
                 canEdit = canEdit,
                 canDelete = canDelete,
-                canDrag = canEdit && customProfiles.size > 1,
+                canDrag = canManageProfiles && customProfiles.size > 1,
                 dragging = isDragging,
                 onDragStart = {
-                    if (canEdit && customProfiles.size > 1) {
+                    if (canManageProfiles && customProfiles.size > 1) {
                         draggedProfileId = profile.id
                         dragStartIndex = index
                         dragOffsetY = 0f
@@ -1258,7 +1310,7 @@ private fun ResolverProfilesSettings(
     val selectedProfile = settings.selectedResolverProfile()
     var dialogProfile by remember { mutableStateOf<ResolverProfile?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
-    val canChangeProfiles = connectionStatus == ConnectionStatus.DISCONNECTED
+    val canChangeProfiles = connectionStatus != ConnectionStatus.CONNECTING
     var draggedProfileId by remember { mutableStateOf<String?>(null) }
     var dragStartIndex by remember { mutableStateOf(0) }
     var dragOffsetY by remember { mutableStateOf(0f) }
@@ -1522,7 +1574,7 @@ private fun ResolverProfileDialog(
                     resolverText = it
                     importError = null
                 },
-                placeholder = "One resolver per line",
+                placeholder = "1.1.1.1, 8.8.8.8 or one per line",
                 singleLine = false,
                 minLines = 6,
                 maxLines = 10,
@@ -1771,6 +1823,10 @@ private fun ConnectionProfileExportDialog(
             Spacer(modifier = Modifier.height(14.dp))
             val link = linkResult.getOrNull()
             if (link != null) {
+                if (!link.contains('\n')) {
+                    ProfileQrPreview(link = link)
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
                 WhiteDnsTextField(
                     label = fieldLabel,
                     value = link,
@@ -1829,6 +1885,65 @@ private fun ConnectionProfileExportDialog(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ProfileQrPreview(link: String) {
+    val qrBitmap = remember(link) {
+        runCatching { buildQrBitmap(link, QrBitmapSizePx) }.getOrNull()
+    }
+
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (qrBitmap != null) {
+            Image(
+                bitmap = qrBitmap.asImageBitmap(),
+                contentDescription = "Profile QR code",
+                modifier = Modifier
+                    .size(210.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color.White)
+                    .border(1.5.dp, WhiteDnsPalette.Border, RoundedCornerShape(12.dp))
+                    .padding(10.dp),
+            )
+        } else {
+            Text(
+                text = "QR code unavailable for this profile link.",
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 10.sp,
+                    color = WhiteDnsPalette.Error,
+                ),
+            )
+        }
+    }
+}
+
+private fun buildQrBitmap(
+    value: String,
+    sizePx: Int,
+): Bitmap {
+    val hints = mapOf(
+        EncodeHintType.CHARACTER_SET to "UTF-8",
+        EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.M,
+        EncodeHintType.MARGIN to 2,
+    )
+    val matrix = QRCodeWriter().encode(value, BarcodeFormat.QR_CODE, sizePx, sizePx, hints)
+    val pixels = IntArray(matrix.width * matrix.height)
+    for (y in 0 until matrix.height) {
+        val rowOffset = y * matrix.width
+        for (x in 0 until matrix.width) {
+            pixels[rowOffset + x] = if (matrix[x, y]) {
+                android.graphics.Color.BLACK
+            } else {
+                android.graphics.Color.WHITE
+            }
+        }
+    }
+    return Bitmap.createBitmap(matrix.width, matrix.height, Bitmap.Config.ARGB_8888).apply {
+        setPixels(pixels, 0, matrix.width, 0, 0, matrix.width, matrix.height)
     }
 }
 
@@ -2239,7 +2354,7 @@ private fun MtuSettingsGroup(
             onValueChange = {
                 onSettingsChange(settings.copy(minDownloadMtu = it.filter(Char::isDigit)))
             },
-            placeholder = "100",
+            placeholder = "300",
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Number,
                 capitalization = KeyboardCapitalization.None,
@@ -2254,7 +2369,7 @@ private fun MtuSettingsGroup(
             onValueChange = {
                 onSettingsChange(settings.copy(maxUploadMtu = it.filter(Char::isDigit)))
             },
-            placeholder = "64",
+            placeholder = "140",
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Number,
                 capitalization = KeyboardCapitalization.None,
@@ -2267,7 +2382,7 @@ private fun MtuSettingsGroup(
             onValueChange = {
                 onSettingsChange(settings.copy(maxDownloadMtu = it.filter(Char::isDigit)))
             },
-            placeholder = "140",
+            placeholder = "3000",
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Number,
                 capitalization = KeyboardCapitalization.None,
@@ -2397,7 +2512,7 @@ private fun RuntimeWorkersSettingsGroup(
             onValueChange = {
                 onSettingsChange(settings.copy(tunnelPacketTimeoutSeconds = filterDecimalInput(it)))
             },
-            placeholder = "12.0",
+            placeholder = "8.0",
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Decimal,
                 capitalization = KeyboardCapitalization.None,
@@ -2425,7 +2540,7 @@ private fun RuntimeWorkersSettingsGroup(
             onValueChange = {
                 onSettingsChange(settings.copy(txChannelSize = it.filter(Char::isDigit)))
             },
-            placeholder = "4096",
+            placeholder = "2048",
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Number,
                 capitalization = KeyboardCapitalization.None,
@@ -2438,7 +2553,7 @@ private fun RuntimeWorkersSettingsGroup(
             onValueChange = {
                 onSettingsChange(settings.copy(rxChannelSize = it.filter(Char::isDigit)))
             },
-            placeholder = "4096",
+            placeholder = "2048",
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Number,
                 capitalization = KeyboardCapitalization.None,
@@ -2466,7 +2581,7 @@ private fun RuntimeWorkersSettingsGroup(
             onValueChange = {
                 onSettingsChange(settings.copy(streamQueueInitialCapacity = it.filter(Char::isDigit)))
             },
-            placeholder = "256",
+            placeholder = "128",
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Number,
                 capitalization = KeyboardCapitalization.None,
@@ -2481,7 +2596,7 @@ private fun RuntimeWorkersSettingsGroup(
             onValueChange = {
                 onSettingsChange(settings.copy(orphanQueueInitialCapacity = it.filter(Char::isDigit)))
             },
-            placeholder = "64",
+            placeholder = "32",
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Number,
                 capitalization = KeyboardCapitalization.None,
@@ -2494,7 +2609,7 @@ private fun RuntimeWorkersSettingsGroup(
             onValueChange = {
                 onSettingsChange(settings.copy(dnsResponseFragmentStoreCapacity = it.filter(Char::isDigit)))
             },
-            placeholder = "1024",
+            placeholder = "256",
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Number,
                 capitalization = KeyboardCapitalization.None,
@@ -2537,7 +2652,7 @@ private fun RuntimeWorkersSettingsGroup(
             onValueChange = {
                 onSettingsChange(settings.copy(clientCancelledSetupRetentionSeconds = filterDecimalInput(it)))
             },
-            placeholder = "90.0",
+            placeholder = "120.0",
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Decimal,
                 capitalization = KeyboardCapitalization.None,
@@ -2593,7 +2708,7 @@ private fun RuntimeWorkersSettingsGroup(
             onValueChange = {
                 onSettingsChange(settings.copy(sessionInitRetryMaxSeconds = filterDecimalInput(it)))
             },
-            placeholder = "30.0",
+            placeholder = "60.0",
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Decimal,
                 capitalization = KeyboardCapitalization.None,
@@ -2666,7 +2781,7 @@ private fun HeaderCard() {
                     .padding(horizontal = 10.dp, vertical = 4.dp),
             ) {
                 Text(
-                    text = "v1.0.0",
+                    text = "v1.1.0",
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontSize = 10.sp,
                         color = WhiteDnsPalette.Muted,
@@ -2975,11 +3090,15 @@ private fun SplitTunnelSettingsPanel(
         appLabels = selectedLabels,
     )
 
-    InfoCard(title = "SPLIT TUNNEL") {
+    InfoCard(
+        title = "SPLIT TUNNEL",
+        compact = true,
+    ) {
         WhiteDnsDropdownField(
             label = "App Routing",
             value = settings.splitTunnelMode,
             options = WhiteDnsOptions.splitTunnelModes,
+            compact = true,
             onValueChange = { mode ->
                 onSettingsChange(settings.copy(splitTunnelMode = mode))
             },
@@ -2990,19 +3109,38 @@ private fun SplitTunnelSettingsPanel(
             exit = fadeOut(animationSpec = tween(140)) + shrinkVertically(animationSpec = tween(140)),
         ) {
             Column {
-                Spacer(modifier = Modifier.height(10.dp))
-                InfoRow(
-                    label = "Selected",
-                    value = appSummary,
-                )
-                Spacer(modifier = Modifier.height(10.dp))
-                CompactActionButton(
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    label = "SELECT APPS",
-                    emphasized = true,
-                    enabled = apps.isNotEmpty(),
-                    onClick = { showAppDialog = true },
-                )
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Selected",
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontSize = 11.sp,
+                            color = WhiteDnsPalette.Muted,
+                        ),
+                    )
+                    Text(
+                        text = appSummary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = WhiteDnsPalette.Ink,
+                        ),
+                        modifier = Modifier.weight(1f),
+                    )
+                    CompactActionButton(
+                        modifier = Modifier.widthIn(min = 104.dp),
+                        label = "SELECT APPS",
+                        emphasized = true,
+                        enabled = apps.isNotEmpty(),
+                        onClick = { showAppDialog = true },
+                    )
+                }
             }
         }
     }
@@ -3420,10 +3558,16 @@ private enum class ResolverRuntimeDialogType {
 @Composable
 private fun ResolverRuntimeSummary(
     resolverState: ResolverRuntimeState,
+    progressState: ConnectionProgressState,
+    connectionStatus: ConnectionStatus,
     modifier: Modifier = Modifier,
 ) {
     var selectedDialog by remember { mutableStateOf<ResolverRuntimeDialogType?>(null) }
     val activeResolverCount = resolverState.activeResolvers.size.takeIf { it > 0 }?.toString() ?: "Pending"
+    val backgroundMtuScanInProgress = connectionStatus == ConnectionStatus.CONNECTED &&
+        progressState.phase.lowercase() == "mtu" &&
+        progressState.total > 0 &&
+        progressState.completed < progressState.total
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -3446,6 +3590,42 @@ private fun ResolverRuntimeSummary(
                 value = resolverState.validResolvers.size.toString(),
                 onClick = { selectedDialog = ResolverRuntimeDialogType.VALID },
             )
+        }
+        AnimatedVisibility(
+            visible = backgroundMtuScanInProgress,
+            enter = fadeIn(animationSpec = tween(180)) + expandVertically(animationSpec = tween(180)),
+            exit = fadeOut(animationSpec = tween(120)) + shrinkVertically(animationSpec = tween(120)),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(WhiteDnsPalette.AccentSurface)
+                    .border(1.5.dp, WhiteDnsPalette.Accent.copy(alpha = 0.20f), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    color = WhiteDnsPalette.Accent,
+                    strokeWidth = 2.dp,
+                )
+                Text(
+                    text = if (progressState.completed > 0) {
+                        "Background scanning in progress ${progressState.completed}/${progressState.total}"
+                    } else {
+                        "Background scanning in progress"
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 11.sp,
+                        color = WhiteDnsPalette.AccentText,
+                        fontWeight = FontWeight.Medium,
+                    ),
+                )
+            }
         }
     }
 
@@ -3503,6 +3683,87 @@ private fun ResolverRuntimeValue(
                 fontWeight = FontWeight.SemiBold,
             ),
         )
+    }
+}
+
+@Composable
+private fun ConnectionVerificationSummary(
+    verification: ConnectionVerificationState,
+    modifier: Modifier = Modifier,
+) {
+    val statusText = when (verification.status) {
+        ConnectionVerificationStatus.Checking -> "Verifying"
+        ConnectionVerificationStatus.Verified -> "Verified"
+        ConnectionVerificationStatus.Failed -> "Needs Attention"
+        else -> "Pending"
+    }
+    val message = verification.message.ifBlank {
+        if (verification.status == ConnectionVerificationStatus.Idle) {
+            "Connection verification has not run yet"
+        } else {
+            "Checking tunnel route"
+        }
+    }
+    val color = when (verification.status) {
+        ConnectionVerificationStatus.Verified -> WhiteDnsPalette.Success
+        ConnectionVerificationStatus.Failed -> WhiteDnsPalette.WarningText
+        ConnectionVerificationStatus.Checking -> WhiteDnsPalette.Accent
+        else -> WhiteDnsPalette.Muted
+    }
+    val surface = when (verification.status) {
+        ConnectionVerificationStatus.Verified -> WhiteDnsPalette.SuccessSurface
+        ConnectionVerificationStatus.Failed -> WhiteDnsPalette.WarningSurface
+        ConnectionVerificationStatus.Checking -> WhiteDnsPalette.AccentSurface
+        else -> WhiteDnsPalette.Surface
+    }
+    val icon = when (verification.status) {
+        ConnectionVerificationStatus.Verified -> Icons.Rounded.Check
+        ConnectionVerificationStatus.Failed -> Icons.Rounded.WarningAmber
+        ConnectionVerificationStatus.Checking -> Icons.Rounded.Tune
+        else -> Icons.Rounded.Link
+    }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(surface)
+            .border(1.5.dp, color.copy(alpha = 0.22f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = color,
+            modifier = Modifier.size(18.dp),
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = statusText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 10.sp,
+                    color = color,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.7.sp,
+                ),
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = message,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 10.sp,
+                    lineHeight = 14.sp,
+                    color = WhiteDnsPalette.Description,
+                    fontWeight = FontWeight.Medium,
+                ),
+            )
+        }
     }
 }
 
@@ -3828,26 +4089,32 @@ private fun ProtocolRow(
 @Composable
 private fun InfoCard(
     title: String,
+    compact: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val shape = RoundedCornerShape(if (compact) 12.dp else 14.dp)
+    val borderWidth = if (compact) 2.dp else 2.5.dp
+    val contentPadding = if (compact) 14.dp else 18.dp
+    val titleBottomSpacing = if (compact) 9.dp else 14.dp
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(shape)
             .background(WhiteDnsPalette.Surface)
-            .border(2.5.dp, WhiteDnsPalette.Border, RoundedCornerShape(14.dp))
-            .padding(18.dp),
+            .border(borderWidth, WhiteDnsPalette.Border, shape)
+            .padding(contentPadding),
     ) {
         Text(
             text = title,
             style = MaterialTheme.typography.bodyMedium.copy(
-                fontSize = 13.sp,
+                fontSize = if (compact) 12.sp else 13.sp,
                 color = WhiteDnsPalette.SectionTitle,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.6.sp,
             ),
         )
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(titleBottomSpacing))
         content()
     }
 }
@@ -3893,9 +4160,10 @@ private fun InfoRow(
 
 @Composable
 private fun ConnectionLogsBlock(
-    logs: List<String>,
+    uiState: WhiteDnsUiState,
     expanded: Boolean = false,
 ) {
+    val logs = uiState.connectionLogs
     val visibleLogs = if (expanded) logs else logs.take(10)
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
@@ -3928,8 +4196,12 @@ private fun ConnectionLogsBlock(
                     },
                 )
                 LogActionButton(
-                    label = "EXPORT",
-                    onClick = { exportLogsAsTextFile(context, logs) },
+                    label = "DIAGNOSTICS",
+                    onClick = {
+                        clipboardManager.setText(
+                            AnnotatedString(buildDiagnosticsText(context, uiState)),
+                        )
+                    },
                 )
             }
         }
@@ -3992,23 +4264,6 @@ private fun LogActionButton(
     }
 }
 
-private fun exportLogsAsTextFile(context: Context, logs: List<String>) {
-    val logFile = File(context.cacheDir, "whitedns-logs.txt")
-    logFile.writeText(logs.joinToString(separator = "\n"))
-    val uri = FileProvider.getUriForFile(
-        context,
-        "${context.packageName}.fileprovider",
-        logFile,
-    )
-    val intent = Intent(Intent.ACTION_SEND).apply {
-        type = "text/plain"
-        putExtra(Intent.EXTRA_SUBJECT, "WhiteDNS logs")
-        putExtra(Intent.EXTRA_STREAM, uri)
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    }
-    context.startActivity(Intent.createChooser(intent, "Export WhiteDNS logs"))
-}
-
 private fun shareProfileLink(context: Context, link: String) {
     val intent = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
@@ -4016,6 +4271,67 @@ private fun shareProfileLink(context: Context, link: String) {
         putExtra(Intent.EXTRA_TEXT, link)
     }
     context.startActivity(Intent.createChooser(intent, "Export WhiteDNS profile"))
+}
+
+private fun buildDiagnosticsText(
+    context: Context,
+    uiState: WhiteDnsUiState,
+): String {
+    val settings = uiState.settings.runtimeConnectionSettings()
+    val resolvedSettings = settings.resolve()
+    val selectedProfile = settings.selectedConnectionProfile()
+    val resolverProfile = settings.selectedResolverProfile()
+    val verification = uiState.connectionVerification
+    val appVersion = runCatching {
+        @Suppress("DEPRECATION")
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName
+    }.getOrNull().orEmpty()
+
+    return buildString {
+        appendLine("WhiteDNS diagnostics")
+        appendLine("App version: ${appVersion.ifBlank { "unknown" }}")
+        appendLine("Android: ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})")
+        appendLine("Status: ${uiState.connectionStatus}")
+        appendLine("Mode: ${WhiteDnsOptions.connectionModeLabel(resolvedSettings.connectionMode)}")
+        appendLine("Profile: ${selectedProfile.name.ifBlank { selectedProfile.id }}")
+        appendLine("Server: [redacted]")
+        appendLine("Resolver profile: ${resolverProfile?.name ?: "Manual resolvers"}")
+        appendLine("Resolvers: ${resolvedSettings.resolverEntries.size}")
+        appendLine("Split tunnel: ${WhiteDnsOptions.splitTunnelModeLabel(resolvedSettings.splitTunnelMode)}")
+        appendLine("Split tunnel packages: ${resolvedSettings.splitTunnelPackages.size}")
+        appendLine("Notifications enabled: ${uiState.notificationsEnabled}")
+        appendLine("Battery optimization ignored: ${uiState.batteryOptimizationIgnored}")
+        appendLine("Listen IP: ${resolvedSettings.listenIp}")
+        appendLine("Listen port: ${resolvedSettings.listenPort}")
+        appendLine("HTTP proxy: ${if (resolvedSettings.httpProxyEnabled) resolvedSettings.httpProxyPort else "off"}")
+        appendLine("SOCKS auth: ${if (resolvedSettings.socks5Authentication) "on" else "off"}")
+        appendLine("Traffic total: ${formatDataSize(uiState.connectionStats.totalDataUsageBytes)}")
+        appendLine("Traffic down: ${formatDataSpeed(uiState.connectionStats.downloadSpeedBytesPerSecond)}")
+        appendLine("Traffic up: ${formatDataSpeed(uiState.connectionStats.uploadSpeedBytesPerSecond)}")
+        appendLine("Connected apps: ${uiState.connectionStats.connectedApps}")
+        appendLine("Active resolvers: ${uiState.resolverRuntimeState.activeResolvers.size}")
+        appendLine("Valid resolvers: ${uiState.resolverRuntimeState.validResolvers.size}")
+        appendLine("Verification: ${verification.status}")
+        if (verification.message.isNotBlank()) {
+            appendLine("Verification message: ${verification.message}")
+        }
+        appendLine()
+        appendLine("Recent logs:")
+        uiState.connectionLogs.forEach { log ->
+            appendLine(log.redactDiagnosticSecrets(selectedProfile))
+        }
+    }.trimEnd()
+}
+
+private fun String.redactDiagnosticSecrets(profile: ConnectionProfile): String {
+    var redacted = this
+    if (profile.customServerDomain.isNotBlank()) {
+        redacted = redacted.replace(profile.customServerDomain, "[server route]")
+    }
+    if (profile.customServerEncryptionKey.isNotBlank()) {
+        redacted = redacted.replace(profile.customServerEncryptionKey, "[redacted key]")
+    }
+    return redacted.replace(Regex("""(?i)(password|pass|key|secret)\s*[:=]\s*\S+"""), "\$1=[redacted]")
 }
 
 private fun readResolverTextFromUri(context: Context, uri: Uri): Result<String> {
@@ -4054,11 +4370,26 @@ private fun resolverValidationMessage(
     }
 }
 
+private fun manualResolverValidationMessage(
+    resolverText: String,
+    invalidEntries: List<String>,
+    validResolverCount: Int,
+): String? {
+    return when {
+        resolverText.isBlank() -> null
+        invalidEntries.isNotEmpty() -> "Invalid resolver IP: ${invalidEntries.first()}"
+        validResolverCount == 0 -> "Enter at least one valid resolver IP."
+        else -> "$validResolverCount valid resolver${if (validResolverCount == 1) "" else "s"}."
+    }
+}
+
 private val ResolverImportMimeTypes = arrayOf(
     "text/*",
     "application/json",
     "application/octet-stream",
 )
+
+private const val QrBitmapSizePx = 768
 
 private data class DonationWallet(
     val label: String,
@@ -4344,6 +4675,7 @@ private fun WhiteDnsTextField(
     maxLines: Int = if (singleLine) 1 else Int.MAX_VALUE,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     visualTransformation: VisualTransformation = VisualTransformation.None,
+    onFocusChange: (Boolean) -> Unit = {},
 ) {
     var focused by remember { mutableStateOf(false) }
     val borderColor = if (focused) WhiteDnsPalette.Accent.copy(alpha = 0.60f) else WhiteDnsPalette.Divider
@@ -4360,7 +4692,10 @@ private fun WhiteDnsTextField(
             onValueChange = onValueChange,
             modifier = Modifier
                 .fillMaxWidth()
-                .onFocusChanged { focused = it.isFocused },
+                .onFocusChanged {
+                    focused = it.isFocused
+                    onFocusChange(it.isFocused)
+                },
             singleLine = singleLine,
             minLines = minLines,
             maxLines = maxLines,
@@ -4411,10 +4746,13 @@ private fun <T> WhiteDnsDropdownField(
     onValueChange: (T) -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    compact: Boolean = false,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selectedLabel = options.firstOrNull { it.value == value }?.label.orEmpty()
-    val shape = RoundedCornerShape(12.dp)
+    val shape = RoundedCornerShape(if (compact) 10.dp else 12.dp)
+    val horizontalPadding = if (compact) 10.dp else 12.dp
+    val verticalPadding = if (compact) 8.dp else 10.dp
     val borderColor by animateColorAsState(
         targetValue = if (!enabled) {
             WhiteDnsPalette.Divider
@@ -4451,7 +4789,7 @@ private fun <T> WhiteDnsDropdownField(
                     .background(backgroundColor)
                     .border(1.5.dp, borderColor, shape)
                     .clickable(enabled = enabled, onClick = { expanded = true })
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                    .padding(horizontal = horizontalPadding, vertical = verticalPadding),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {

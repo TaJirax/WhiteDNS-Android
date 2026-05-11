@@ -115,6 +115,12 @@ class WhiteDnsSettingsStore(
                 KeyDnsResponseFragmentStoreCapacity,
                 defaults.dnsResponseFragmentStoreCapacity,
             ) ?: defaults.dnsResponseFragmentStoreCapacity,
+            maxActiveStreams = preferences.getString(KeyMaxActiveStreams, defaults.maxActiveStreams)
+                ?: defaults.maxActiveStreams,
+            localHandshakeTimeoutSeconds = preferences.getString(
+                KeyLocalHandshakeTimeoutSeconds,
+                defaults.localHandshakeTimeoutSeconds,
+            ) ?: defaults.localHandshakeTimeoutSeconds,
             socksUdpAssociateReadTimeoutSeconds = preferences.getString(
                 KeySocksUdpAssociateReadTimeoutSeconds,
                 defaults.socksUdpAssociateReadTimeoutSeconds,
@@ -219,6 +225,8 @@ class WhiteDnsSettingsStore(
             .putString(KeyStreamQueueInitialCapacity, normalizedSettings.streamQueueInitialCapacity)
             .putString(KeyOrphanQueueInitialCapacity, normalizedSettings.orphanQueueInitialCapacity)
             .putString(KeyDnsResponseFragmentStoreCapacity, normalizedSettings.dnsResponseFragmentStoreCapacity)
+            .putString(KeyMaxActiveStreams, normalizedSettings.maxActiveStreams)
+            .putString(KeyLocalHandshakeTimeoutSeconds, normalizedSettings.localHandshakeTimeoutSeconds)
             .putString(KeySocksUdpAssociateReadTimeoutSeconds, normalizedSettings.socksUdpAssociateReadTimeoutSeconds)
             .putString(KeyClientTerminalStreamRetentionSeconds, normalizedSettings.clientTerminalStreamRetentionSeconds)
             .putString(KeyClientCancelledSetupRetentionSeconds, normalizedSettings.clientCancelledSetupRetentionSeconds)
@@ -363,12 +371,20 @@ class WhiteDnsSettingsStore(
         replaceOldDefault(KeyDnsResponseFragmentStoreCapacity, oldValue = "1024", newValue = "256")
         replaceOldDefault(KeyClientCancelledSetupRetentionSeconds, oldValue = "90.0", newValue = "120.0")
         replaceOldDefault(KeySessionInitRetryMaxSeconds, oldValue = "30.0", newValue = "60.0")
+        replaceOldDefault(KeyMinUploadMtu, oldValue = "100", newValue = "40")
+        replaceOldDefault(KeyMinDownloadMtu, oldValue = "100", newValue = "300")
+        replaceOldDefault(KeyMinDownloadMtu, oldValue = "1000", newValue = "300")
+        replaceOldDefault(KeyMaxUploadMtu, oldValue = "64", newValue = "140")
+        replaceOldDefault(KeyMaxUploadMtu, oldValue = "200", newValue = "140")
+        replaceOldDefault(KeyMaxDownloadMtu, oldValue = "140", newValue = "3000")
+        replaceOldDefault(KeyMaxDownloadMtu, oldValue = "4000", newValue = "3000")
+        replaceOldDefault(KeyStartupMode, oldValue = "logs", newValue = "resolvers")
         editor.putInt(KeyAdvancedDefaultsRevision, AdvancedDefaultsRevision).apply()
     }
 
     private companion object {
         const val PreferencesName = "white_dns_settings"
-        const val AdvancedDefaultsRevision = 1
+        const val AdvancedDefaultsRevision = 4
         const val LegacyDefaultResolverText = "1.1.1.1\n8.8.8.8\n9.9.9.9"
         const val KeyAdvancedDefaultsRevision = "advanced_defaults_revision"
         const val KeySelectedConnectionProfileId = "selected_connection_profile_id"
@@ -415,6 +431,8 @@ class WhiteDnsSettingsStore(
         const val KeyStreamQueueInitialCapacity = "stream_queue_initial_capacity"
         const val KeyOrphanQueueInitialCapacity = "orphan_queue_initial_capacity"
         const val KeyDnsResponseFragmentStoreCapacity = "dns_response_fragment_store_capacity"
+        const val KeyMaxActiveStreams = "max_active_streams"
+        const val KeyLocalHandshakeTimeoutSeconds = "local_handshake_timeout_seconds"
         const val KeySocksUdpAssociateReadTimeoutSeconds = "socks_udp_associate_read_timeout_seconds"
         const val KeyClientTerminalStreamRetentionSeconds = "client_terminal_stream_retention_seconds"
         const val KeyClientCancelledSetupRetentionSeconds = "client_cancelled_setup_retention_seconds"

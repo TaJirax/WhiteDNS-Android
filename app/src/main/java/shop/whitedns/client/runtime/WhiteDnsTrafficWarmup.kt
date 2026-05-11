@@ -12,6 +12,14 @@ object WhiteDnsTrafficWarmup {
         if (!settings.trafficWarmupEnabled) {
             return false
         }
+        return runSocksHttpProbe(settings)
+    }
+
+    fun verifySocksRoute(settings: ResolvedWhiteDnsSettings): Boolean {
+        return runSocksHttpProbe(settings)
+    }
+
+    private fun runSocksHttpProbe(settings: ResolvedWhiteDnsSettings): Boolean {
         return runCatching {
             Socket().use { socket ->
                 socket.soTimeout = SocketTimeoutMillis

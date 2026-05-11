@@ -127,6 +127,13 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+        handleProfileLinkIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleProfileLinkIntent(intent)
     }
 
     private fun openNotificationSettings() {
@@ -161,5 +168,22 @@ class MainActivity : ComponentActivity() {
         }.also {
             viewModel.refreshBatteryOptimizationStatusWithRetry()
         }
+    }
+
+    private fun handleProfileLinkIntent(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VIEW || intent.data?.scheme != StormDnsScheme) {
+            return
+        }
+        if (intent.getBooleanExtra(ExtraProfileImportHandled, false)) {
+            return
+        }
+        val link = intent.dataString?.takeIf(String::isNotBlank) ?: return
+        intent.putExtra(ExtraProfileImportHandled, true)
+        viewModel.importProfileLink(link)
+    }
+
+    private companion object {
+        const val StormDnsScheme = "stormdns"
+        const val ExtraProfileImportHandled = "shop.whitedns.client.extra.PROFILE_IMPORT_HANDLED"
     }
 }

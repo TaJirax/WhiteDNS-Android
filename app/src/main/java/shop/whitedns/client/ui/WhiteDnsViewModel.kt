@@ -29,12 +29,15 @@ import java.util.Collections
 import shop.whitedns.client.model.ConnectionProgressState
 import shop.whitedns.client.model.ConnectionStats
 import shop.whitedns.client.model.ConnectionStatus
+import shop.whitedns.client.model.ConnectionVerificationState
+import shop.whitedns.client.model.ConnectionVerificationStatus
 import shop.whitedns.client.model.ResolverRuntimeState
 import shop.whitedns.client.model.StormDnsServerProfile
 import shop.whitedns.client.model.WhiteDnsRuntimeProxy
 import shop.whitedns.client.model.WhiteDnsSettings
 import shop.whitedns.client.model.WhiteDnsSettingsStore
 import shop.whitedns.client.model.WhiteDnsUiState
+import shop.whitedns.client.model.importStormDnsProfileLink
 import shop.whitedns.client.model.normalizedConnectionProfiles
 import shop.whitedns.client.model.resolve
 import shop.whitedns.client.model.runtimeConnectionSettings
@@ -46,6 +49,7 @@ import shop.whitedns.client.proxy.WhiteDnsProxyService
 import shop.whitedns.client.runtime.StormDnsTrafficStats
 import shop.whitedns.client.runtime.WhiteDnsRuntimeState
 import shop.whitedns.client.runtime.WhiteDnsRuntimeStateStore
+import shop.whitedns.client.runtime.WhiteDnsTrafficWarmup
 import shop.whitedns.client.runtime.parseStormDnsConnectionProgressLine
 import shop.whitedns.client.runtime.parseStormDnsResolverStateLine
 import shop.whitedns.client.runtime.parseStormDnsTrafficStatsLine
@@ -76,6 +80,7 @@ class WhiteDnsViewModel(
     private var statsJob: Job? = null
     private var runtimeRefreshJob: Job? = null
     private var batteryOptimizationRefreshJob: Job? = null
+    private var verificationJob: Job? = null
     private var activeServerProfile: StormDnsServerProfile? = null
     private var activeProxyListenPort: Int = WhiteDnsRuntimeProxy.ListenPortInt
     private var trafficBaseline = TrafficSnapshot.empty()
@@ -159,6 +164,23 @@ class WhiteDnsViewModel(
         }
     }
 
+    fun importProfileLink(rawLink: String) {
+        runCatching {
+            uiState.settings
+                .importStormDnsProfileLink(rawLink)
+                .syncSelectedConnectionProfileFields()
+        }.onSuccess { importedSettings ->
+            settingsStore.save(importedSettings)
+            uiState = uiState.copy(
+                settings = importedSettings,
+                networkIpAddress = findDeviceNetworkIpAddress(),
+            )
+            appendLog("Imported connection profile")
+        }.onFailure { error ->
+            appendLog("Profile import failed: ${error.message ?: error::class.java.simpleName}")
+        }
+    }
+
     fun refreshBatteryOptimizationStatus() {
         uiState = uiState.copy(
             batteryOptimizationIgnored = isIgnoringBatteryOptimizations(appContext),
@@ -220,11 +242,13 @@ class WhiteDnsViewModel(
         connectJob?.cancel()
         statsJob?.cancel()
         runtimeRefreshJob?.cancel()
+        verificationJob?.cancel()
         uiState = uiState.copy(
             connectionStatus = ConnectionStatus.CONNECTING,
             connectionStats = ConnectionStats(),
             resolverRuntimeState = ResolverRuntimeState(),
             connectionProgress = ConnectionProgressState(phase = "preparing", percent = 3),
+            connectionVerification = ConnectionVerificationState(),
             connectionLogs = listOf("Starting StormDNS"),
         )
         activeVpnTrafficInterfaceName = null
@@ -242,6 +266,7 @@ class WhiteDnsViewModel(
                     connectionStatus = ConnectionStatus.DISCONNECTED,
                     resolverRuntimeState = ResolverRuntimeState(),
                     connectionProgress = ConnectionProgressState(),
+                    connectionVerification = ConnectionVerificationState(),
                 )
                 return@launch
             }
@@ -259,6 +284,7 @@ class WhiteDnsViewModel(
                     connectionStatus = ConnectionStatus.DISCONNECTED,
                     resolverRuntimeState = ResolverRuntimeState(),
                     connectionProgress = ConnectionProgressState(),
+                    connectionVerification = ConnectionVerificationState(),
                 )
                 return@launch
             }
@@ -330,6 +356,7 @@ class WhiteDnsViewModel(
                     connectionStats = ConnectionStats(),
                     resolverRuntimeState = ResolverRuntimeState(),
                     connectionProgress = ConnectionProgressState(),
+                    connectionVerification = ConnectionVerificationState(),
                     networkIpAddress = findDeviceNetworkIpAddress(),
                     activeConnectionProfileId = null,
                 )
@@ -341,6 +368,7 @@ class WhiteDnsViewModel(
         connectJob?.cancel()
         statsJob?.cancel()
         runtimeRefreshJob?.cancel()
+        verificationJob?.cancel()
         viewModelScope.launch(Dispatchers.IO) {
             stopAllRuntimeServices()
             if (uiState.settings.resolve().connectionMode == "vpn") {
@@ -358,6 +386,7 @@ class WhiteDnsViewModel(
             connectionStats = ConnectionStats(),
             resolverRuntimeState = ResolverRuntimeState(),
             connectionProgress = ConnectionProgressState(),
+            connectionVerification = ConnectionVerificationState(),
             activeConnectionProfileId = null,
         )
     }
@@ -382,6 +411,7 @@ class WhiteDnsViewModel(
         connectJob?.cancel()
         statsJob?.cancel()
         runtimeRefreshJob?.cancel()
+        verificationJob?.cancel()
         WhiteDnsProxyEvents.removeListener(proxyEventListener)
         WhiteDnsVpnEvents.removeListener(vpnEventListener)
         unregisterRuntimeBroadcastReceivers()
@@ -464,6 +494,7 @@ class WhiteDnsViewModel(
             trafficBaseline = currentTrafficSnapshot()
             lastTrafficSnapshot = trafficBaseline
             startStatsMonitor()
+            startConnectionVerification(expectedConnectionMode)
         }
     }
 
@@ -475,6 +506,7 @@ class WhiteDnsViewModel(
             appendLogOnMain(message)
             connectJob?.cancel()
             statsJob?.cancel()
+            verificationJob?.cancel()
             withContext(Dispatchers.IO) {
                 stopAllRuntimeServices()
             }
@@ -488,6 +520,7 @@ class WhiteDnsViewModel(
                 connectionStats = ConnectionStats(),
                 resolverRuntimeState = ResolverRuntimeState(),
                 connectionProgress = ConnectionProgressState(),
+                connectionVerification = ConnectionVerificationState(),
                 networkIpAddress = findDeviceNetworkIpAddress(),
                 activeConnectionProfileId = null,
             )
@@ -502,6 +535,7 @@ class WhiteDnsViewModel(
             appendLogOnMain(message)
             connectJob?.cancel()
             statsJob?.cancel()
+            verificationJob?.cancel()
             withContext(Dispatchers.IO) {
                 stopAllRuntimeServices()
             }
@@ -515,6 +549,7 @@ class WhiteDnsViewModel(
                 connectionStats = ConnectionStats(),
                 resolverRuntimeState = ResolverRuntimeState(),
                 connectionProgress = ConnectionProgressState(),
+                connectionVerification = ConnectionVerificationState(),
                 networkIpAddress = findDeviceNetworkIpAddress(),
                 activeConnectionProfileId = null,
             )
@@ -588,6 +623,7 @@ class WhiteDnsViewModel(
             connectionStats = ConnectionStats(),
             resolverRuntimeState = ResolverRuntimeState(),
             connectionProgress = ConnectionProgressState(phase = "connected", percent = 100),
+            connectionVerification = ConnectionVerificationState(),
             networkIpAddress = findDeviceNetworkIpAddress(),
             activeConnectionProfileId = restoredSettings.selectedConnectionProfile().id,
             connectionLogs = prependConnectionLog("Restored active $modeLabel connection"),
@@ -595,11 +631,13 @@ class WhiteDnsViewModel(
         trafficBaseline = currentTrafficSnapshot()
         lastTrafficSnapshot = trafficBaseline
         startStatsMonitor()
+        startConnectionVerification(state.mode)
     }
 
     private fun markRuntimeDisconnected(message: String) {
         connectJob?.cancel()
         statsJob?.cancel()
+        verificationJob?.cancel()
         viewModelScope.launch(Dispatchers.IO) {
             stopAllRuntimeServices()
         }
@@ -613,6 +651,7 @@ class WhiteDnsViewModel(
             connectionStats = ConnectionStats(),
             resolverRuntimeState = ResolverRuntimeState(),
             connectionProgress = ConnectionProgressState(),
+            connectionVerification = ConnectionVerificationState(),
             networkIpAddress = findDeviceNetworkIpAddress(),
             activeConnectionProfileId = null,
             connectionLogs = prependConnectionLog(message),
@@ -685,6 +724,86 @@ class WhiteDnsViewModel(
             encryptionKey = encryptionKey,
             encryptionMethod = connectionProfile.customServerEncryptionMethod.coerceIn(0, 5),
         )
+    }
+
+    private fun startConnectionVerification(expectedConnectionMode: String) {
+        verificationJob?.cancel()
+        uiState = uiState.copy(
+            connectionVerification = ConnectionVerificationState(
+                status = ConnectionVerificationStatus.Checking,
+                message = "Checking tunnel route",
+            ),
+        )
+        verificationJob = viewModelScope.launch {
+            delay(VerificationStartDelayMillis)
+            val result = withContext(Dispatchers.IO) {
+                verifyActiveConnection(expectedConnectionMode)
+            }
+            if (
+                uiState.connectionStatus != ConnectionStatus.CONNECTED ||
+                uiState.settings.resolve().connectionMode != expectedConnectionMode
+            ) {
+                return@launch
+            }
+            uiState = uiState.copy(connectionVerification = result)
+            appendLog(result.message)
+        }
+    }
+
+    private suspend fun verifyActiveConnection(expectedConnectionMode: String): ConnectionVerificationState {
+        val resolvedSettings = uiState.settings
+            .runtimeConnectionSettings()
+            .resolve()
+            .copy(listenPort = activeProxyListenPort)
+        if (resolvedSettings.connectionMode != expectedConnectionMode) {
+            return failedVerification("Connection mode changed before verification finished")
+        }
+        if (!canConnectToLocalPort(activeProxyListenPort)) {
+            return failedVerification("Connection verification failed: local SOCKS listener is not reachable")
+        }
+        if (expectedConnectionMode == WhiteDnsRuntimeStateStore.ModeVpn && findVpnTrafficInterfaceName() == null) {
+            return failedVerification("Connection verification failed: VPN interface is not active")
+        }
+
+        val probePassed = repeatBooleanAttempt(VerificationProbeAttempts) {
+            WhiteDnsTrafficWarmup.verifySocksRoute(resolvedSettings)
+        }
+        return if (probePassed) {
+            ConnectionVerificationState(
+                status = ConnectionVerificationStatus.Verified,
+                message = if (expectedConnectionMode == WhiteDnsRuntimeStateStore.ModeVpn) {
+                    "Connection verified: VPN tunnel can reach the internet"
+                } else {
+                    "Connection verified: proxy tunnel can reach the internet"
+                },
+                checkedAtMillis = System.currentTimeMillis(),
+            )
+        } else {
+            failedVerification("Connection verification failed: outbound probe did not complete")
+        }
+    }
+
+    private fun failedVerification(message: String): ConnectionVerificationState {
+        return ConnectionVerificationState(
+            status = ConnectionVerificationStatus.Failed,
+            message = message,
+            checkedAtMillis = System.currentTimeMillis(),
+        )
+    }
+
+    private suspend fun repeatBooleanAttempt(
+        attempts: Int,
+        block: () -> Boolean,
+    ): Boolean {
+        repeat(attempts.coerceAtLeast(1)) { attempt ->
+            if (block()) {
+                return true
+            }
+            if (attempt < attempts - 1) {
+                delay(VerificationProbeRetryDelayMillis)
+            }
+        }
+        return false
     }
 
     private fun buildConnectionStats(listenPort: Int): ConnectionStats {
@@ -1015,6 +1134,9 @@ class WhiteDnsViewModel(
         const val EmptyTrafficSource = "none"
         const val BatteryOptimizationRefreshAttempts = 8
         const val BatteryOptimizationRefreshRetryDelayMillis = 500L
+        const val VerificationStartDelayMillis = 700L
+        const val VerificationProbeAttempts = 2
+        const val VerificationProbeRetryDelayMillis = 750L
         const val UidTrafficSourcePrefix = "uid:"
         const val VpnTrafficSourcePrefix = "vpn:"
         val socksStreamOpenedRegex = Regex("""New SOCKS\d TCP CONNECT .*Stream ID:\s*(\d+)""")

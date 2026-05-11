@@ -201,6 +201,26 @@ class WhiteDnsModelsTest {
     }
 
     @Test
+    fun upsertResolverProfileNormalizesCommaSeparatedTextAndDefaultPorts() {
+        val settings = WhiteDnsSettings()
+
+        val updatedSettings = settings.upsertResolverProfile(
+            ResolverProfile(
+                id = "resolver-main",
+                name = "Main",
+                resolverText = "1.1.1.1:53, 8.8.8.8:53, 9.9.9.9:5353",
+            ),
+        )
+
+        assertEquals("1.1.1.1\n8.8.8.8\n9.9.9.9:5353", updatedSettings.resolverText)
+        assertEquals(updatedSettings.resolverText, updatedSettings.resolverProfiles.single().resolverText)
+        assertEquals(
+            listOf("1.1.1.1", "8.8.8.8", "9.9.9.9:5353"),
+            updatedSettings.resolve().resolverEntries,
+        )
+    }
+
+    @Test
     fun resolveBoundsTrafficWarmupSettings() {
         val settings = WhiteDnsSettings(
             trafficWarmupProbeCount = "99",
@@ -212,6 +232,37 @@ class WhiteDnsModelsTest {
         assertEquals(true, resolvedSettings.trafficWarmupEnabled)
         assertEquals(10, resolvedSettings.trafficWarmupProbeCount)
         assertEquals(2, resolvedSettings.trafficKeepaliveIntervalSeconds)
+    }
+
+    @Test
+    fun resolveUsesAppMtuDefaults() {
+        val resolvedSettings = WhiteDnsSettings().resolve()
+
+        assertEquals(40, resolvedSettings.minUploadMtu)
+        assertEquals(300, resolvedSettings.minDownloadMtu)
+        assertEquals(140, resolvedSettings.maxUploadMtu)
+        assertEquals(3000, resolvedSettings.maxDownloadMtu)
+    }
+
+    @Test
+    fun resolveUsesFullScanStartupAndBoundsNativeReliabilitySettings() {
+        val settings = WhiteDnsSettings(
+            startupMode = "invalid",
+            maxActiveStreams = "999999",
+            localHandshakeTimeoutSeconds = "0",
+            minUploadMtu = "300",
+            maxUploadMtu = "100",
+            minDownloadMtu = "5000",
+            maxDownloadMtu = "1000",
+        )
+
+        val resolvedSettings = settings.resolve()
+
+        assertEquals("resolvers", resolvedSettings.startupMode)
+        assertEquals(65535, resolvedSettings.maxActiveStreams)
+        assertEquals(5.0, resolvedSettings.localHandshakeTimeoutSeconds, 0.0)
+        assertEquals(300, resolvedSettings.maxUploadMtu)
+        assertEquals(5000, resolvedSettings.maxDownloadMtu)
     }
 
     @Test
@@ -481,10 +532,22 @@ class WhiteDnsModelsTest {
             listOf(
                 "1.1.1.1",
                 "8.8.8.8:5353",
-                "[2001:4860:4860:0:0:0:0:8888]:53",
+                "2001:4860:4860:0:0:0:0:8888",
                 "192.168.10.0/30:5300",
             ),
             validation.normalizedResolvers,
+        )
+    }
+
+    @Test
+    fun resolveNormalizesCommaSeparatedResolverTextAndDefaultPorts() {
+        val settings = WhiteDnsSettings(
+            resolverText = "1.1.1.1:53, 8.8.8.8:53\n9.9.9.9",
+        )
+
+        assertEquals(
+            listOf("1.1.1.1", "8.8.8.8", "9.9.9.9"),
+            settings.resolve().resolverEntries,
         )
     }
 

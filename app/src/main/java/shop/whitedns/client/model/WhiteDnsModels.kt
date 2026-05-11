@@ -105,9 +105,9 @@ data class WhiteDnsSettings(
     val downloadCompression: Int = 2,
     val baseEncodeData: Boolean = false,
     val minUploadMtu: String = "40",
-    val minDownloadMtu: String = "100",
-    val maxUploadMtu: String = "64",
-    val maxDownloadMtu: String = "140",
+    val minDownloadMtu: String = "300",
+    val maxUploadMtu: String = "140",
+    val maxDownloadMtu: String = "3000",
     val mtuTestRetriesResolvers: String = "3",
     val mtuTestTimeoutResolvers: String = "2.0",
     val mtuTestParallelismResolvers: String = "100",
@@ -124,6 +124,8 @@ data class WhiteDnsSettings(
     val streamQueueInitialCapacity: String = "128",
     val orphanQueueInitialCapacity: String = "32",
     val dnsResponseFragmentStoreCapacity: String = "256",
+    val maxActiveStreams: String = "2048",
+    val localHandshakeTimeoutSeconds: String = "5.0",
     val socksUdpAssociateReadTimeoutSeconds: String = "30.0",
     val clientTerminalStreamRetentionSeconds: String = "45.0",
     val clientCancelledSetupRetentionSeconds: String = "120.0",
@@ -182,6 +184,8 @@ data class ResolvedWhiteDnsSettings(
     val streamQueueInitialCapacity: Int,
     val orphanQueueInitialCapacity: Int,
     val dnsResponseFragmentStoreCapacity: Int,
+    val maxActiveStreams: Int,
+    val localHandshakeTimeoutSeconds: Double,
     val socksUdpAssociateReadTimeoutSeconds: Double,
     val clientTerminalStreamRetentionSeconds: Double,
     val clientCancelledSetupRetentionSeconds: Double,
@@ -247,6 +251,19 @@ data class ConnectionProgressState(
         }
 }
 
+object ConnectionVerificationStatus {
+    const val Idle = "idle"
+    const val Checking = "checking"
+    const val Verified = "verified"
+    const val Failed = "failed"
+}
+
+data class ConnectionVerificationState(
+    val status: String = ConnectionVerificationStatus.Idle,
+    val message: String = "",
+    val checkedAtMillis: Long = 0,
+)
+
 data class WhiteDnsUiState(
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
     val settings: WhiteDnsSettings = WhiteDnsSettings(),
@@ -259,6 +276,7 @@ data class WhiteDnsUiState(
     val connectionStats: ConnectionStats = ConnectionStats(),
     val resolverRuntimeState: ResolverRuntimeState = ResolverRuntimeState(),
     val connectionProgress: ConnectionProgressState = ConnectionProgressState(),
+    val connectionVerification: ConnectionVerificationState = ConnectionVerificationState(),
 )
 
 object WhiteDnsRuntimeProxy {
@@ -694,6 +712,8 @@ fun WhiteDnsSettings.resetAdvancedSettings(): WhiteDnsSettings {
         streamQueueInitialCapacity = defaults.streamQueueInitialCapacity,
         orphanQueueInitialCapacity = defaults.orphanQueueInitialCapacity,
         dnsResponseFragmentStoreCapacity = defaults.dnsResponseFragmentStoreCapacity,
+        maxActiveStreams = defaults.maxActiveStreams,
+        localHandshakeTimeoutSeconds = defaults.localHandshakeTimeoutSeconds,
         socksUdpAssociateReadTimeoutSeconds = defaults.socksUdpAssociateReadTimeoutSeconds,
         clientTerminalStreamRetentionSeconds = defaults.clientTerminalStreamRetentionSeconds,
         clientCancelledSetupRetentionSeconds = defaults.clientCancelledSetupRetentionSeconds,
@@ -740,13 +760,29 @@ private fun normalizeResolverText(raw: String): String {
 }
 
 private fun resolverTextTokens(raw: String): Sequence<String> {
-    return raw
+    val lines = raw
         .replace("\r\n", "\n")
         .replace('\r', '\n')
         .lineSequence()
         .map(String::trim)
         .filter { it.isNotEmpty() && !it.startsWith("#") }
-        .flatMap { line -> line.split(',', ';').asSequence() }
+        .toList()
+
+    val separators = if (detectResolverTextEntryType(lines) == ResolverTextEntryType.CommaSeparated) {
+        charArrayOf(',', ';')
+    } else {
+        charArrayOf()
+    }
+
+    return lines
+        .asSequence()
+        .flatMap { line ->
+            if (separators.isEmpty()) {
+                sequenceOf(line)
+            } else {
+                line.split(*separators).asSequence()
+            }
+        }
         .map(String::trim)
         .filter { it.isNotEmpty() && !it.startsWith("#") }
 }
@@ -757,6 +793,9 @@ private fun normalizeResolverEntry(entry: String): String? {
     val hostPort = splitResolverHostPort(entry) ?: return null
     val target = normalizeResolverTarget(hostPort.first) ?: return null
     val port = hostPort.second.toIntOrNull()?.takeIf { it in 1..65535 } ?: return null
+    if (port == DefaultResolverPort) {
+        return target
+    }
     return if (resolverTargetNeedsBrackets(target)) {
         "[$target]:$port"
     } else {
@@ -853,6 +892,21 @@ private fun resolverTargetNeedsBrackets(target: String): Boolean {
     return target.substringBefore('/').contains(':')
 }
 
+private fun detectResolverTextEntryType(lines: List<String>): ResolverTextEntryType {
+    return if (lines.any { it.contains(',') || it.contains(';') }) {
+        ResolverTextEntryType.CommaSeparated
+    } else {
+        ResolverTextEntryType.LineSeparated
+    }
+}
+
+private enum class ResolverTextEntryType {
+    LineSeparated,
+    CommaSeparated,
+}
+
+private const val DefaultResolverPort = 53
+
 private val ResolverIpv6Chars = Regex("^[0-9A-Fa-f:.]+$")
 
 private fun normalizeSplitTunnelMode(raw: String): String {
@@ -896,12 +950,15 @@ fun WhiteDnsSettings.resolve(): ResolvedWhiteDnsSettings {
         return value.coerceIn(minValue, maxValue)
     }
 
-    val resolvers = resolverText
-        .lineSequence()
-        .map(String::trim)
-        .filter(String::isNotEmpty)
-        .distinct()
-        .toList()
+    fun boundedPositiveDouble(raw: String, defaultValue: Double, minValue: Double, maxValue: Double): Double {
+        val value = raw.trim().toDoubleOrNull() ?: return defaultValue
+        if (value <= 0.0) {
+            return defaultValue
+        }
+        return value.coerceIn(minValue, maxValue)
+    }
+
+    val resolvers = validateResolverText(resolverText).normalizedResolvers
 
     val resolvedRxTxWorkers = boundedInt(rxTxWorkers, defaultValue = 4, minValue = 1, maxValue = 64)
     val resolvedTunnelProcessWorkers = boundedInt(
@@ -916,6 +973,12 @@ fun WhiteDnsSettings.resolve(): ResolvedWhiteDnsSettings {
         minValue = 0.1,
         maxValue = 60.0,
     )
+    val resolvedMinUploadMtu = boundedInt(minUploadMtu, defaultValue = 40, minValue = 1, maxValue = 65535)
+    val resolvedMinDownloadMtu = boundedInt(minDownloadMtu, defaultValue = 300, minValue = 1, maxValue = 65535)
+    val resolvedMaxUploadMtu = boundedInt(maxUploadMtu, defaultValue = 140, minValue = 1, maxValue = 65535)
+        .coerceAtLeast(resolvedMinUploadMtu)
+    val resolvedMaxDownloadMtu = boundedInt(maxDownloadMtu, defaultValue = 3000, minValue = 1, maxValue = 65535)
+        .coerceAtLeast(resolvedMinDownloadMtu)
 
     return ResolvedWhiteDnsSettings(
         connectionMode = when (connectionMode) {
@@ -937,10 +1000,10 @@ fun WhiteDnsSettings.resolve(): ResolvedWhiteDnsSettings {
         uploadCompression = uploadCompression.coerceIn(0, 3),
         downloadCompression = downloadCompression.coerceIn(0, 3),
         baseEncodeData = baseEncodeData,
-        minUploadMtu = boundedInt(minUploadMtu, defaultValue = 40, minValue = 1, maxValue = 65535),
-        minDownloadMtu = boundedInt(minDownloadMtu, defaultValue = 100, minValue = 1, maxValue = 65535),
-        maxUploadMtu = boundedInt(maxUploadMtu, defaultValue = 64, minValue = 1, maxValue = 65535),
-        maxDownloadMtu = boundedInt(maxDownloadMtu, defaultValue = 140, minValue = 1, maxValue = 65535),
+        minUploadMtu = resolvedMinUploadMtu,
+        minDownloadMtu = resolvedMinDownloadMtu,
+        maxUploadMtu = resolvedMaxUploadMtu,
+        maxDownloadMtu = resolvedMaxDownloadMtu,
         mtuTestRetriesResolvers = boundedInt(mtuTestRetriesResolvers, defaultValue = 3, minValue = 1, maxValue = 100),
         mtuTestTimeoutResolvers = positiveDouble(mtuTestTimeoutResolvers, defaultValue = 2.0),
         mtuTestParallelismResolvers = boundedInt(mtuTestParallelismResolvers, defaultValue = 100, minValue = 1, maxValue = 1024),
@@ -986,6 +1049,18 @@ fun WhiteDnsSettings.resolve(): ResolvedWhiteDnsSettings {
             defaultValue = 256,
             minValue = 16,
             maxValue = 16384,
+        ),
+        maxActiveStreams = boundedInt(
+            maxActiveStreams,
+            defaultValue = 2048,
+            minValue = 1,
+            maxValue = 65535,
+        ),
+        localHandshakeTimeoutSeconds = boundedPositiveDouble(
+            localHandshakeTimeoutSeconds,
+            defaultValue = 5.0,
+            minValue = 0.5,
+            maxValue = 60.0,
         ),
         socksUdpAssociateReadTimeoutSeconds = boundedDouble(
             socksUdpAssociateReadTimeoutSeconds,

@@ -417,12 +417,19 @@ class WhiteDnsProxyService : Service() {
             openAppIntent,
             pendingIntentFlags,
         )
+        val stopPendingIntent = PendingIntent.getService(
+            this,
+            1,
+            Intent(this, WhiteDnsProxyService::class.java).setAction(ActionStop),
+            pendingIntentFlags,
+        )
 
         return NotificationCompat.Builder(this, NotificationChannelId)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("WhiteDNS Proxy")
             .setContentText(statusText)
             .setContentIntent(openAppPendingIntent)
+            .addAction(R.drawable.ic_notification, "Disconnect", stopPendingIntent)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
