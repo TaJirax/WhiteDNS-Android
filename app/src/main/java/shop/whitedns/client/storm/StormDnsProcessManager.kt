@@ -21,8 +21,10 @@ class StormDnsProcessManager(
     private val binaryInstaller: StormDnsBinaryInstaller = StormDnsBinaryInstaller(context),
 ) {
 
+    private val processLock = Any()
     private var process: Process? = null
     private var currentLaunchSpec: StormDnsLaunchSpec? = null
+    private var outputDrainThread: Thread? = null
 
     fun prepareLaunch(
         serverProfile: StormDnsServerProfile,
@@ -59,10 +61,9 @@ class StormDnsProcessManager(
     ): StormDnsLaunchSpec {
         stop()
         val launchSpec = prepareLaunch(serverProfile, settings)
-        currentLaunchSpec = launchSpec
         onOutput("Runtime prepared")
-        process = try {
-            ProcessBuilder(
+        try {
+            val startedProcess = ProcessBuilder(
                 launchSpec.binaryFile.absolutePath,
                 "-config",
                 launchSpec.configFile.absolutePath,
@@ -72,19 +73,28 @@ class StormDnsProcessManager(
                 .directory(launchSpec.workingDirectory)
                 .redirectErrorStream(true)
                 .start()
-                .also { activeProcess ->
-                    onOutput("StormDNS process started")
-                    drainProcessOutput(activeProcess, onOutput)
-                }
+            val drainThread = drainProcessOutput(startedProcess, onOutput)
+            synchronized(processLock) {
+                currentLaunchSpec = launchSpec
+                process = startedProcess
+                outputDrainThread = drainThread
+            }
+            drainThread.start()
+            onOutput("StormDNS process started")
         } catch (error: IOException) {
-            cleanupLaunchFiles()
+            cleanupLaunchFiles(launchSpec)
             throw error
         }
         return launchSpec
     }
 
     fun stop(gracePeriodMillis: Long = 1_500) {
-        val activeProcess = process ?: return
+        val activeProcess: Process
+        val drainThread: Thread?
+        synchronized(processLock) {
+            activeProcess = process ?: return
+            drainThread = outputDrainThread
+        }
         activeProcess.destroy()
         try {
             activeProcess.waitFor(gracePeriodMillis, TimeUnit.MILLISECONDS)
@@ -94,35 +104,72 @@ class StormDnsProcessManager(
         if (activeProcess.isAlive) {
             activeProcess.destroyForcibly()
         }
-        process = null
-        cleanupLaunchFiles()
+        synchronized(processLock) {
+            if (process === activeProcess) {
+                process = null
+                outputDrainThread = null
+                cleanupLaunchFilesLocked()
+            }
+        }
+        if (drainThread != null && drainThread !== Thread.currentThread()) {
+            try {
+                drainThread.join(OutputDrainJoinMillis)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+        }
     }
 
     fun cleanupLaunchFiles() {
-        val launchSpec = currentLaunchSpec ?: return
+        synchronized(processLock) {
+            cleanupLaunchFilesLocked()
+        }
+    }
+
+    private fun cleanupLaunchFiles(launchSpec: StormDnsLaunchSpec) {
         runCatching { launchSpec.configFile.delete() }
         runCatching { launchSpec.resolversFile.delete() }
+    }
+
+    private fun cleanupLaunchFilesLocked() {
+        val launchSpec = currentLaunchSpec ?: return
+        cleanupLaunchFiles(launchSpec)
         currentLaunchSpec = null
     }
 
-    fun isRunning(): Boolean = process?.isAlive == true
+    fun isRunning(): Boolean {
+        return synchronized(processLock) {
+            process?.isAlive == true
+        }
+    }
 
     fun exitCodeOrNull(): Int? {
-        val activeProcess = process ?: return null
-        return if (activeProcess.isAlive) {
-            null
-        } else {
-            activeProcess.exitValue()
+        val activeProcess = synchronized(processLock) {
+            process
+        } ?: return null
+        if (activeProcess.isAlive) {
+            return null
+        }
+        return synchronized(processLock) {
+            if (process !== activeProcess) {
+                return@synchronized null
+            }
+            val exitCode = activeProcess.exitValue()
+            process = null
+            outputDrainThread = null
+            cleanupLaunchFilesLocked()
+            exitCode
         }
     }
 
     private fun drainProcessOutput(
         process: Process,
         onOutput: (String) -> Unit,
-    ) {
-        thread(
+    ): Thread {
+        return thread(
             name = "stormdns-output",
             isDaemon = true,
+            start = false,
         ) {
             try {
                 process.inputStream.bufferedReader().useLines { lines ->
@@ -134,7 +181,24 @@ class StormDnsProcessManager(
                 }
             } catch (_: IOException) {
                 // Destroying the process closes this stream on another thread during normal shutdown.
+            } finally {
+                cleanupExitedProcess(process)
             }
         }
+    }
+
+    private fun cleanupExitedProcess(finishedProcess: Process) {
+        synchronized(processLock) {
+            if (process !== finishedProcess || finishedProcess.isAlive) {
+                return
+            }
+            process = null
+            outputDrainThread = null
+            cleanupLaunchFilesLocked()
+        }
+    }
+
+    private companion object {
+        const val OutputDrainJoinMillis = 500L
     }
 }
