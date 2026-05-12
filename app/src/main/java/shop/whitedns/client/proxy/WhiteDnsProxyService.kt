@@ -198,27 +198,23 @@ class WhiteDnsProxyService : Service() {
         resolvedSettings: ResolvedWhiteDnsSettings,
     ) {
         val startupFailure = AtomicReference<String?>(null)
-        try {
-            stormDnsProcessManager.start(serverProfile, settings) { line ->
-                logInfo(line)
-                detectStormDnsStartupFailure(line)?.let { failure ->
-                    startupFailure.compareAndSet(null, failure)
-                }
+        stormDnsProcessManager.start(serverProfile, settings) { line ->
+            logInfo(line)
+            detectStormDnsStartupFailure(line)?.let { failure ->
+                startupFailure.compareAndSet(null, failure)
             }
-            waitForProxyPort(
-                listenPort = resolvedSettings.listenPort,
-                startupFailure = { startupFailure.get() },
-            )
-            startHttpProxyBridge(resolvedSettings)
-            WhiteDnsRuntimeStateStore.markReady(
-                applicationContext,
-                settings,
-                "SOCKS proxy is ready",
-            )
-            reportReady("SOCKS proxy is ready")
-        } finally {
-            stormDnsProcessManager.cleanupLaunchFiles()
         }
+        waitForProxyPort(
+            listenPort = resolvedSettings.listenPort,
+            startupFailure = { startupFailure.get() },
+        )
+        startHttpProxyBridge(resolvedSettings)
+        WhiteDnsRuntimeStateStore.markReady(
+            applicationContext,
+            settings,
+            "SOCKS proxy is ready",
+        )
+        reportReady("SOCKS proxy is ready")
     }
 
     private fun startHttpProxyBridge(resolvedSettings: ResolvedWhiteDnsSettings) {
