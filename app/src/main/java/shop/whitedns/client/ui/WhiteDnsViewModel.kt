@@ -26,6 +26,7 @@ import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.Socket
 import java.util.Collections
+import java.util.UUID
 import shop.whitedns.client.model.ConnectionProgressState
 import shop.whitedns.client.model.ConnectionStats
 import shop.whitedns.client.model.ConnectionStatus
@@ -84,6 +85,7 @@ class WhiteDnsViewModel(
     private var batteryOptimizationRefreshJob: Job? = null
     private var verificationJob: Job? = null
     private var activeServerProfile: StormDnsServerProfile? = null
+    private var activeRuntimeSessionId: String = ""
     private var activeProxyListenPort: Int = WhiteDnsRuntimeProxy.ListenPortInt
     private var trafficBaseline = TrafficSnapshot.empty()
     private var lastTrafficSnapshot = TrafficSnapshot.empty()
@@ -96,16 +98,16 @@ class WhiteDnsViewModel(
     private val socksStreamLastSeenMillis = mutableMapOf<Int, Long>()
     private val proxyEventListener: (WhiteDnsProxyEvent) -> Unit = { event ->
         when (event) {
-            is WhiteDnsProxyEvent.Log -> handleRuntimeLog(event.message)
-            is WhiteDnsProxyEvent.Ready -> handleRuntimeReady(event.message, expectedConnectionMode = "proxy")
-            is WhiteDnsProxyEvent.Failed -> handleProxyFailure(event.message)
+            is WhiteDnsProxyEvent.Log -> handleRuntimeLog(event.sessionId, event.message)
+            is WhiteDnsProxyEvent.Ready -> handleRuntimeReady(event.sessionId, event.message, expectedConnectionMode = "proxy")
+            is WhiteDnsProxyEvent.Failed -> handleProxyFailure(event.sessionId, event.message)
         }
     }
     private val vpnEventListener: (WhiteDnsVpnEvent) -> Unit = { event ->
         when (event) {
-            is WhiteDnsVpnEvent.Log -> handleRuntimeLog(event.message)
-            is WhiteDnsVpnEvent.Ready -> handleRuntimeReady(event.message, expectedConnectionMode = "vpn")
-            is WhiteDnsVpnEvent.Failed -> handleVpnFailure(event.message)
+            is WhiteDnsVpnEvent.Log -> handleRuntimeLog(event.sessionId, event.message)
+            is WhiteDnsVpnEvent.Ready -> handleRuntimeReady(event.sessionId, event.message, expectedConnectionMode = "vpn")
+            is WhiteDnsVpnEvent.Failed -> handleVpnFailure(event.sessionId, event.message)
         }
     }
     private val proxyBroadcastReceiver = object : BroadcastReceiver() {
@@ -114,10 +116,11 @@ class WhiteDnsViewModel(
                 return
             }
             val message = intent.getStringExtra(WhiteDnsProxyService.BroadcastExtraMessage).orEmpty()
+            val sessionId = intent.getStringExtra(WhiteDnsProxyService.BroadcastExtraSessionId).orEmpty()
             when (intent.getStringExtra(WhiteDnsProxyService.BroadcastExtraType)) {
-                WhiteDnsProxyService.BroadcastTypeLog -> handleRuntimeLog(message)
-                WhiteDnsProxyService.BroadcastTypeReady -> handleRuntimeReady(message, expectedConnectionMode = "proxy")
-                WhiteDnsProxyService.BroadcastTypeFailed -> handleProxyFailure(message)
+                WhiteDnsProxyService.BroadcastTypeLog -> handleRuntimeLog(sessionId, message)
+                WhiteDnsProxyService.BroadcastTypeReady -> handleRuntimeReady(sessionId, message, expectedConnectionMode = "proxy")
+                WhiteDnsProxyService.BroadcastTypeFailed -> handleProxyFailure(sessionId, message)
             }
         }
     }
@@ -127,10 +130,11 @@ class WhiteDnsViewModel(
                 return
             }
             val message = intent.getStringExtra(WhiteDnsVpnService.BroadcastExtraMessage).orEmpty()
+            val sessionId = intent.getStringExtra(WhiteDnsVpnService.BroadcastExtraSessionId).orEmpty()
             when (intent.getStringExtra(WhiteDnsVpnService.BroadcastExtraType)) {
-                WhiteDnsVpnService.BroadcastTypeLog -> handleRuntimeLog(message)
-                WhiteDnsVpnService.BroadcastTypeReady -> handleRuntimeReady(message, expectedConnectionMode = "vpn")
-                WhiteDnsVpnService.BroadcastTypeFailed -> handleVpnFailure(message)
+                WhiteDnsVpnService.BroadcastTypeLog -> handleRuntimeLog(sessionId, message)
+                WhiteDnsVpnService.BroadcastTypeReady -> handleRuntimeReady(sessionId, message, expectedConnectionMode = "vpn")
+                WhiteDnsVpnService.BroadcastTypeFailed -> handleVpnFailure(sessionId, message)
             }
         }
     }
@@ -245,6 +249,8 @@ class WhiteDnsViewModel(
         statsJob?.cancel()
         runtimeRefreshJob?.cancel()
         verificationJob?.cancel()
+        val sessionId = UUID.randomUUID().toString()
+        activeRuntimeSessionId = sessionId
         uiState = uiState.copy(
             connectionStatus = ConnectionStatus.CONNECTING,
             connectionStats = ConnectionStats(),
@@ -264,6 +270,7 @@ class WhiteDnsViewModel(
             val settings = uiState.settings.syncSelectedConnectionProfileFields()
             if (settings.resolve().resolverEntries.isEmpty()) {
                 appendLog("Resolvers are required to connect")
+                activeRuntimeSessionId = ""
                 uiState = uiState.copy(
                     connectionStatus = ConnectionStatus.DISCONNECTED,
                     resolverRuntimeState = ResolverRuntimeState(),
@@ -282,6 +289,7 @@ class WhiteDnsViewModel(
                         "No StormDNS server profile configured"
                     },
                 )
+                activeRuntimeSessionId = ""
                 uiState = uiState.copy(
                     connectionStatus = ConnectionStatus.DISCONNECTED,
                     resolverRuntimeState = ResolverRuntimeState(),
@@ -318,6 +326,7 @@ class WhiteDnsViewModel(
                         appendLog("Starting full-device VPN service")
                         WhiteDnsVpnService.start(
                             context = getApplication<Application>().applicationContext,
+                            sessionId = sessionId,
                             serverProfile = serverProfile,
                             settings = runtimeSettings,
                         )
@@ -326,6 +335,7 @@ class WhiteDnsViewModel(
                         appendLog("Starting local proxy service")
                         WhiteDnsProxyService.start(
                             context = getApplication<Application>().applicationContext,
+                            sessionId = sessionId,
                             serverProfile = serverProfile,
                             settings = runtimeSettings,
                         )
@@ -349,6 +359,7 @@ class WhiteDnsViewModel(
                     stopAllRuntimeServices()
                 }
                 activeProxyListenPort = WhiteDnsRuntimeProxy.ListenPortInt
+                activeRuntimeSessionId = ""
                 latestStormDnsTrafficStats = null
                 resetSocksStreamTracker()
                 resetRuntimeUiThrottles()
@@ -379,6 +390,7 @@ class WhiteDnsViewModel(
         }
         activeProxyListenPort = WhiteDnsRuntimeProxy.ListenPortInt
         activeVpnTrafficInterfaceName = null
+        activeRuntimeSessionId = ""
         latestStormDnsTrafficStats = null
         resetSocksStreamTracker()
         resetRuntimeUiThrottles()
@@ -444,7 +456,10 @@ class WhiteDnsViewModel(
         }
     }
 
-    private fun handleRuntimeLog(message: String) {
+    private fun handleRuntimeLog(sessionId: String, message: String) {
+        if (isStaleRuntimeEvent(sessionId)) {
+            return
+        }
         val trafficStats = parseStormDnsTrafficStatsLine(message)
         val progressState = parseStormDnsConnectionProgressLine(message)
         val resolverState = parseStormDnsResolverStateLine(message)
@@ -469,7 +484,10 @@ class WhiteDnsViewModel(
         }
     }
 
-    private fun handleRuntimeReady(message: String, expectedConnectionMode: String) {
+    private fun handleRuntimeReady(sessionId: String, message: String, expectedConnectionMode: String) {
+        if (isStaleRuntimeEvent(sessionId)) {
+            return
+        }
         viewModelScope.launch(Dispatchers.Main.immediate) {
             if (uiState.connectionStatus == ConnectionStatus.DISCONNECTED) {
                 val activeRuntimeState = withContext(Dispatchers.IO) {
@@ -500,7 +518,10 @@ class WhiteDnsViewModel(
         }
     }
 
-    private fun handleProxyFailure(message: String) {
+    private fun handleProxyFailure(sessionId: String, message: String) {
+        if (isStaleRuntimeEvent(sessionId)) {
+            return
+        }
         viewModelScope.launch(Dispatchers.Main.immediate) {
             if (!shouldHandleRuntimeEvent(WhiteDnsRuntimeStateStore.ModeProxy)) {
                 return@launch
@@ -514,6 +535,7 @@ class WhiteDnsViewModel(
             }
             activeProxyListenPort = WhiteDnsRuntimeProxy.ListenPortInt
             activeVpnTrafficInterfaceName = null
+            activeRuntimeSessionId = ""
             latestStormDnsTrafficStats = null
             resetSocksStreamTracker()
             resetRuntimeUiThrottles()
@@ -529,7 +551,10 @@ class WhiteDnsViewModel(
         }
     }
 
-    private fun handleVpnFailure(message: String) {
+    private fun handleVpnFailure(sessionId: String, message: String) {
+        if (isStaleRuntimeEvent(sessionId)) {
+            return
+        }
         viewModelScope.launch(Dispatchers.Main.immediate) {
             if (!shouldHandleRuntimeEvent(WhiteDnsRuntimeStateStore.ModeVpn)) {
                 return@launch
@@ -543,6 +568,7 @@ class WhiteDnsViewModel(
             }
             activeProxyListenPort = WhiteDnsRuntimeProxy.ListenPortInt
             activeVpnTrafficInterfaceName = null
+            activeRuntimeSessionId = ""
             latestStormDnsTrafficStats = null
             resetSocksStreamTracker()
             resetRuntimeUiThrottles()
@@ -561,6 +587,10 @@ class WhiteDnsViewModel(
     private fun shouldHandleRuntimeEvent(expectedConnectionMode: String): Boolean {
         return uiState.connectionStatus != ConnectionStatus.DISCONNECTED &&
             uiState.settings.resolve().connectionMode == expectedConnectionMode
+    }
+
+    private fun isStaleRuntimeEvent(sessionId: String): Boolean {
+        return activeRuntimeSessionId.isNotBlank() && sessionId != activeRuntimeSessionId
     }
 
     private fun findActiveRuntimeState(): WhiteDnsRuntimeState? {
@@ -596,12 +626,14 @@ class WhiteDnsViewModel(
     private fun isSameConnectedRuntime(state: WhiteDnsRuntimeState): Boolean {
         val activeProfileId = state.connectionProfileId.takeIf(String::isNotBlank)
         return uiState.connectionStatus == ConnectionStatus.CONNECTED &&
+            (state.sessionId.isBlank() || activeRuntimeSessionId == state.sessionId) &&
             uiState.settings.resolve().connectionMode == state.mode &&
             (activeProfileId == null || uiState.activeConnectionProfileId == activeProfileId)
     }
 
     private fun restoreRuntimeConnection(state: WhiteDnsRuntimeState) {
         val profileId = state.connectionProfileId.takeIf(String::isNotBlank)
+        activeRuntimeSessionId = state.sessionId
         val restoredSettings = uiState.settings
             .copy(
                 selectedConnectionProfileId = profileId ?: uiState.settings.selectedConnectionProfileId,
@@ -694,13 +726,17 @@ class WhiteDnsViewModel(
             runCatching {
                 WhiteDnsVpnService.start(
                     context = getApplication<Application>().applicationContext,
+                    sessionId = activeRuntimeSessionId,
                     serverProfile = activeServerProfile,
                     settings = settings.runtimeConnectionSettings(),
                 )
             }.onSuccess {
                 appendLog("Updated VPN split tunnel apps")
             }.onFailure { error ->
-                handleVpnFailure("Failed to update split tunnel: ${error.message ?: error::class.java.simpleName}")
+                handleVpnFailure(
+                    activeRuntimeSessionId,
+                    "Failed to update split tunnel: ${error.message ?: error::class.java.simpleName}",
+                )
             }
         }
     }
