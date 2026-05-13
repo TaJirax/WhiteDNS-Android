@@ -224,6 +224,7 @@ data class WhiteDnsSettings(
     val customServerEncryptionMethod: Int = 1,
     val connectionMode: String = "proxy",
     val protocolType: String = "SOCKS5",
+    val themeMode: String = WhiteDnsThemeMode.System,
     val resolverText: String = "",
     val listenIp: String = "127.0.0.1",
     val listenPort: String = "10886",
@@ -272,7 +273,7 @@ data class WhiteDnsSettings(
     val localDnsPort: String = "53",
     val startupMode: String = "resolvers",
     val pingWatchdogSeconds: String = "300",
-    val trafficWarmupEnabled: Boolean = true,
+    val trafficWarmupEnabled: Boolean = false,
     val trafficWarmupProbeCount: String = "4",
     val trafficKeepaliveIntervalSeconds: String = "5",
     val fullVpnPerformanceWarningDismissed: Boolean = false,
@@ -398,6 +399,74 @@ data class ConnectionVerificationState(
     val checkedAtMillis: Long = 0,
 )
 
+object WhiteDnsScanStatus {
+    const val Idle = "idle"
+    const val Ready = "ready"
+    const val Starting = "starting"
+    const val Running = "running"
+    const val Completed = "completed"
+    const val Failed = "failed"
+    const val Stopped = "stopped"
+}
+
+object WhiteDnsScanDefaults {
+    const val DefaultWorkerCount = 4
+    const val WorkerWarningThreshold = 8
+}
+
+object WhiteDnsThemeMode {
+    const val System = "system"
+    const val Light = "light"
+    const val Dark = "dark"
+}
+
+data class WhiteDnsScanState(
+    val sessionId: String = "",
+    val status: String = WhiteDnsScanStatus.Idle,
+    val sourceName: String = "",
+    val totalResolvers: Int = 0,
+    val completedResolvers: Int = 0,
+    val validResolvers: Int = 0,
+    val rejectedResolvers: Int = 0,
+    val workerCount: Int = WhiteDnsScanDefaults.DefaultWorkerCount,
+    val startedAtMillis: Long = 0,
+    val updatedAtMillis: Long = 0,
+    val durationMillis: Long = 0,
+    val message: String = "",
+    val validResolverEntries: List<String> = emptyList(),
+    val rejectedResolverEntries: List<String> = emptyList(),
+    val workerFailures: List<String> = emptyList(),
+) {
+    val isRunning: Boolean
+        get() = status == WhiteDnsScanStatus.Starting || status == WhiteDnsScanStatus.Running
+
+    fun recoverIfStale(
+        nowMillis: Long,
+        staleAfterMillis: Long,
+        message: String = "Previous scan is no longer active",
+    ): WhiteDnsScanState {
+        if (!isRunning) {
+            return this
+        }
+        val lastUpdateMillis = updatedAtMillis.takeIf { it > 0 } ?: startedAtMillis
+        if (lastUpdateMillis <= 0L || nowMillis - lastUpdateMillis < staleAfterMillis) {
+            return this
+        }
+        return copy(
+            status = WhiteDnsScanStatus.Stopped,
+            updatedAtMillis = nowMillis,
+            message = message,
+        )
+    }
+
+    val fraction: Float
+        get() = if (totalResolvers > 0) {
+            completedResolvers.coerceIn(0, totalResolvers).toFloat() / totalResolvers
+        } else {
+            0f
+        }
+}
+
 data class WhiteDnsUiState(
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
     val settings: WhiteDnsSettings = WhiteDnsSettings(),
@@ -411,6 +480,9 @@ data class WhiteDnsUiState(
     val resolverRuntimeState: ResolverRuntimeState = ResolverRuntimeState(),
     val connectionProgress: ConnectionProgressState = ConnectionProgressState(),
     val connectionVerification: ConnectionVerificationState = ConnectionVerificationState(),
+    val scanState: WhiteDnsScanState = WhiteDnsScanState(),
+    val scanWorkerCount: String = WhiteDnsScanDefaults.DefaultWorkerCount.toString(),
+    val scanConnectionProfileId: String = ConnectionProfile.DefaultId,
 )
 
 object WhiteDnsRuntimeProxy {
@@ -431,6 +503,12 @@ object WhiteDnsOptions {
     val connectionModes = listOf(
         Choice("proxy", "Proxy Mode"),
         Choice("vpn", "Full VPN"),
+    )
+
+    val themeModes = listOf(
+        Choice(WhiteDnsThemeMode.System, "Auto"),
+        Choice(WhiteDnsThemeMode.Light, "Light"),
+        Choice(WhiteDnsThemeMode.Dark, "Dark"),
     )
 
     val splitTunnelModes = listOf(
@@ -481,6 +559,10 @@ object WhiteDnsOptions {
 
     fun connectionModeLabel(mode: String): String {
         return connectionModes.firstOrNull { it.value == mode }?.label ?: "Proxy Mode"
+    }
+
+    fun themeModeLabel(mode: String): String {
+        return themeModes.firstOrNull { it.value == mode }?.label ?: "Auto"
     }
 
     fun splitTunnelModeLabel(mode: String): String {
@@ -572,6 +654,7 @@ fun WhiteDnsSettings.syncSelectedConnectionProfileFields(): WhiteDnsSettings {
     val advancedProfiles = normalizedAdvancedProfiles()
     val selected = profiles.firstOrNull { it.id == selectedConnectionProfileId } ?: profiles.first()
     val selectedConnectionMode = normalizeConnectionMode(connectionMode)
+    val selectedThemeMode = normalizeThemeMode(themeMode)
     val modeSyncedProfiles = profiles.map { profile ->
         if (profile.id == selected.id) {
             profile.copy(connectionMode = selectedConnectionMode)
@@ -600,6 +683,7 @@ fun WhiteDnsSettings.syncSelectedConnectionProfileFields(): WhiteDnsSettings {
         customServerEncryptionKey = selected.customServerEncryptionKey,
         customServerEncryptionMethod = selected.customServerEncryptionMethod,
         connectionMode = selectedConnectionMode,
+        themeMode = selectedThemeMode,
         splitTunnelMode = normalizeSplitTunnelMode(splitTunnelMode),
         splitTunnelPackages = normalizePackageNames(splitTunnelPackages),
     )
@@ -725,6 +809,28 @@ fun WhiteDnsSettings.saveCurrentAdvancedProfileAs(name: String): WhiteDnsSetting
     ).syncSelectedConnectionProfileFields()
 }
 
+fun WhiteDnsSettings.upsertAdvancedProfile(profile: AdvancedSettingsProfile): WhiteDnsSettings {
+    if (profile.id == AdvancedSettingsProfile.DefaultId) {
+        return selectAdvancedProfile(AdvancedSettingsProfile.DefaultId)
+    }
+    val normalizedProfile = profile.copy(
+        id = profile.id.ifBlank { AdvancedSettingsProfile.newId() },
+        name = profile.name.ifBlank { "Advanced Settings" },
+    )
+    val customProfiles = normalizedAdvancedProfiles().filter { it.id != AdvancedSettingsProfile.DefaultId }
+    val updatedProfiles = if (customProfiles.any { it.id == normalizedProfile.id }) {
+        customProfiles.map { existing ->
+            if (existing.id == normalizedProfile.id) normalizedProfile else existing
+        }
+    } else {
+        customProfiles + normalizedProfile
+    }
+    return copy(
+        selectedAdvancedProfileId = normalizedProfile.id,
+        advancedProfiles = updatedProfiles,
+    ).applyAdvancedProfile(normalizedProfile)
+}
+
 fun WhiteDnsSettings.selectConnectionProfile(profileId: String): WhiteDnsSettings {
     val profiles = normalizedConnectionProfiles()
     val resolverProfiles = normalizedResolverProfiles()
@@ -794,6 +900,24 @@ fun WhiteDnsSettings.upsertResolverProfile(profile: ResolverProfile): WhiteDnsSe
     ).applyResolverProfileToSelectedConnection(normalizedProfile.id)
 }
 
+fun WhiteDnsSettings.saveResolverProfileAs(
+    name: String,
+    resolverText: String,
+): WhiteDnsSettings {
+    val normalizedResolverText = normalizeResolverText(resolverText)
+    if (normalizedResolverText.isBlank()) {
+        return syncSelectedConnectionProfileFields()
+    }
+    val profile = ResolverProfile(
+        id = ResolverProfile.newId(),
+        name = name.trim().ifBlank { "Resolvers" },
+        resolverText = normalizedResolverText,
+    )
+    return copy(
+        resolverProfiles = normalizedResolverProfiles() + profile,
+    ).syncSelectedConnectionProfileFields()
+}
+
 fun WhiteDnsSettings.moveConnectionProfile(profileId: String, direction: Int): WhiteDnsSettings {
     if (direction == 0) {
         return syncSelectedConnectionProfileFields()
@@ -847,6 +971,21 @@ fun WhiteDnsSettings.moveResolverProfileToIndex(profileId: String, targetIndex: 
     }
     return copy(
         resolverProfiles = profiles.moved(fromIndex, toIndex),
+    ).syncSelectedConnectionProfileFields()
+}
+
+fun WhiteDnsSettings.moveAdvancedProfileToIndex(profileId: String, targetIndex: Int): WhiteDnsSettings {
+    val customProfiles = normalizedAdvancedProfiles().filter { it.id != AdvancedSettingsProfile.DefaultId }
+    val fromIndex = customProfiles.indexOfFirst { it.id == profileId }
+    if (fromIndex == -1) {
+        return copy(advancedProfiles = customProfiles).syncSelectedConnectionProfileFields()
+    }
+    val toIndex = targetIndex.coerceIn(0, customProfiles.lastIndex)
+    if (fromIndex == toIndex) {
+        return copy(advancedProfiles = customProfiles).syncSelectedConnectionProfileFields()
+    }
+    return copy(
+        advancedProfiles = customProfiles.moved(fromIndex, toIndex),
     ).syncSelectedConnectionProfileFields()
 }
 
@@ -931,6 +1070,32 @@ fun WhiteDnsSettings.deleteConnectionProfile(profileId: String): WhiteDnsSetting
         connectionProfiles = remainingProfiles,
         selectedConnectionProfileId = nextSelectedId,
     ).syncSelectedConnectionProfileFields()
+}
+
+fun WhiteDnsSettings.deleteAdvancedProfile(profileId: String): WhiteDnsSettings {
+    if (profileId == AdvancedSettingsProfile.DefaultId) {
+        return syncSelectedConnectionProfileFields()
+    }
+    val customProfiles = normalizedAdvancedProfiles().filter { it.id != AdvancedSettingsProfile.DefaultId }
+    if (customProfiles.none { it.id == profileId }) {
+        return syncSelectedConnectionProfileFields()
+    }
+    val remainingProfiles = customProfiles.filterNot { it.id == profileId }
+    val deletingSelectedProfile = selectedAdvancedProfileId == profileId
+    val nextSelectedId = if (deletingSelectedProfile) {
+        AdvancedSettingsProfile.DefaultId
+    } else {
+        selectedAdvancedProfileId
+    }
+    val updatedSettings = copy(
+        advancedProfiles = remainingProfiles,
+        selectedAdvancedProfileId = nextSelectedId,
+    )
+    return if (deletingSelectedProfile) {
+        updatedSettings.selectAdvancedProfile(nextSelectedId)
+    } else {
+        updatedSettings.syncSelectedConnectionProfileFields()
+    }
 }
 
 private fun <T> List<T>.moved(fromIndex: Int, toIndex: Int): List<T> {
@@ -1048,8 +1213,12 @@ private fun resolverTextTokens(raw: String): Sequence<String> {
                 line.split(*separators).asSequence()
             }
         }
-        .map(String::trim)
+        .map(::cleanResolverToken)
         .filter { it.isNotEmpty() && !it.startsWith("#") }
+}
+
+private fun cleanResolverToken(token: String): String {
+    return token.trim().trim('"', '\'').trim()
 }
 
 private fun normalizeResolverEntry(entry: String): String? {
@@ -1187,6 +1356,16 @@ private fun normalizeConnectionMode(raw: String): String {
     return when (raw) {
         "proxy", "vpn" -> raw
         else -> "proxy"
+    }
+}
+
+private fun normalizeThemeMode(raw: String): String {
+    return when (raw) {
+        WhiteDnsThemeMode.System,
+        WhiteDnsThemeMode.Light,
+        WhiteDnsThemeMode.Dark,
+        -> raw
+        else -> WhiteDnsThemeMode.System
     }
 }
 

@@ -1,101 +1,351 @@
 package shop.whitedns.client.ui
 
 import android.app.Activity
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
+import shop.whitedns.client.model.WhiteDnsThemeMode
 
-object WhiteDnsPalette {
-    val Background = Color(0xFF0D0F14)
-    val Surface = Color(0xFF161A23)
-    val SurfaceAlt = Color(0xFF111420)
-    val DropdownSurface = Color(0xFF1C2030)
-    val Border = Color(0xFF1E2330)
-    val Divider = Color(0xFF252B3D)
-    val ControlBorder = Color(0xFF2A3048)
-    val Accent = Color(0xFF6C5CE7)
-    val AccentPressed = Color(0xFF5A4BD1)
-    val AccentText = Color(0xFF7A6BE1)
-    val OnAccent = Color(0xFFFFFFFF)
-    val Success = Color(0xFF00D68F)
-    val Error = Color(0xFFFF6B6B)
-    val Warning = Color(0xFFFBBF24)
-    val WarningText = Color(0xFFFBBF24)
-    val Ink = Color(0xFFEDEEF2)
-    val Muted = Color(0xFFC2C8E1)
-    val Pale = Color(0xFFADB5D3)
-    val SectionTitle = Color(0xFFC1C1C2)
-    val FieldLabel = Color(0xFFC1C1C2)
-    val Description = Color(0xFFADADAD)
-    val Placeholder = Color(0xFFA8B0CC)
-    val Disabled = Color(0xFF717A9E)
-    val Input = Color(0xFF111420)
-    val AccentDim = Color(0xFF4A3FB0)
-    val SurfaceHover = Color(0xFF1A1F2C)
-    val AccentSurface = Color(0xFF1C1835)
-    val SuccessSurface = Color(0xFF0D2E22)
-    val WarningSurface = Color(0xFF2B2410)
-    val ErrorSurface = Color(0xFF3D1C1C)
+object WhiteDnsSpacing {
+    val xs = 4.dp       // Extra small spacing
+    val sm = 8.dp       // Small spacing
+    val md = 12.dp      // Medium spacing
+    val lg = 16.dp      // Large spacing
+    val xl = 20.dp      // Extra large spacing
+    val xxl = 24.dp     // Double extra large spacing
+    val xxxl = 32.dp    // Triple extra large spacing
+
+    // Component-specific spacing
+    val cardPadding = 16.dp
+    val sectionSpacing = 24.dp
+    val inputSpacing = 10.dp
+    val listItemSpacing = 8.dp
+    val iconSpacing = 6.dp
 }
 
-private val WhiteDnsColorScheme = darkColorScheme(
-    primary = WhiteDnsPalette.Accent,
-    onPrimary = WhiteDnsPalette.OnAccent,
-    primaryContainer = WhiteDnsPalette.AccentPressed,
-    onPrimaryContainer = WhiteDnsPalette.OnAccent,
-    secondary = WhiteDnsPalette.Pale,
-    onSecondary = WhiteDnsPalette.Background,
-    secondaryContainer = WhiteDnsPalette.DropdownSurface,
-    onSecondaryContainer = WhiteDnsPalette.Ink,
-    tertiary = WhiteDnsPalette.Success,
-    onTertiary = WhiteDnsPalette.Background,
-    tertiaryContainer = WhiteDnsPalette.SuccessSurface,
-    onTertiaryContainer = WhiteDnsPalette.Success,
-    background = WhiteDnsPalette.Background,
-    onBackground = WhiteDnsPalette.Ink,
-    surface = WhiteDnsPalette.Surface,
-    onSurface = WhiteDnsPalette.Ink,
-    surfaceVariant = WhiteDnsPalette.SurfaceAlt,
-    onSurfaceVariant = WhiteDnsPalette.Muted,
-    surfaceTint = WhiteDnsPalette.Accent,
-    outline = WhiteDnsPalette.ControlBorder,
-    outlineVariant = WhiteDnsPalette.Border,
-    inverseSurface = WhiteDnsPalette.Ink,
-    inverseOnSurface = WhiteDnsPalette.Background,
-    inversePrimary = WhiteDnsPalette.AccentPressed,
-    error = WhiteDnsPalette.Error,
-    onError = WhiteDnsPalette.OnAccent,
-    errorContainer = WhiteDnsPalette.ErrorSurface,
-    onErrorContainer = WhiteDnsPalette.Error,
+object WhiteDnsAnimations {
+    // Duration constants (in milliseconds)
+    const val DURATION_INSTANT = 120
+    const val DURATION_FAST = 180
+    const val DURATION_NORMAL = 300
+    const val DURATION_SLOW = 400
+    const val DURATION_VERY_SLOW = 600
+
+    // Easing functions for smooth animations
+    val easingStandard = FastOutSlowInEasing
+    val easingEmphasized = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
+    val easingDecelerate = CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f)
+
+    // Reusable animation specs
+    fun <T> standardTween(duration: Int = DURATION_NORMAL) =
+        tween<T>(durationMillis = duration, easing = easingStandard)
+
+    fun <T> fastFade() =
+        tween<T>(durationMillis = DURATION_FAST, easing = easingStandard)
+
+    fun <T> slowTransition() =
+        tween<T>(durationMillis = DURATION_SLOW, easing = easingEmphasized)
+}
+
+interface WhiteDnsPaletteColors {
+    val Background: Color
+    val Surface: Color
+    val SurfaceAlt: Color
+    val DropdownSurface: Color
+    val Input: Color
+    val Border: Color
+    val Divider: Color
+    val ControlBorder: Color
+    val Accent: Color
+    val AccentPressed: Color
+    val AccentText: Color
+    val AccentDim: Color
+    val OnAccent: Color
+    val Success: Color
+    val Error: Color
+    val Warning: Color
+    val WarningText: Color
+    val Ink: Color
+    val Muted: Color
+    val Pale: Color
+    val SectionTitle: Color
+    val FieldLabel: Color
+    val Description: Color
+    val Placeholder: Color
+    val Disabled: Color
+    val SurfaceHover: Color
+    val AccentSurface: Color
+    val SuccessSurface: Color
+    val WarningSurface: Color
+    val ErrorSurface: Color
+}
+
+object WhiteDnsPaletteDark : WhiteDnsPaletteColors {
+    // Core backgrounds - deeper, richer blacks with subtle blue undertones
+    override val Background = Color(0xFF0A0C10)           // Deeper pure dark
+    override val Surface = Color(0xFF13161D)              // Elevated surface with better contrast
+    override val SurfaceAlt = Color(0xFF0E1117)           // Subtle variation
+    override val DropdownSurface = Color(0xFF1A1E28)      // Clearer dropdown distinction
+    override val Input = Color(0xFF0E1117)                // Matches SurfaceAlt for consistency
+
+    // Borders and dividers - improved hierarchy
+    override val Border = Color(0xFF1C2028)               // Subtle border
+    override val Divider = Color(0xFF22273A)              // More visible dividers
+    override val ControlBorder = Color(0xFF2D3448)        // Clearer control borders
+
+    // Brand colors - vibrant and modern
+    override val Accent = Color(0xFF7C6FEA)               // Brighter, more vibrant purple
+    override val AccentPressed = Color(0xFF6456D6)        // Deeper pressed state
+    override val AccentText = Color(0xFF8A7FED)           // Lighter for text
+    override val AccentDim = Color(0xFF5547C2)            // Dimmed accent
+    override val OnAccent = Color(0xFFFFFFFF)             // Pure white on accent
+
+    // Status colors - more vibrant and clear
+    override val Success = Color(0xFF10D98E)              // Brighter, more energetic green
+    override val Error = Color(0xFFFF5757)                // Vivid red with better visibility
+    override val Warning = Color(0xFFFFC043)              // Warmer, more noticeable amber
+    override val WarningText = Color(0xFFFFC043)          // Consistent warning text
+
+    // Text colors - optimized contrast and hierarchy
+    override val Ink = Color(0xFFF2F3F7)                  // Brighter white for primary text
+    override val Muted = Color(0xFFB8BED6)                // Softer muted text
+    override val Pale = Color(0xFF9BA3C4)                 // Subtle pale text
+    override val SectionTitle = Color(0xFFD4D7E3)         // Clearer section headers
+    override val FieldLabel = Color(0xFFBFC4D8)           // Better field label visibility
+    override val Description = Color(0xFF9FA6C0)          // Optimized description text
+    override val Placeholder = Color(0xFF7A8299)          // Subtle placeholders
+    override val Disabled = Color(0xFF5A6178)             // Clear disabled state
+
+    // Interactive states
+    override val SurfaceHover = Color(0xFF181D27)         // Subtle hover effect
+
+    // Surface tints - refined for better visual feedback
+    override val AccentSurface = Color(0xFF1A1640)        // Deeper purple tint
+    override val SuccessSurface = Color(0xFF0A2D20)       // Richer green tint
+    override val WarningSurface = Color(0xFF2A2310)       // Warmer amber tint
+    override val ErrorSurface = Color(0xFF331818)         // Deeper red tint
+}
+
+object WhiteDnsPaletteLight : WhiteDnsPaletteColors {
+    override val Background = Color(0xFFF5F6FA)
+    override val Surface = Color(0xFFFFFFFF)
+    override val SurfaceAlt = Color(0xFFF8F9FC)
+    override val DropdownSurface = Color(0xFFFAFBFD)
+    override val Border = Color(0xFFE5E8F0)
+    override val Divider = Color(0xFFDCE0EB)
+    override val ControlBorder = Color(0xFFD1D6E4)
+    override val Accent = Color(0xFF6C5CE7)
+    override val AccentPressed = Color(0xFF5A4BD1)
+    override val AccentText = Color(0xFF5546C8)
+    override val OnAccent = Color(0xFFFFFFFF)
+    override val Success = Color(0xFF00B87C)
+    override val Error = Color(0xFFE63946)
+    override val Warning = Color(0xFFF59E0B)
+    override val WarningText = Color(0xFFD97706)
+    override val Ink = Color(0xFF0F1419)
+    override val Muted = Color(0xFF4B5563)
+    override val Pale = Color(0xFF6B7280)
+    override val SectionTitle = Color(0xFF374151)
+    override val FieldLabel = Color(0xFF4B5563)
+    override val Description = Color(0xFF6B7280)
+    override val Placeholder = Color(0xFF9CA3AF)
+    override val Disabled = Color(0xFFD1D5DB)
+    override val Input = Color(0xFFFAFBFC)
+    override val AccentDim = Color(0xFF9F93E8)
+    override val SurfaceHover = Color(0xFFF3F4F8)
+    override val AccentSurface = Color(0xFFF0EDFC)
+    override val SuccessSurface = Color(0xFFE6F7F1)
+    override val WarningSurface = Color(0xFFFEF3E2)
+    override val ErrorSurface = Color(0xFFFEE8E9)
+}
+
+private val LocalWhiteDnsPalette = staticCompositionLocalOf<WhiteDnsPaletteColors> { WhiteDnsPaletteDark }
+
+object WhiteDnsPalette {
+    val Background: Color
+        @Composable get() = LocalWhiteDnsPalette.current.Background
+    val Surface: Color
+        @Composable get() = LocalWhiteDnsPalette.current.Surface
+    val SurfaceAlt: Color
+        @Composable get() = LocalWhiteDnsPalette.current.SurfaceAlt
+    val DropdownSurface: Color
+        @Composable get() = LocalWhiteDnsPalette.current.DropdownSurface
+    val Border: Color
+        @Composable get() = LocalWhiteDnsPalette.current.Border
+    val Divider: Color
+        @Composable get() = LocalWhiteDnsPalette.current.Divider
+    val ControlBorder: Color
+        @Composable get() = LocalWhiteDnsPalette.current.ControlBorder
+    val Accent: Color
+        @Composable get() = LocalWhiteDnsPalette.current.Accent
+    val AccentPressed: Color
+        @Composable get() = LocalWhiteDnsPalette.current.AccentPressed
+    val AccentText: Color
+        @Composable get() = LocalWhiteDnsPalette.current.AccentText
+    val OnAccent: Color
+        @Composable get() = LocalWhiteDnsPalette.current.OnAccent
+    val Success: Color
+        @Composable get() = LocalWhiteDnsPalette.current.Success
+    val Error: Color
+        @Composable get() = LocalWhiteDnsPalette.current.Error
+    val Warning: Color
+        @Composable get() = LocalWhiteDnsPalette.current.Warning
+    val WarningText: Color
+        @Composable get() = LocalWhiteDnsPalette.current.WarningText
+    val Ink: Color
+        @Composable get() = LocalWhiteDnsPalette.current.Ink
+    val Muted: Color
+        @Composable get() = LocalWhiteDnsPalette.current.Muted
+    val Pale: Color
+        @Composable get() = LocalWhiteDnsPalette.current.Pale
+    val SectionTitle: Color
+        @Composable get() = LocalWhiteDnsPalette.current.SectionTitle
+    val FieldLabel: Color
+        @Composable get() = LocalWhiteDnsPalette.current.FieldLabel
+    val Description: Color
+        @Composable get() = LocalWhiteDnsPalette.current.Description
+    val Placeholder: Color
+        @Composable get() = LocalWhiteDnsPalette.current.Placeholder
+    val Disabled: Color
+        @Composable get() = LocalWhiteDnsPalette.current.Disabled
+    val Input: Color
+        @Composable get() = LocalWhiteDnsPalette.current.Input
+    val AccentDim: Color
+        @Composable get() = LocalWhiteDnsPalette.current.AccentDim
+    val SurfaceHover: Color
+        @Composable get() = LocalWhiteDnsPalette.current.SurfaceHover
+    val AccentSurface: Color
+        @Composable get() = LocalWhiteDnsPalette.current.AccentSurface
+    val SuccessSurface: Color
+        @Composable get() = LocalWhiteDnsPalette.current.SuccessSurface
+    val WarningSurface: Color
+        @Composable get() = LocalWhiteDnsPalette.current.WarningSurface
+    val ErrorSurface: Color
+        @Composable get() = LocalWhiteDnsPalette.current.ErrorSurface
+}
+
+@Composable
+fun currentPalette(themeMode: String = WhiteDnsThemeMode.System): WhiteDnsPaletteColors {
+    return if (shouldUseDarkTheme(themeMode)) WhiteDnsPaletteDark else WhiteDnsPaletteLight
+}
+
+private val WhiteDnsColorSchemeDark = darkColorScheme(
+    primary = WhiteDnsPaletteDark.Accent,
+    onPrimary = WhiteDnsPaletteDark.OnAccent,
+    primaryContainer = WhiteDnsPaletteDark.AccentPressed,
+    onPrimaryContainer = WhiteDnsPaletteDark.OnAccent,
+    secondary = WhiteDnsPaletteDark.Pale,
+    onSecondary = WhiteDnsPaletteDark.Background,
+    secondaryContainer = WhiteDnsPaletteDark.DropdownSurface,
+    onSecondaryContainer = WhiteDnsPaletteDark.Ink,
+    tertiary = WhiteDnsPaletteDark.Success,
+    onTertiary = WhiteDnsPaletteDark.Background,
+    tertiaryContainer = WhiteDnsPaletteDark.SuccessSurface,
+    onTertiaryContainer = WhiteDnsPaletteDark.Success,
+    background = WhiteDnsPaletteDark.Background,
+    onBackground = WhiteDnsPaletteDark.Ink,
+    surface = WhiteDnsPaletteDark.Surface,
+    onSurface = WhiteDnsPaletteDark.Ink,
+    surfaceVariant = WhiteDnsPaletteDark.SurfaceAlt,
+    onSurfaceVariant = WhiteDnsPaletteDark.Muted,
+    surfaceTint = WhiteDnsPaletteDark.Accent,
+    outline = WhiteDnsPaletteDark.ControlBorder,
+    outlineVariant = WhiteDnsPaletteDark.Border,
+    inverseSurface = WhiteDnsPaletteDark.Ink,
+    inverseOnSurface = WhiteDnsPaletteDark.Background,
+    inversePrimary = WhiteDnsPaletteDark.AccentPressed,
+    error = WhiteDnsPaletteDark.Error,
+    onError = WhiteDnsPaletteDark.OnAccent,
+    errorContainer = WhiteDnsPaletteDark.ErrorSurface,
+    onErrorContainer = WhiteDnsPaletteDark.Error,
     scrim = Color(0xFF000000),
-    surfaceBright = WhiteDnsPalette.Divider,
-    surfaceDim = WhiteDnsPalette.Background,
-    surfaceContainerLowest = WhiteDnsPalette.Background,
-    surfaceContainerLow = WhiteDnsPalette.SurfaceAlt,
-    surfaceContainer = WhiteDnsPalette.Surface,
-    surfaceContainerHigh = WhiteDnsPalette.DropdownSurface,
-    surfaceContainerHighest = WhiteDnsPalette.Divider,
-    primaryFixed = WhiteDnsPalette.AccentSurface,
-    primaryFixedDim = WhiteDnsPalette.AccentSurface,
-    onPrimaryFixed = WhiteDnsPalette.Ink,
-    onPrimaryFixedVariant = WhiteDnsPalette.Muted,
-    secondaryFixed = WhiteDnsPalette.DropdownSurface,
-    secondaryFixedDim = WhiteDnsPalette.DropdownSurface,
-    onSecondaryFixed = WhiteDnsPalette.Ink,
-    onSecondaryFixedVariant = WhiteDnsPalette.Muted,
-    tertiaryFixed = WhiteDnsPalette.SuccessSurface,
-    tertiaryFixedDim = WhiteDnsPalette.SuccessSurface,
-    onTertiaryFixed = WhiteDnsPalette.Ink,
-    onTertiaryFixedVariant = WhiteDnsPalette.Success,
+    surfaceBright = WhiteDnsPaletteDark.Divider,
+    surfaceDim = WhiteDnsPaletteDark.Background,
+    surfaceContainerLowest = WhiteDnsPaletteDark.Background,
+    surfaceContainerLow = WhiteDnsPaletteDark.SurfaceAlt,
+    surfaceContainer = WhiteDnsPaletteDark.Surface,
+    surfaceContainerHigh = WhiteDnsPaletteDark.DropdownSurface,
+    surfaceContainerHighest = WhiteDnsPaletteDark.Divider,
+    primaryFixed = WhiteDnsPaletteDark.AccentSurface,
+    primaryFixedDim = WhiteDnsPaletteDark.AccentSurface,
+    onPrimaryFixed = WhiteDnsPaletteDark.Ink,
+    onPrimaryFixedVariant = WhiteDnsPaletteDark.Muted,
+    secondaryFixed = WhiteDnsPaletteDark.DropdownSurface,
+    secondaryFixedDim = WhiteDnsPaletteDark.DropdownSurface,
+    onSecondaryFixed = WhiteDnsPaletteDark.Ink,
+    onSecondaryFixedVariant = WhiteDnsPaletteDark.Muted,
+    tertiaryFixed = WhiteDnsPaletteDark.SuccessSurface,
+    tertiaryFixedDim = WhiteDnsPaletteDark.SuccessSurface,
+    onTertiaryFixed = WhiteDnsPaletteDark.Ink,
+    onTertiaryFixedVariant = WhiteDnsPaletteDark.Success,
+)
+
+private val WhiteDnsColorSchemeLight = lightColorScheme(
+    primary = WhiteDnsPaletteLight.Accent,
+    onPrimary = WhiteDnsPaletteLight.OnAccent,
+    primaryContainer = WhiteDnsPaletteLight.AccentSurface,
+    onPrimaryContainer = WhiteDnsPaletteLight.AccentText,
+    secondary = WhiteDnsPaletteLight.Pale,
+    onSecondary = WhiteDnsPaletteLight.Surface,
+    secondaryContainer = WhiteDnsPaletteLight.SurfaceAlt,
+    onSecondaryContainer = WhiteDnsPaletteLight.Ink,
+    tertiary = WhiteDnsPaletteLight.Success,
+    onTertiary = WhiteDnsPaletteLight.OnAccent,
+    tertiaryContainer = WhiteDnsPaletteLight.SuccessSurface,
+    onTertiaryContainer = WhiteDnsPaletteLight.Success,
+    background = WhiteDnsPaletteLight.Background,
+    onBackground = WhiteDnsPaletteLight.Ink,
+    surface = WhiteDnsPaletteLight.Surface,
+    onSurface = WhiteDnsPaletteLight.Ink,
+    surfaceVariant = WhiteDnsPaletteLight.SurfaceAlt,
+    onSurfaceVariant = WhiteDnsPaletteLight.Muted,
+    surfaceTint = WhiteDnsPaletteLight.Accent,
+    outline = WhiteDnsPaletteLight.ControlBorder,
+    outlineVariant = WhiteDnsPaletteLight.Border,
+    inverseSurface = WhiteDnsPaletteLight.Ink,
+    inverseOnSurface = WhiteDnsPaletteLight.Background,
+    inversePrimary = WhiteDnsPaletteLight.AccentPressed,
+    error = WhiteDnsPaletteLight.Error,
+    onError = WhiteDnsPaletteLight.OnAccent,
+    errorContainer = WhiteDnsPaletteLight.ErrorSurface,
+    onErrorContainer = WhiteDnsPaletteLight.Error,
+    scrim = Color(0x77000000),
+    surfaceBright = WhiteDnsPaletteLight.Surface,
+    surfaceDim = WhiteDnsPaletteLight.SurfaceAlt,
+    surfaceContainerLowest = WhiteDnsPaletteLight.Background,
+    surfaceContainerLow = WhiteDnsPaletteLight.SurfaceAlt,
+    surfaceContainer = WhiteDnsPaletteLight.Surface,
+    surfaceContainerHigh = WhiteDnsPaletteLight.DropdownSurface,
+    surfaceContainerHighest = WhiteDnsPaletteLight.Surface,
+    primaryFixed = WhiteDnsPaletteLight.AccentSurface,
+    primaryFixedDim = WhiteDnsPaletteLight.AccentSurface,
+    onPrimaryFixed = WhiteDnsPaletteLight.Ink,
+    onPrimaryFixedVariant = WhiteDnsPaletteLight.Muted,
+    secondaryFixed = WhiteDnsPaletteLight.SurfaceAlt,
+    secondaryFixedDim = WhiteDnsPaletteLight.SurfaceAlt,
+    onSecondaryFixed = WhiteDnsPaletteLight.Ink,
+    onSecondaryFixedVariant = WhiteDnsPaletteLight.Muted,
+    tertiaryFixed = WhiteDnsPaletteLight.SuccessSurface,
+    tertiaryFixedDim = WhiteDnsPaletteLight.SuccessSurface,
+    onTertiaryFixed = WhiteDnsPaletteLight.Ink,
+    onTertiaryFixedVariant = WhiteDnsPaletteLight.Success,
 )
 
 private val WhiteDnsTypography = Typography(
@@ -163,23 +413,42 @@ private val WhiteDnsTypography = Typography(
 
 @Suppress("DEPRECATION")
 @Composable
-fun WhiteDnsTheme(content: @Composable () -> Unit) {
+fun WhiteDnsTheme(
+    themeMode: String = WhiteDnsThemeMode.System,
+    content: @Composable () -> Unit,
+) {
+    val darkTheme = shouldUseDarkTheme(themeMode)
+    val palette = if (darkTheme) WhiteDnsPaletteDark else WhiteDnsPaletteLight
+    val colorScheme = if (darkTheme) WhiteDnsColorSchemeDark else WhiteDnsColorSchemeLight
+
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
-            window.statusBarColor = WhiteDnsPalette.Background.toArgb()
-            window.navigationBarColor = WhiteDnsPalette.Surface.toArgb()
+            window.statusBarColor = palette.Background.toArgb()
+            window.navigationBarColor = palette.Surface.toArgb()
             WindowCompat.getInsetsController(window, view).apply {
-                isAppearanceLightStatusBars = false
-                isAppearanceLightNavigationBars = false
+                isAppearanceLightStatusBars = !darkTheme
+                isAppearanceLightNavigationBars = !darkTheme
             }
         }
     }
 
-    MaterialTheme(
-        colorScheme = WhiteDnsColorScheme,
-        typography = WhiteDnsTypography,
-        content = content,
-    )
+    CompositionLocalProvider(LocalWhiteDnsPalette provides palette) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = WhiteDnsTypography,
+            content = content,
+        )
+    }
+}
+
+@Composable
+private fun shouldUseDarkTheme(themeMode: String): Boolean {
+    val systemDarkTheme = isSystemInDarkTheme()
+    return when (themeMode) {
+        WhiteDnsThemeMode.Light -> false
+        WhiteDnsThemeMode.Dark -> true
+        else -> systemDarkTheme
+    }
 }

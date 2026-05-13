@@ -8,6 +8,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
+import android.view.HapticFeedbackConstants
 
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -63,7 +64,6 @@ import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Upload
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
@@ -72,7 +72,11 @@ import androidx.compose.material.icons.rounded.DragHandle
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PowerSettingsNew
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.WarningAmber
@@ -83,6 +87,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -98,6 +104,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.hapticfeedback.HapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -113,15 +121,18 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import shop.whitedns.client.R
 import shop.whitedns.client.model.AdvancedSettingsProfile
 import shop.whitedns.client.model.Choice
 import shop.whitedns.client.model.ConnectionProfile
@@ -133,25 +144,30 @@ import shop.whitedns.client.model.ConnectionVerificationStatus
 import shop.whitedns.client.model.ResolverProfile
 import shop.whitedns.client.model.ResolverRuntimeState
 import shop.whitedns.client.model.WhiteDnsOptions
+import shop.whitedns.client.model.WhiteDnsScanDefaults
+import shop.whitedns.client.model.WhiteDnsScanState
+import shop.whitedns.client.model.WhiteDnsScanStatus
 import shop.whitedns.client.model.WhiteDnsSettings
 import shop.whitedns.client.model.WhiteDnsUiState
+import shop.whitedns.client.model.applyAdvancedProfile
 import shop.whitedns.client.model.applyResolverProfileToSelectedConnection
 import shop.whitedns.client.model.deleteConnectionProfile
+import shop.whitedns.client.model.deleteAdvancedProfile
 import shop.whitedns.client.model.deleteResolverProfile
 import shop.whitedns.client.model.exportAllStormDnsProfileLinks
 import shop.whitedns.client.model.exportStormDnsProfileLink
 import shop.whitedns.client.model.importStormDnsProfileLinks
+import shop.whitedns.client.model.importAdvancedSettingsProfileFromToml
 import shop.whitedns.client.model.matchesAdvancedProfile
 import shop.whitedns.client.model.moveConnectionProfileToIndex
+import shop.whitedns.client.model.moveAdvancedProfileToIndex
 import shop.whitedns.client.model.moveResolverProfileToIndex
 import shop.whitedns.client.model.normalizedAdvancedProfiles
 import shop.whitedns.client.model.normalizedConnectionProfiles
 import shop.whitedns.client.model.normalizedResolverProfiles
 import shop.whitedns.client.model.resolve
-import shop.whitedns.client.model.resetAdvancedSettings
 import shop.whitedns.client.model.runtimeConnectionSettings
-import shop.whitedns.client.model.saveCurrentAdvancedProfileAs
-import shop.whitedns.client.model.saveSelectedAdvancedProfile
+import shop.whitedns.client.model.saveResolverProfileAs
 import shop.whitedns.client.model.selectAdvancedProfile
 import shop.whitedns.client.model.selectConnectionProfile
 import shop.whitedns.client.model.selectedAdvancedProfile
@@ -159,10 +175,9 @@ import shop.whitedns.client.model.selectedConnectionProfile
 import shop.whitedns.client.model.selectedResolverProfile
 import shop.whitedns.client.model.updateManualResolverText
 import shop.whitedns.client.model.upsertConnectionProfile
+import shop.whitedns.client.model.upsertAdvancedProfile
 import shop.whitedns.client.model.upsertResolverProfile
 import shop.whitedns.client.model.validateResolverText
-import shop.whitedns.client.security.RedactionSecrets
-import shop.whitedns.client.security.SecretRedactor
 import shop.whitedns.client.storm.StormDnsConfigRenderer
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
@@ -170,6 +185,7 @@ import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import java.io.File
 import java.util.Locale
+import kotlin.math.roundToInt
 import androidx.core.content.FileProvider
 
 @Composable
@@ -178,6 +194,12 @@ fun WhiteDnsScreen(
     onBatteryOptimizationClick: () -> Unit,
     onNotificationPermissionClick: () -> Unit,
     onConnectClick: () -> Unit,
+    onScanFileSelected: (Uri) -> Unit,
+    onScanStartClick: () -> Unit,
+    onScanConnectionProfileChange: (String) -> Unit,
+    onScanWorkerCountChange: (String) -> Unit,
+    onScanStopClick: () -> Unit,
+    onScanResumeClick: () -> Unit,
     onSettingsChange: (WhiteDnsSettings) -> Unit,
 ) {
     var selectedTab by rememberSaveable { mutableStateOf(WhiteDnsTab.CONNECT) }
@@ -213,7 +235,20 @@ fun WhiteDnsScreen(
                     },
                     onSettingsChange = onSettingsChange,
                 )
-                WhiteDnsTab.LOGS -> LogsTabContent(uiState = uiState)
+                WhiteDnsTab.SCAN -> ScanTabContent(
+                    uiState = uiState,
+                    onScanFileSelected = onScanFileSelected,
+                    onScanStartClick = onScanStartClick,
+                    onScanConnectionProfileChange = onScanConnectionProfileChange,
+                    onScanWorkerCountChange = onScanWorkerCountChange,
+                    onScanStopClick = onScanStopClick,
+                    onScanResumeClick = onScanResumeClick,
+                    onSettingsChange = onSettingsChange,
+                )
+                WhiteDnsTab.LOGS -> LogsTabContent(
+                    uiState = uiState,
+                    onSettingsChange = onSettingsChange,
+                )
             }
         }
         BottomNavigationBar(
@@ -229,7 +264,18 @@ private enum class WhiteDnsTab(
 ) {
     PROFILES("Profiles", Icons.Filled.Apps),
     CONNECT("Connect", Icons.Rounded.PowerSettingsNew),
+    SCAN("Scan", Icons.Rounded.Search),
     LOGS("Logs", Icons.Rounded.Link),
+}
+
+private const val ScanWorkerMin = 1
+private const val ScanWorkerMax = 32
+
+private enum class CompactActionTone {
+    Default,
+    Accent,
+    Success,
+    Danger,
 }
 
 private enum class ProfileCreateRequest {
@@ -237,13 +283,16 @@ private enum class ProfileCreateRequest {
     RESOLVER,
 }
 
+@Composable
 private fun Modifier.whiteDnsPageBackground(): Modifier {
+    val backgroundColor = WhiteDnsPalette.Background
+    val accentColor = WhiteDnsPalette.Accent
     return drawBehind {
-        drawRect(color = WhiteDnsPalette.Background)
+        drawRect(color = backgroundColor)
         drawRect(
             brush = Brush.radialGradient(
                 colors = listOf(
-                    WhiteDnsPalette.Accent.copy(alpha = 0.30f),
+                    accentColor.copy(alpha = 0.30f),
                     Color(0xFF245D72).copy(alpha = 0.17f),
                     Color(0xFF111420).copy(alpha = 0.08f),
                     Color.Transparent,
@@ -269,8 +318,6 @@ private fun ConnectTabContent(
     var showResolverRequiredMessage by rememberSaveable { mutableStateOf(false) }
     var selectorSheetType by rememberSaveable { mutableStateOf<HomeSelectorType?>(null) }
     var selectorSheetVisible by rememberSaveable { mutableStateOf(false) }
-    var advancedEditorVisible by rememberSaveable { mutableStateOf(false) }
-    var showAdvancedSaveAsDialog by rememberSaveable { mutableStateOf(false) }
     var showConnectionTomlDialog by rememberSaveable { mutableStateOf(false) }
     val runtimeSettings = remember(settings) { settings.runtimeConnectionSettings() }
     val resolvedSettings = remember(runtimeSettings) { runtimeSettings.resolve() }
@@ -353,23 +400,15 @@ private fun ConnectTabContent(
     }
 
     fun openSelector(type: HomeSelectorType) {
-        if (type != HomeSelectorType.ADVANCED) {
-            advancedEditorVisible = false
-        }
         selectorSheetType = type
         selectorSheetVisible = true
     }
 
     fun closeSelector() {
-        advancedEditorVisible = false
         selectorSheetVisible = false
     }
 
-    BackHandler(enabled = advancedEditorVisible) {
-        advancedEditorVisible = false
-    }
-
-    BackHandler(enabled = selectorSheetVisible && !advancedEditorVisible) {
+    BackHandler(enabled = selectorSheetVisible) {
         closeSelector()
     }
 
@@ -382,7 +421,10 @@ private fun ConnectTabContent(
                 .padding(bottom = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            HeaderCard()
+            HeaderCard(
+                themeMode = settings.themeMode,
+                onThemeModeChange = { onSettingsChange(settings.copy(themeMode = it)) },
+            )
 
             Column(
                 modifier = Modifier
@@ -398,7 +440,7 @@ private fun ConnectTabContent(
             ) {
                 Column {
                     NotificationPermissionBanner(onClick = onNotificationPermissionClick)
-                    Spacer(modifier = Modifier.height(18.dp))
+                    Spacer(modifier = Modifier.height(WhiteDnsSpacing.xl))
                 }
             }
             AnimatedVisibility(
@@ -408,7 +450,7 @@ private fun ConnectTabContent(
             ) {
                 Column {
                     BatteryOptimizationBanner(onClick = onBatteryOptimizationClick)
-                    Spacer(modifier = Modifier.height(18.dp))
+                    Spacer(modifier = Modifier.height(WhiteDnsSpacing.xl))
                 }
             }
             Spacer(
@@ -430,7 +472,7 @@ private fun ConnectTabContent(
                 exit = fadeOut(animationSpec = tween(140)) + shrinkVertically(animationSpec = tween(140)),
             ) {
                 Column {
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(WhiteDnsSpacing.inputSpacing))
                     AnimatedVisibility(
                         visible = !settings.fullVpnPerformanceWarningDismissed,
                         enter = fadeIn(animationSpec = tween(180)) + expandVertically(animationSpec = tween(180)),
@@ -442,7 +484,7 @@ private fun ConnectTabContent(
                                     onSettingsChange(settings.copy(fullVpnPerformanceWarningDismissed = true))
                                 },
                             )
-                            Spacer(modifier = Modifier.height(10.dp))
+                            Spacer(modifier = Modifier.height(WhiteDnsSpacing.inputSpacing))
                         }
                     }
                     SplitTunnelSettingsPanel(
@@ -452,7 +494,7 @@ private fun ConnectTabContent(
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.xl))
             ConnectButton(
                 status = uiState.connectionStatus,
                 progressState = uiState.connectionProgress,
@@ -475,7 +517,7 @@ private fun ConnectTabContent(
                 exit = fadeOut(animationSpec = tween(140)) + shrinkVertically(animationSpec = tween(140)),
             ) {
                 Column {
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
                     Column(
                         modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -545,7 +587,7 @@ private fun ConnectTabContent(
                 exit = fadeOut(animationSpec = tween(140)) + shrinkVertically(animationSpec = tween(140)),
             ) {
                 Column {
-                    Spacer(modifier = Modifier.height(18.dp))
+                    Spacer(modifier = Modifier.height(WhiteDnsSpacing.xl))
                     ConnectionSetupCard(
                         selectedConnectionProfile = selectedConnectionProfile,
                         selectedResolverProfile = selectedResolverProfile,
@@ -561,7 +603,7 @@ private fun ConnectTabContent(
                         onAddConnectionClick = onAddConnectionClick,
                         onAddResolverProfileClick = onAddResolverProfileClick,
                     )
-                    Spacer(modifier = Modifier.height(18.dp))
+                    Spacer(modifier = Modifier.height(WhiteDnsSpacing.xl))
                 }
             }
 
@@ -609,7 +651,7 @@ private fun ConnectTabContent(
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.sectionSpacing))
             FooterLink()
         }
         }
@@ -620,12 +662,12 @@ private fun ConnectTabContent(
                 title = when (activeSelector) {
                     HomeSelectorType.CONNECTION -> "Connection Profiles"
                     HomeSelectorType.RESOLVER -> "Resolver Profiles"
-                    HomeSelectorType.ADVANCED -> "Advanced Profiles"
+                    HomeSelectorType.ADVANCED -> "Setting Profiles"
                 },
                 searchPlaceholder = when (activeSelector) {
                     HomeSelectorType.CONNECTION -> "Search connections"
                     HomeSelectorType.RESOLVER -> "Search resolvers"
-                    HomeSelectorType.ADVANCED -> "Search advanced profiles"
+                    HomeSelectorType.ADVANCED -> "Search setting profiles"
                 },
                 items = when (activeSelector) {
                     HomeSelectorType.CONNECTION -> connectionSelectorItems
@@ -640,7 +682,7 @@ private fun ConnectTabContent(
                 emptyMessage = when (activeSelector) {
                     HomeSelectorType.CONNECTION -> "No connection profiles found."
                     HomeSelectorType.RESOLVER -> "No resolver profiles found."
-                    HomeSelectorType.ADVANCED -> "No advanced profiles found."
+                    HomeSelectorType.ADVANCED -> "No setting profiles found."
                 },
                 onDismiss = { closeSelector() },
                 onSelect = { itemId ->
@@ -658,46 +700,6 @@ private fun ConnectTabContent(
                     }
                     closeSelector()
                 },
-                onEdit = if (activeSelector == HomeSelectorType.ADVANCED) {
-                    { itemId ->
-                        showResolverRequiredMessage = false
-                        onSettingsChange(settings.selectAdvancedProfile(itemId))
-                        advancedEditorVisible = true
-                    }
-                } else {
-                    null
-                },
-            )
-        }
-
-        AdvancedSettingsEditorSheet(
-            visible = selectorSheetVisible && advancedEditorVisible,
-            settings = settings,
-            selectedProfile = selectedAdvancedProfile,
-            dirty = advancedProfileDirty,
-            showProxySettings = resolvedSettings.connectionMode == "proxy",
-            canEdit = uiState.connectionStatus == ConnectionStatus.DISCONNECTED,
-            onBack = { advancedEditorVisible = false },
-            onSettingsChange = onSettingsChange,
-            onSaveClick = {
-                onSettingsChange(settings.saveSelectedAdvancedProfile())
-            },
-            onSaveAsClick = {
-                showAdvancedSaveAsDialog = true
-            },
-            onResetClick = {
-                onSettingsChange(settings.resetAdvancedSettings())
-            },
-        )
-
-        if (showAdvancedSaveAsDialog) {
-            AdvancedProfileSaveAsDialog(
-                initialName = advancedSaveAsInitialName(selectedAdvancedProfile),
-                onDismiss = { showAdvancedSaveAsDialog = false },
-                onSave = { profileName ->
-                    onSettingsChange(settings.saveCurrentAdvancedProfileAs(profileName))
-                    showAdvancedSaveAsDialog = false
-                },
             )
         }
 
@@ -707,7 +709,6 @@ private fun ConnectTabContent(
                 fieldLabel = "client_config.toml",
                 placeholder = "client_config.toml",
                 showQr = false,
-                redactionSecrets = settings.redactionSecrets(),
                 linkResult = remember(settings, selectedConnectionProfile, showConnectionTomlDialog) {
                     runCatching {
                         StormDnsConfigRenderer.renderClientToml(
@@ -760,7 +761,10 @@ private fun ProfilesTabContent(
             .padding(bottom = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        HeaderCard()
+        HeaderCard(
+            themeMode = uiState.settings.themeMode,
+            onThemeModeChange = { onSettingsChange(uiState.settings.copy(themeMode = it)) },
+        )
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -771,12 +775,12 @@ private fun ProfilesTabContent(
                 selectedTab = selectedProfileTab,
                 onTabSelected = { selectedProfileTab = it },
             )
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
             InfoCard(
-                title = if (selectedProfileTab == ProfileTab.CONNECTION) {
-                    "CONNECTION PROFILES"
-                } else {
-                    "RESOLVER PROFILES"
+                title = when (selectedProfileTab) {
+                    ProfileTab.CONNECTION -> "CONNECTION PROFILES"
+                    ProfileTab.RESOLVER -> "RESOLVER PROFILES"
+                    ProfileTab.SETTING -> "SETTING PROFILES"
                 },
             ) {
                 when (selectedProfileTab) {
@@ -793,21 +797,30 @@ private fun ProfilesTabContent(
                         openCreateRequestId = resolverCreateRequestId,
                         onSettingsChange = onSettingsChange,
                     )
+                    ProfileTab.SETTING -> SettingProfilesSettings(
+                        settings = uiState.settings,
+                        connectionStatus = uiState.connectionStatus,
+                        onSettingsChange = onSettingsChange,
+                    )
                 }
             }
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.sectionSpacing))
             FooterLink()
         }
     }
 }
 
 private enum class ProfileTab(val label: String) {
-    CONNECTION("Connection Profile"),
-    RESOLVER("Resolver Profile"),
+    CONNECTION("Connection"),
+    RESOLVER("Resolver"),
+    SETTING("Setting"),
 }
 
 @Composable
-private fun LogsTabContent(uiState: WhiteDnsUiState) {
+private fun LogsTabContent(
+    uiState: WhiteDnsUiState,
+    onSettingsChange: (WhiteDnsSettings) -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -816,7 +829,10 @@ private fun LogsTabContent(uiState: WhiteDnsUiState) {
             .padding(bottom = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        HeaderCard()
+        HeaderCard(
+            themeMode = uiState.settings.themeMode,
+            onThemeModeChange = { onSettingsChange(uiState.settings.copy(themeMode = it)) },
+        )
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -824,9 +840,520 @@ private fun LogsTabContent(uiState: WhiteDnsUiState) {
                 .padding(horizontal = 20.dp),
         ) {
             ConnectionLogsBlock(uiState = uiState, expanded = true)
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.sectionSpacing))
             FooterLink()
         }
+    }
+}
+
+@Composable
+private fun ScanTabContent(
+    uiState: WhiteDnsUiState,
+    onScanFileSelected: (Uri) -> Unit,
+    onScanStartClick: () -> Unit,
+    onScanConnectionProfileChange: (String) -> Unit,
+    onScanWorkerCountChange: (String) -> Unit,
+    onScanStopClick: () -> Unit,
+    onScanResumeClick: () -> Unit,
+    onSettingsChange: (WhiteDnsSettings) -> Unit,
+) {
+    val scanState = uiState.scanState
+    val workerCount = (uiState.scanWorkerCount.toIntOrNull() ?: WhiteDnsScanDefaults.DefaultWorkerCount)
+        .coerceIn(ScanWorkerMin, ScanWorkerMax)
+    val connectionProfiles = remember(uiState.settings) {
+        uiState.settings.normalizedConnectionProfiles()
+    }
+    val selectedScanConnectionProfile = connectionProfiles
+        .firstOrNull { it.id == uiState.scanConnectionProfileId }
+        ?: connectionProfiles.first()
+    val scanConnectionProfileOptions = remember(connectionProfiles) {
+        connectionProfiles.map { profile ->
+            Choice(
+                value = profile.id,
+                label = profile.name.ifBlank { "Connection" },
+            )
+        }
+    }
+    val selectedScanProfileNeedsServer = selectedScanConnectionProfile.customServerDomain.isBlank() ||
+        selectedScanConnectionProfile.customServerEncryptionKey.isBlank()
+    var showScanInfoNotice by rememberSaveable { mutableStateOf(true) }
+    var showSaveAsDialog by rememberSaveable(scanState.sessionId) { mutableStateOf(false) }
+    val saveAsResolverEntries = remember(scanState.validResolverEntries) {
+        scanState.validResolverEntries
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+            .distinct()
+    }
+    val canSaveAsProfile = saveAsResolverEntries.isNotEmpty()
+    val scanFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        uri?.let(onScanFileSelected)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .statusBarsPadding()
+            .padding(bottom = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        HeaderCard(
+            themeMode = uiState.settings.themeMode,
+            onThemeModeChange = { onSettingsChange(uiState.settings.copy(themeMode = it)) },
+        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 420.dp)
+                .padding(horizontal = 20.dp)
+                .padding(top = 36.dp),
+            verticalArrangement = Arrangement.spacedBy(WhiteDnsSpacing.md),
+        ) {
+            CompactActionButton(
+                modifier = Modifier.fillMaxWidth(),
+                label = "SELECT RESOLVER FILE",
+                emphasized = !scanState.isRunning,
+                enabled = !scanState.isRunning,
+                onClick = {
+                    scanFileLauncher.launch(ResolverImportMimeTypes)
+                },
+            )
+            ScanWorkerSlider(
+                workerCount = workerCount,
+                enabled = !scanState.isRunning,
+                onWorkerCountChange = { onScanWorkerCountChange(it.toString()) },
+            )
+            ScanNote(
+                text = "Higher worker values increase battery usage and can impact phone performance.",
+            )
+            WhiteDnsDropdownField(
+                label = "Scan Profile",
+                value = selectedScanConnectionProfile.id,
+                options = scanConnectionProfileOptions,
+                onValueChange = onScanConnectionProfileChange,
+                enabled = !scanState.isRunning,
+            )
+            if (selectedScanProfileNeedsServer) {
+                ScanWarningBanner(
+                    text = "${selectedScanConnectionProfile.name.ifBlank { "Scan profile" }} needs a server route and key.",
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CompactActionButton(
+                    modifier = Modifier.weight(1f),
+                    label = "START",
+                    emphasized = true,
+                    tone = CompactActionTone.Success,
+                    enabled = scanCanStart(scanState),
+                    onClick = onScanStartClick,
+                )
+                CompactActionButton(
+                    modifier = Modifier.weight(1f),
+                    label = "STOP",
+                    emphasized = false,
+                    tone = CompactActionTone.Danger,
+                    enabled = scanState.isRunning,
+                    onClick = onScanStopClick,
+                )
+            }
+            if (showScanInfoNotice) {
+                ScanInfoNotice(
+                    text = "Scan results will be saved in profiles automatically.",
+                    onDismiss = { showScanInfoNotice = false },
+                )
+            }
+
+            SectionCard(
+                title = "SCAN STATUS",
+                expanded = true,
+                icon = Icons.Filled.DataUsage,
+                iconContentDescription = stringResource(R.string.cd_icon_data_usage),
+                collapsible = false,
+                onToggle = {},
+            ) {
+                CompactMetricRow(
+                    metrics = listOf(
+                        CompactMetric(
+                            icon = Icons.Filled.DataUsage,
+                            iconContentDescription = stringResource(R.string.cd_icon_data_usage),
+                            label = "Total",
+                            value = scanState.totalResolvers.toString(),
+                        ),
+                        CompactMetric(
+                            icon = Icons.Rounded.Check,
+                            iconContentDescription = stringResource(R.string.cd_icon_success),
+                            label = "Valid",
+                            value = scanState.validResolvers.toString(),
+                        ),
+                        CompactMetric(
+                            icon = Icons.Rounded.Close,
+                            iconContentDescription = stringResource(R.string.cd_icon_error),
+                            label = "Rejected",
+                            value = scanState.rejectedResolvers.toString(),
+                        ),
+                    ),
+                )
+                Spacer(modifier = Modifier.height(WhiteDnsSpacing.inputSpacing))
+                ScanProgressBar(fraction = scanState.fraction)
+                Spacer(modifier = Modifier.height(WhiteDnsSpacing.inputSpacing))
+                InfoRow(label = "Status", value = scanStatusLabel(scanState.status))
+                InfoRow(label = "Source", value = scanState.sourceName.ifBlank { "No file selected" })
+                InfoRow(label = "Workers", value = scanState.workerCount.toString())
+                InfoRow(label = "Progress", value = "${scanState.completedResolvers}/${scanState.totalResolvers}")
+                if (scanState.message.isNotBlank()) {
+                    InfoRow(label = "Message", value = scanState.message, multilineValue = true)
+                }
+                if (scanState.workerFailures.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(WhiteDnsSpacing.inputSpacing))
+                    ScanWarningBanner(text = scanState.workerFailures.first())
+                }
+                Spacer(modifier = Modifier.height(WhiteDnsSpacing.inputSpacing))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CompactActionButton(
+                        modifier = Modifier.weight(1f),
+                        label = "SAVE AS",
+                        emphasized = false,
+                        enabled = canSaveAsProfile,
+                        onClick = {
+                            showSaveAsDialog = true
+                        },
+                    )
+                    CompactActionButton(
+                        modifier = Modifier.weight(1f),
+                        label = "RESUME",
+                        emphasized = true,
+                        tone = CompactActionTone.Accent,
+                        enabled = scanCanResume(scanState),
+                        onClick = onScanResumeClick,
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.sectionSpacing))
+        }
+    }
+
+    if (showSaveAsDialog) {
+        ScanSaveAsProfileDialog(
+            sourceName = scanState.sourceName,
+            resolverCount = saveAsResolverEntries.size,
+            initialName = scanResultProfileInitialName(scanState.sourceName),
+            onDismiss = { showSaveAsDialog = false },
+            onSave = { name ->
+                onSettingsChange(
+                    uiState.settings.saveResolverProfileAs(
+                        name = name,
+                        resolverText = saveAsResolverEntries.joinToString(separator = "\n"),
+                    ),
+                )
+                showSaveAsDialog = false
+            },
+        )
+    }
+}
+
+private fun scanCanResume(scanState: WhiteDnsScanState): Boolean {
+    return !scanState.isRunning &&
+        (scanState.status == WhiteDnsScanStatus.Stopped || scanState.status == WhiteDnsScanStatus.Failed) &&
+        scanState.completedResolvers < scanState.totalResolvers
+}
+
+private fun scanCanStart(scanState: WhiteDnsScanState): Boolean {
+    return !scanState.isRunning &&
+        scanState.status == WhiteDnsScanStatus.Ready &&
+        scanState.sessionId.isNotBlank() &&
+        scanState.completedResolvers < scanState.totalResolvers
+}
+
+private fun scanResultProfileInitialName(sourceName: String): String {
+    val trimmed = sourceName.trim()
+    if (trimmed.isBlank()) {
+        return "Scan Results"
+    }
+    val withoutExtension = trimmed.substringBeforeLast('.').trim().ifBlank { trimmed }
+    return "$withoutExtension Results"
+}
+
+@Composable
+private fun ScanInfoNotice(
+    text: String,
+    onDismiss: () -> Unit,
+) {
+    val haptic = rememberHapticFeedback()
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(WhiteDnsPalette.AccentSurface)
+            .border(1.5.dp, WhiteDnsPalette.Accent.copy(alpha = 0.22f), RoundedCornerShape(14.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(28.dp)
+                .clip(RoundedCornerShape(9.dp))
+                .background(WhiteDnsPalette.Accent.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Check,
+                contentDescription = "Scanner info",
+                tint = WhiteDnsPalette.AccentText,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "SCAN AUTO SAVE",
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 9.sp,
+                    color = WhiteDnsPalette.AccentText,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.9.sp,
+                ),
+            )
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.xs))
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 10.sp,
+                    lineHeight = 14.sp,
+                    color = WhiteDnsPalette.AccentText,
+                    fontWeight = FontWeight.Medium,
+                ),
+            )
+        }
+        Box(
+            modifier = Modifier
+                .size(28.dp)
+                .clip(CircleShape)
+                .clickable {
+                    haptic.performLight()
+                    onDismiss()
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Close,
+                contentDescription = "Dismiss scanner info",
+                tint = WhiteDnsPalette.AccentText,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ScanSaveAsProfileDialog(
+    sourceName: String,
+    resolverCount: Int,
+    initialName: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    var name by remember(initialName, sourceName) { mutableStateOf(initialName) }
+    val canSave = name.trim().isNotEmpty() && resolverCount > 0
+    val scanLabel = sourceName.ifBlank { "Current scan" }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(22.dp))
+                .background(WhiteDnsPalette.Surface)
+                .border(1.5.dp, WhiteDnsPalette.Border, RoundedCornerShape(22.dp))
+                .padding(18.dp),
+        ) {
+            Text(
+                text = "SAVE SCAN RESULTS",
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 14.sp,
+                    color = WhiteDnsPalette.Ink,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.1.sp,
+                ),
+            )
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
+            Text(
+                text = "$resolverCount valid resolvers from $scanLabel will be saved as a new resolver profile.",
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp,
+                    color = WhiteDnsPalette.Muted,
+                ),
+            )
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
+            WhiteDnsTextField(
+                label = "Name",
+                value = name,
+                onValueChange = { name = it },
+                placeholder = "Scan Results",
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Words,
+                ),
+            )
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CompactActionButton(
+                    modifier = Modifier.weight(1f),
+                    label = "CANCEL",
+                    emphasized = false,
+                    enabled = true,
+                    onClick = onDismiss,
+                )
+                CompactActionButton(
+                    modifier = Modifier.weight(1f),
+                    label = "SAVE",
+                    emphasized = true,
+                    enabled = canSave,
+                    onClick = {
+                        onSave(name.trim())
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScanWorkerSlider(
+    workerCount: Int,
+    enabled: Boolean,
+    onWorkerCountChange: (Int) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FieldLabel("Workers")
+            Text(
+                text = workerCount.toString(),
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    color = WhiteDnsPalette.Ink,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 14.sp,
+                ),
+            )
+        }
+        Slider(
+            value = workerCount.toFloat(),
+            onValueChange = { value ->
+                onWorkerCountChange(value.roundToInt().coerceIn(ScanWorkerMin, ScanWorkerMax))
+            },
+            enabled = enabled,
+            valueRange = ScanWorkerMin.toFloat()..ScanWorkerMax.toFloat(),
+            steps = ScanWorkerMax - ScanWorkerMin - 1,
+            colors = SliderDefaults.colors(
+                thumbColor = WhiteDnsPalette.Accent,
+                activeTrackColor = WhiteDnsPalette.Accent,
+                inactiveTrackColor = WhiteDnsPalette.ControlBorder,
+                disabledThumbColor = WhiteDnsPalette.Disabled,
+                disabledActiveTrackColor = WhiteDnsPalette.ControlBorder,
+                disabledInactiveTrackColor = WhiteDnsPalette.Input,
+            ),
+        )
+    }
+}
+
+@Composable
+private fun ScanProgressBar(fraction: Float) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(10.dp)
+            .clip(RoundedCornerShape(5.dp))
+            .background(WhiteDnsPalette.Input),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(fraction.coerceIn(0f, 1f))
+                .height(10.dp)
+                .background(WhiteDnsPalette.Accent),
+        )
+    }
+}
+
+@Composable
+private fun ScanNote(text: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(WhiteDnsPalette.Input)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.WarningAmber,
+            contentDescription = stringResource(R.string.cd_icon_warning),
+            tint = WhiteDnsPalette.Muted,
+            modifier = Modifier.size(18.dp),
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall.copy(
+                color = WhiteDnsPalette.Muted,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+            ),
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun ScanWarningBanner(text: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(WhiteDnsPalette.WarningSurface)
+            .border(1.5.dp, WhiteDnsPalette.Warning.copy(alpha = 0.26f), RoundedCornerShape(12.dp))
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.WarningAmber,
+            contentDescription = stringResource(R.string.cd_icon_warning),
+            tint = WhiteDnsPalette.WarningText,
+            modifier = Modifier.size(18.dp),
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 12.sp,
+                color = WhiteDnsPalette.WarningText,
+            ),
+        )
+    }
+}
+
+private fun scanStatusLabel(status: String): String {
+    return when (status) {
+        WhiteDnsScanStatus.Ready -> "Ready"
+        WhiteDnsScanStatus.Starting -> "Starting"
+        WhiteDnsScanStatus.Running -> "Running"
+        WhiteDnsScanStatus.Completed -> "Completed"
+        WhiteDnsScanStatus.Failed -> "Failed"
+        WhiteDnsScanStatus.Stopped -> "Stopped"
+        else -> "Idle"
     }
 }
 
@@ -835,6 +1362,8 @@ private fun BottomNavigationBar(
     selectedTab: WhiteDnsTab,
     onTabSelected: (WhiteDnsTab) -> Unit,
 ) {
+    val haptic = rememberHapticFeedback()
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -865,7 +1394,10 @@ private fun BottomNavigationBar(
                         .weight(1f)
                         .clip(RoundedCornerShape(14.dp))
                         .background(background)
-                        .clickable { onTabSelected(tab) }
+                        .clickable {
+                            haptic.performLight()
+                            onTabSelected(tab)
+                        }
                         .padding(vertical = 8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -896,6 +1428,8 @@ private fun ProfileTabSwitch(
     selectedTab: ProfileTab,
     onTabSelected: (ProfileTab) -> Unit,
 ) {
+    val haptic = rememberHapticFeedback()
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -918,7 +1452,10 @@ private fun ProfileTabSwitch(
                             Color.Transparent
                         },
                     )
-                    .clickable { onTabSelected(tab) }
+                    .clickable {
+                        haptic.performLight()
+                        onTabSelected(tab)
+                    }
                     .padding(horizontal = 8.dp, vertical = 11.dp),
                 contentAlignment = Alignment.Center,
             ) {
@@ -941,6 +1478,8 @@ private fun ProfileTabSwitch(
 @Composable
 private fun FooterLink() {
     val context = LocalContext.current
+    val haptic = rememberHapticFeedback()
+
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             text = "Powered by WhiteDNS",
@@ -949,12 +1488,15 @@ private fun FooterLink() {
                 color = WhiteDnsPalette.Description,
             ),
         )
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(WhiteDnsSpacing.xs))
         Text(
             text = WhiteDnsTelegramUrl,
             modifier = Modifier
                 .clip(RoundedCornerShape(6.dp))
-                .clickable { openWhiteDnsTelegram(context) }
+                .clickable {
+                    haptic.performLight()
+                    openWhiteDnsTelegram(context)
+                }
                 .padding(horizontal = 8.dp, vertical = 3.dp),
             style = MaterialTheme.typography.bodyMedium.copy(
                 fontSize = 9.sp,
@@ -971,6 +1513,8 @@ private fun ConnectionModeSegmentedControl(
     onModeChange: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val haptic = rememberHapticFeedback()
+
     Column(modifier = modifier) {
         FieldLabel("Mode")
         Row(
@@ -1009,9 +1553,71 @@ private fun ConnectionModeSegmentedControl(
                         .clip(RoundedCornerShape(9.dp))
                         .background(background)
                         .clickable(enabled = enabled && !selected) {
+                            haptic.performLight()
                             onModeChange(mode.value)
                         }
                         .padding(horizontal = 6.dp, vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = mode.label,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontSize = 10.sp,
+                            color = textColor,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                            letterSpacing = 0.4.sp,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThemeModeSegmentedControl(
+    selectedMode: String,
+    onModeChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val haptic = rememberHapticFeedback()
+
+    Column(modifier = modifier) {
+        FieldLabel("Theme")
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(WhiteDnsPalette.Surface)
+                .border(1.5.dp, WhiteDnsPalette.ControlBorder, RoundedCornerShape(12.dp))
+                .padding(3.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            WhiteDnsOptions.themeModes.forEach { mode ->
+                val selected = selectedMode == mode.value
+                val background by animateColorAsState(
+                    targetValue = if (selected) WhiteDnsPalette.Accent else Color.Transparent,
+                    animationSpec = tween(180),
+                    label = "themeModeSegmentBackground",
+                )
+                val textColor by animateColorAsState(
+                    targetValue = if (selected) WhiteDnsPalette.OnAccent else WhiteDnsPalette.Muted,
+                    animationSpec = tween(180),
+                    label = "themeModeSegmentText",
+                )
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(9.dp))
+                        .background(background)
+                        .clickable(enabled = !selected) {
+                            haptic.performLight()
+                            onModeChange(mode.value)
+                        }
+                        .padding(horizontal = 6.dp, vertical = 9.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
@@ -1053,6 +1659,7 @@ private fun HomeSelectorCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val haptic = rememberHapticFeedback()
     val borderColor = when {
         !enabled -> WhiteDnsPalette.Divider
         selected -> WhiteDnsPalette.Accent.copy(alpha = 0.28f)
@@ -1073,7 +1680,10 @@ private fun HomeSelectorCard(
                 .clip(RoundedCornerShape(12.dp))
                 .background(if (enabled) WhiteDnsPalette.Surface else WhiteDnsPalette.SurfaceAlt)
                 .border(1.5.dp, borderColor, RoundedCornerShape(12.dp))
-                .clickable(enabled = enabled, onClick = onClick)
+                .clickable(enabled = enabled) {
+                    haptic.performLight()
+                    onClick()
+                }
                 .padding(horizontal = 11.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -1089,7 +1699,7 @@ private fun HomeSelectorCard(
                         fontWeight = FontWeight.SemiBold,
                     ),
                 )
-                Spacer(modifier = Modifier.height(2.dp))
+                Spacer(modifier = Modifier.height(WhiteDnsSpacing.xs))
                 Text(
                     text = detail,
                     maxLines = 1,
@@ -1103,7 +1713,7 @@ private fun HomeSelectorCard(
             }
             Icon(
                 imageVector = Icons.Rounded.KeyboardArrowDown,
-                contentDescription = null,
+                contentDescription = stringResource(R.string.cd_dropdown_advanced_settings),
                 tint = if (enabled) WhiteDnsPalette.Muted else WhiteDnsPalette.Disabled,
                 modifier = Modifier.size(18.dp),
             )
@@ -1129,45 +1739,30 @@ private fun AdvancedProfileControls(
 }
 
 @Composable
-private fun AdvancedProfileActionRow(
-    selectedProfile: AdvancedSettingsProfile,
-    dirty: Boolean,
-    enabled: Boolean,
-    onSaveClick: () -> Unit,
-    onSaveAsClick: () -> Unit,
-) {
-    val canSave = enabled && selectedProfile.id != AdvancedSettingsProfile.DefaultId && dirty
-    val canSaveAs = enabled && (dirty || selectedProfile.id != AdvancedSettingsProfile.DefaultId)
-
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        ResolverActionButton(
-            modifier = Modifier.weight(1f),
-            label = "SAVE",
-            emphasized = canSave,
-            enabled = canSave,
-            onClick = onSaveClick,
-        )
-        ResolverActionButton(
-            modifier = Modifier.weight(1f),
-            label = "SAVE AS",
-            emphasized = dirty && selectedProfile.id == AdvancedSettingsProfile.DefaultId,
-            enabled = canSaveAs,
-            onClick = onSaveAsClick,
-        )
-    }
-}
-
-@Composable
-private fun AdvancedProfileSaveAsDialog(
-    initialName: String,
+private fun AdvancedSettingsImportDialog(
     onDismiss: () -> Unit,
-    onSave: (String) -> Unit,
+    onImport: (String, String) -> Result<WhiteDnsSettings>,
 ) {
-    var name by rememberSaveable(initialName) { mutableStateOf(initialName) }
-    val canSave = name.trim().isNotEmpty()
+    val context = LocalContext.current
+    var name by rememberSaveable { mutableStateOf("") }
+    var tomlText by rememberSaveable { mutableStateOf("") }
+    var importError by rememberSaveable { mutableStateOf<String?>(null) }
+    val canImport = name.trim().isNotEmpty() && tomlText.trim().isNotEmpty()
+    val importTomlFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) {
+            return@rememberLauncherForActivityResult
+        }
+        readTextFromUri(context, uri, "Unable to open settings file")
+            .onSuccess { importedText ->
+                tomlText = importedText
+                importError = null
+            }
+            .onFailure { error ->
+                importError = error.message ?: "Unable to import settings file"
+            }
+    }
 
     Dialog(onDismissRequest = onDismiss) {
         Column(
@@ -1179,7 +1774,7 @@ private fun AdvancedProfileSaveAsDialog(
                 .padding(18.dp),
         ) {
             Text(
-                text = "SAVE ADVANCED PROFILE",
+                text = "IMPORT SETTINGS PROFILE",
                 style = MaterialTheme.typography.bodyMedium.copy(
                     fontSize = 14.sp,
                     color = WhiteDnsPalette.Ink,
@@ -1187,14 +1782,63 @@ private fun AdvancedProfileSaveAsDialog(
                     letterSpacing = 1.1.sp,
                 ),
             )
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
             WhiteDnsTextField(
                 label = "Name",
                 value = name,
-                onValueChange = { name = it },
-                placeholder = "Fast tunnel",
+                onValueChange = {
+                    name = it
+                    importError = null
+                },
+                placeholder = "Imported settings",
             )
-            Spacer(modifier = Modifier.height(14.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CompactActionButton(
+                    modifier = Modifier.weight(1f),
+                    label = "IMPORT FILE",
+                    emphasized = false,
+                    enabled = true,
+                    onClick = {
+                        importTomlFileLauncher.launch(SettingsImportMimeTypes)
+                    },
+                )
+                CompactActionButton(
+                    modifier = Modifier.weight(1f),
+                    label = "CLEAR",
+                    emphasized = false,
+                    enabled = tomlText.isNotBlank(),
+                    onClick = {
+                        tomlText = ""
+                        importError = null
+                    },
+                )
+            }
+            WhiteDnsTextField(
+                label = "TOML",
+                value = tomlText,
+                onValueChange = {
+                    tomlText = it
+                    importError = null
+                },
+                placeholder = "LISTEN_PORT = 10886\nLOG_LEVEL = \"WARN\"",
+                singleLine = false,
+                minLines = 7,
+                maxLines = 12,
+            )
+            importError?.let { message ->
+                Spacer(modifier = Modifier.height(WhiteDnsSpacing.iconSpacing))
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 10.sp,
+                        color = WhiteDnsPalette.Error,
+                    ),
+                )
+            }
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1208,120 +1852,16 @@ private fun AdvancedProfileSaveAsDialog(
                 )
                 CompactActionButton(
                     modifier = Modifier.weight(1f),
-                    label = "SAVE AS",
+                    label = "IMPORT",
                     emphasized = true,
-                    enabled = canSave,
+                    enabled = canImport,
                     onClick = {
-                        onSave(name.trim())
+                        onImport(name, tomlText)
+                            .onFailure { error ->
+                                importError = error.message ?: "Unable to import settings"
+                            }
                     },
                 )
-            }
-        }
-    }
-}
-
-@Composable
-private fun AdvancedSettingsEditorSheet(
-    visible: Boolean,
-    settings: WhiteDnsSettings,
-    selectedProfile: AdvancedSettingsProfile,
-    dirty: Boolean,
-    showProxySettings: Boolean,
-    canEdit: Boolean,
-    onBack: () -> Unit,
-    onSettingsChange: (WhiteDnsSettings) -> Unit,
-    onSaveClick: () -> Unit,
-    onSaveAsClick: () -> Unit,
-    onResetClick: () -> Unit,
-) {
-    AnimatedVisibility(
-        visible = visible,
-        enter = slideInHorizontally(
-            animationSpec = tween(260, easing = FastOutSlowInEasing),
-            initialOffsetX = { -it },
-        ) + fadeIn(animationSpec = tween(180)),
-        exit = slideOutHorizontally(
-            animationSpec = tween(220, easing = FastOutSlowInEasing),
-            targetOffsetX = { it },
-        ) + fadeOut(animationSpec = tween(160)),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .whiteDnsPageBackground()
-                .statusBarsPadding()
-                .padding(horizontal = 20.dp, vertical = 22.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .widthIn(max = 420.dp),
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ProfileIconButton(
-                        icon = Icons.AutoMirrored.Rounded.ArrowBack,
-                        contentDescription = "Back to advanced profiles",
-                        emphasized = false,
-                        enabled = true,
-                        onClick = onBack,
-                    )
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = selectedProfile.name,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.titleLarge.copy(
-                                color = WhiteDnsPalette.Ink,
-                            ),
-                        )
-                        Text(
-                            text = if (dirty) "Unsaved changes" else advancedProfileSummary(selectedProfile),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.bodyMedium.copy(
-                                fontSize = 10.sp,
-                                color = if (dirty) WhiteDnsPalette.WarningText else WhiteDnsPalette.Muted,
-                                fontWeight = FontWeight.Medium,
-                            ),
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(14.dp))
-                AdvancedProfileActionRow(
-                    selectedProfile = selectedProfile,
-                    dirty = dirty,
-                    enabled = canEdit,
-                    onSaveClick = onSaveClick,
-                    onSaveAsClick = onSaveAsClick,
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState()),
-                ) {
-                    InfoCard(title = "EDIT ADVANCED SETTINGS", compact = true) {
-                        AdvancedSettingsFields(
-                            settings = settings,
-                            showProxySettings = showProxySettings,
-                            onSettingsChange = onSettingsChange,
-                        )
-                        SectionDivider()
-                        ResolverActionButton(
-                            modifier = Modifier.fillMaxWidth(),
-                            label = "RESET ADVANCED SETTINGS",
-                            emphasized = true,
-                            enabled = canEdit,
-                            onClick = onResetClick,
-                        )
-                    }
-                }
             }
         }
     }
@@ -1587,7 +2127,6 @@ private fun HomeSelectorSheet(
     emptyMessage: String,
     onDismiss: () -> Unit,
     onSelect: (String) -> Unit,
-    onEdit: ((String) -> Unit)? = null,
 ) {
     var query by rememberSaveable(title) { mutableStateOf("") }
     val normalizedQuery = query.trim()
@@ -1649,14 +2188,14 @@ private fun HomeSelectorSheet(
                         ),
                     )
                 }
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(WhiteDnsSpacing.lg))
                 WhiteDnsTextField(
                     label = "Search",
                     value = query,
                     onValueChange = { query = it },
                     placeholder = searchPlaceholder,
                 )
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1678,7 +2217,6 @@ private fun HomeSelectorSheet(
                                 item = item,
                                 selected = item.id == selectedId,
                                 onClick = { onSelect(item.id) },
-                                onEdit = onEdit?.let { edit -> { edit(item.id) } },
                             )
                         }
                     }
@@ -1693,8 +2231,9 @@ private fun HomeSelectorSheetRow(
     item: HomeSelectorItem,
     selected: Boolean,
     onClick: () -> Unit,
-    onEdit: (() -> Unit)? = null,
 ) {
+    val haptic = rememberHapticFeedback()
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1705,7 +2244,10 @@ private fun HomeSelectorSheetRow(
                 if (selected) WhiteDnsPalette.Accent.copy(alpha = 0.28f) else WhiteDnsPalette.Border,
                 RoundedCornerShape(12.dp),
             )
-            .clickable(onClick = onClick)
+            .clickable {
+                haptic.performLight()
+                onClick()
+            }
             .padding(horizontal = 12.dp, vertical = 11.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1721,7 +2263,7 @@ private fun HomeSelectorSheetRow(
                     fontWeight = FontWeight.SemiBold,
                 ),
             )
-            Spacer(modifier = Modifier.height(3.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.xs))
             Text(
                 text = item.detail,
                 maxLines = 1,
@@ -1731,15 +2273,6 @@ private fun HomeSelectorSheetRow(
                     color = if (selected) WhiteDnsPalette.AccentText else WhiteDnsPalette.Muted,
                     fontWeight = FontWeight.Medium,
                 ),
-            )
-        }
-        onEdit?.let { edit ->
-            ProfileIconButton(
-                icon = Icons.Rounded.Edit,
-                contentDescription = "Edit ${item.title}",
-                emphasized = false,
-                enabled = true,
-                onClick = edit,
             )
         }
         if (selected) {
@@ -1777,6 +2310,9 @@ private fun ConnectionSetupCard(
     InfoCard(title = "SETUP", compact = true) {
         SetupInfoRow(
             icon = if (connectionIssue == null) Icons.Rounded.Link else Icons.Rounded.WarningAmber,
+            iconContentDescription = stringResource(
+                if (connectionIssue == null) R.string.cd_icon_link else R.string.cd_icon_warning
+            ),
             label = "Connection",
             value = selectedConnectionProfile.name.ifBlank { "Connection" },
             detail = connectionIssue ?: serverRoute,
@@ -1790,25 +2326,30 @@ private fun ConnectionSetupCard(
         )
         SetupInfoRow(
             icon = if (resolverIssue == null) Icons.Rounded.Check else Icons.Rounded.WarningAmber,
+            iconContentDescription = stringResource(
+                if (resolverIssue == null) R.string.cd_icon_check else R.string.cd_icon_warning
+            ),
             label = "Resolvers",
             value = resolverSource,
             detail = resolverDetail,
             color = if (resolverIssue == null) WhiteDnsPalette.Success else WhiteDnsPalette.WarningText,
         )
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
         SetupActionButton(
             label = "Add Connection",
             supportingText = "Server domain and key",
             icon = Icons.Rounded.Add,
+            iconContentDescription = stringResource(R.string.cd_icon_add),
             emphasized = true,
             enabled = actionsEnabled,
             onClick = onAddConnectionClick,
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
         SetupActionButton(
             label = "Add Resolver Profile",
             supportingText = "DNS resolver list",
             icon = Icons.Rounded.Add,
+            iconContentDescription = stringResource(R.string.cd_icon_add),
             emphasized = false,
             enabled = actionsEnabled,
             onClick = onAddResolverProfileClick,
@@ -1819,6 +2360,7 @@ private fun ConnectionSetupCard(
 @Composable
 private fun SetupInfoRow(
     icon: ImageVector,
+    iconContentDescription: String,
     label: String,
     value: String,
     detail: String,
@@ -1841,7 +2383,7 @@ private fun SetupInfoRow(
         ) {
             Icon(
                 imageVector = icon,
-                contentDescription = null,
+                contentDescription = iconContentDescription,
                 tint = color,
                 modifier = Modifier.size(16.dp),
             )
@@ -1857,7 +2399,7 @@ private fun SetupInfoRow(
                     fontWeight = FontWeight.Bold,
                 ),
             )
-            Spacer(modifier = Modifier.height(2.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.xs))
             Text(
                 text = value,
                 maxLines = 1,
@@ -1868,7 +2410,7 @@ private fun SetupInfoRow(
                     fontWeight = FontWeight.SemiBold,
                 ),
             )
-            Spacer(modifier = Modifier.height(1.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.xs))
             Text(
                 text = detail,
                 maxLines = 1,
@@ -1888,10 +2430,12 @@ private fun SetupActionButton(
     label: String,
     supportingText: String,
     icon: ImageVector,
+    iconContentDescription: String,
     emphasized: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
+    val haptic = rememberHapticFeedback()
     val background = when {
         !enabled -> WhiteDnsPalette.SurfaceAlt
         emphasized -> WhiteDnsPalette.Accent
@@ -1919,14 +2463,17 @@ private fun SetupActionButton(
             .clip(RoundedCornerShape(11.dp))
             .background(background)
             .border(1.5.dp, border, RoundedCornerShape(11.dp))
-            .clickable(enabled = enabled, onClick = onClick)
+            .clickable(enabled = enabled) {
+                haptic.performMedium()
+                onClick()
+            }
             .padding(horizontal = 12.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             imageVector = icon,
-            contentDescription = null,
+            contentDescription = iconContentDescription,
             tint = foreground,
             modifier = Modifier.size(18.dp),
         )
@@ -1959,6 +2506,53 @@ private fun resolverCountLabel(count: Int): String {
     return "$count resolver${if (count == 1) "" else "s"} configured"
 }
 
+private data class ProfileTopAction(
+    val label: String,
+    val emphasized: Boolean,
+    val enabled: Boolean,
+    val onClick: () -> Unit,
+)
+
+@Composable
+private fun ProfileTopActionGrid(actions: List<ProfileTopAction>) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(WhiteDnsSpacing.sm),
+    ) {
+        actions.chunked(2).forEach { rowActions ->
+            if (rowActions.size == 1) {
+                val action = rowActions.first()
+                ResolverActionButton(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 44.dp),
+                    label = action.label,
+                    emphasized = action.emphasized,
+                    enabled = action.enabled,
+                    onClick = action.onClick,
+                )
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    rowActions.forEach { action ->
+                        ResolverActionButton(
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 44.dp),
+                            label = action.label,
+                            emphasized = action.emphasized,
+                            enabled = action.enabled,
+                            onClick = action.onClick,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun ConnectionProfilesSettings(
     settings: WhiteDnsSettings,
@@ -1976,6 +2570,7 @@ private fun ConnectionProfilesSettings(
     var showImportDialog by remember { mutableStateOf(false) }
     var exportProfile by remember { mutableStateOf<ConnectionProfile?>(null) }
     var showExportAllDialog by remember { mutableStateOf(false) }
+    var deleteProfile by remember { mutableStateOf<ConnectionProfile?>(null) }
     var draggedProfileId by remember { mutableStateOf<String?>(null) }
     var dragStartIndex by remember { mutableStateOf(0) }
     var dragOffsetY by remember { mutableStateOf(0f) }
@@ -2021,38 +2616,35 @@ private fun ConnectionProfilesSettings(
         }
     }
 
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        ResolverActionButton(
-            modifier = Modifier.weight(1f),
-            label = "CREATE",
-            emphasized = true,
-            enabled = canManageProfiles,
-            onClick = {
-                showCreateDialog = true
-            },
+    ProfileTopActionGrid(
+        actions = listOf(
+            ProfileTopAction(
+                label = "CREATE",
+                emphasized = true,
+                enabled = canManageProfiles,
+                onClick = {
+                    showCreateDialog = true
+                },
+            ),
+            ProfileTopAction(
+                label = "IMPORT",
+                emphasized = false,
+                enabled = canManageProfiles,
+                onClick = {
+                    showImportDialog = true
+                },
+            ),
+            ProfileTopAction(
+                label = "EXPORT ALL",
+                emphasized = false,
+                enabled = customProfiles.any {
+                    it.customServerDomain.isNotBlank() && it.customServerEncryptionKey.isNotBlank()
+                },
+                onClick = {
+                    showExportAllDialog = true
+                },
+            ),
         )
-        ResolverActionButton(
-            modifier = Modifier.weight(1f),
-            label = "IMPORT",
-            emphasized = false,
-            enabled = canManageProfiles,
-            onClick = {
-                showImportDialog = true
-            },
-        )
-    }
-    Spacer(modifier = Modifier.height(8.dp))
-    ResolverActionButton(
-        modifier = Modifier.fillMaxWidth(),
-        label = "EXPORT ALL",
-        emphasized = false,
-        enabled = customProfiles.any { it.customServerDomain.isNotBlank() && it.customServerEncryptionKey.isNotBlank() },
-        onClick = {
-            showExportAllDialog = true
-        },
     )
 
     SectionDivider()
@@ -2065,7 +2657,7 @@ private fun ConnectionProfilesSettings(
                 color = WhiteDnsPalette.Muted,
             ),
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
     }
     customProfiles.forEachIndexed { index, profile ->
         val isActive = profile.id == activeConnectionProfileId &&
@@ -2131,11 +2723,11 @@ private fun ConnectionProfilesSettings(
                 },
                 onDelete = {
                     if (canDelete) {
-                        onSettingsChange(settings.deleteConnectionProfile(profile.id))
+                        deleteProfile = profile
                     }
                 },
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
         }
     }
 
@@ -2174,7 +2766,6 @@ private fun ConnectionProfilesSettings(
         ConnectionProfileExportDialog(
             title = "EXPORT CONNECTION",
             fieldLabel = "Profile Link",
-            redactionSecrets = settings.redactionSecrets(),
             linkResult = remember(settings, profile) {
                 runCatching { settings.exportStormDnsProfileLink(profile) }
             },
@@ -2189,7 +2780,6 @@ private fun ConnectionProfilesSettings(
         ConnectionProfileExportDialog(
             title = "EXPORT ALL CONNECTIONS",
             fieldLabel = "Profile Links",
-            redactionSecrets = settings.redactionSecrets(),
             linkResult = remember(settings, showExportAllDialog) {
                 runCatching { settings.exportAllStormDnsProfileLinks() }
             },
@@ -2215,6 +2805,23 @@ private fun ConnectionProfilesSettings(
             },
         )
     }
+
+    deleteProfile?.let { profile ->
+        val profileIsActive = profile.id == activeConnectionProfileId &&
+            connectionStatus != ConnectionStatus.DISCONNECTED
+        DeleteProfileConfirmationDialog(
+            title = "DELETE CONNECTION PROFILE",
+            message = "Delete \"${profile.name}\"? This removes the saved connection profile and cannot be undone.",
+            confirmLabel = "DELETE",
+            onDismiss = { deleteProfile = null },
+            onConfirm = {
+                if (canManageProfiles && !profileIsActive) {
+                    onSettingsChange(settings.deleteConnectionProfile(profile.id))
+                }
+                deleteProfile = null
+            },
+        )
+    }
 }
 
 @Composable
@@ -2228,6 +2835,7 @@ private fun ResolverProfilesSettings(
     val selectedProfile = settings.selectedResolverProfile()
     var dialogProfile by remember { mutableStateOf<ResolverProfile?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
+    var deleteProfile by remember { mutableStateOf<ResolverProfile?>(null) }
     val canChangeProfiles = connectionStatus != ConnectionStatus.CONNECTING
     var draggedProfileId by remember { mutableStateOf<String?>(null) }
     var dragStartIndex by remember { mutableStateOf(0) }
@@ -2273,25 +2881,24 @@ private fun ResolverProfilesSettings(
         }
     }
 
-    ResolverActionButton(
-        modifier = Modifier.fillMaxWidth(),
-        label = "CREATE RESOLVER PROFILE",
-        emphasized = true,
-        enabled = canChangeProfiles,
-        onClick = { showCreateDialog = true },
-    )
-
-    if (settings.resolverText.isNotBlank()) {
-        Spacer(modifier = Modifier.height(8.dp))
-        ResolverActionButton(
-            modifier = Modifier.fillMaxWidth(),
-            label = "SAVE CURRENT RESOLVERS",
-            enabled = canChangeProfiles,
-            onClick = {
-                showCreateDialog = true
-            },
+    ProfileTopActionGrid(
+        actions = listOf(
+            ProfileTopAction(
+                label = "CREATE",
+                emphasized = true,
+                enabled = canChangeProfiles,
+                onClick = { showCreateDialog = true },
+            ),
+            ProfileTopAction(
+                label = "SAVE CURRENT",
+                emphasized = false,
+                enabled = canChangeProfiles && settings.resolverText.isNotBlank(),
+                onClick = {
+                    showCreateDialog = true
+                },
+            ),
         )
-    }
+    )
 
     SectionDivider()
     if (profiles.isEmpty()) {
@@ -2302,7 +2909,7 @@ private fun ResolverProfilesSettings(
                 color = WhiteDnsPalette.Muted,
             ),
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
     }
     profiles.forEachIndexed { index, profile ->
         val isDragging = profile.id == draggedProfileId
@@ -2363,11 +2970,11 @@ private fun ResolverProfilesSettings(
                 onEdit = { dialogProfile = profile },
                 onDelete = {
                     if (canChangeProfiles) {
-                        onSettingsChange(settings.deleteResolverProfile(profile.id))
+                        deleteProfile = profile
                     }
                 },
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
         }
     }
 
@@ -2393,6 +3000,468 @@ private fun ResolverProfilesSettings(
                 dialogProfile = null
             },
         )
+    }
+
+    deleteProfile?.let { profile ->
+        DeleteProfileConfirmationDialog(
+            title = "DELETE RESOLVER PROFILE",
+            message = "Delete \"${profile.name}\"? This removes the saved resolver list and cannot be undone.",
+            confirmLabel = "DELETE",
+            onDismiss = { deleteProfile = null },
+            onConfirm = {
+                if (canChangeProfiles) {
+                    onSettingsChange(settings.deleteResolverProfile(profile.id))
+                }
+                deleteProfile = null
+            },
+        )
+    }
+}
+
+@Composable
+private fun SettingProfilesSettings(
+    settings: WhiteDnsSettings,
+    connectionStatus: ConnectionStatus,
+    onSettingsChange: (WhiteDnsSettings) -> Unit,
+) {
+    val profiles = settings.normalizedAdvancedProfiles()
+    val defaultProfile = profiles.first()
+    val customProfiles = profiles.filter { it.id != AdvancedSettingsProfile.DefaultId }
+    val selectedProfile = settings.selectedAdvancedProfile()
+    val context = LocalContext.current
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var showImportDialog by remember { mutableStateOf(false) }
+    var editProfile by remember { mutableStateOf<AdvancedSettingsProfile?>(null) }
+    var exportProfile by remember { mutableStateOf<AdvancedSettingsProfile?>(null) }
+    var deleteProfile by remember { mutableStateOf<AdvancedSettingsProfile?>(null) }
+    var draggedProfileId by remember { mutableStateOf<String?>(null) }
+    var dragStartIndex by remember { mutableStateOf(0) }
+    var dragOffsetY by remember { mutableStateOf(0f) }
+    var measuredItemHeightPx by remember { mutableStateOf(0) }
+    val canManageProfiles = connectionStatus == ConnectionStatus.DISCONNECTED
+    val draggedIndex = draggedProfileId?.let { profileId ->
+        customProfiles.indexOfFirst { it.id == profileId }.takeIf { it >= 0 }
+    }
+    val dragTargetIndex = draggedIndex?.let {
+        val indexOffset = dragOffsetToProfileIndexOffset(
+            offsetY = dragOffsetY,
+            itemHeightPx = measuredItemHeightPx.toFloat(),
+        )
+        (dragStartIndex + indexOffset).coerceIn(0, customProfiles.lastIndex)
+    }
+
+    fun clearDragState() {
+        draggedProfileId = null
+        dragStartIndex = 0
+        dragOffsetY = 0f
+    }
+
+    fun finishDrag(commit: Boolean) {
+        val profileId = draggedProfileId
+        val targetIndex = if (profileId != null && customProfiles.isNotEmpty()) {
+            val indexOffset = dragOffsetToProfileIndexOffset(
+                offsetY = dragOffsetY,
+                itemHeightPx = measuredItemHeightPx.toFloat(),
+            )
+            (dragStartIndex + indexOffset).coerceIn(0, customProfiles.lastIndex)
+        } else {
+            null
+        }
+        clearDragState()
+        if (commit && profileId != null && targetIndex != null && canManageProfiles) {
+            onSettingsChange(settings.moveAdvancedProfileToIndex(profileId, targetIndex))
+        }
+    }
+
+    ProfileTopActionGrid(
+        actions = listOf(
+            ProfileTopAction(
+                label = "CREATE",
+                emphasized = true,
+                enabled = canManageProfiles,
+                onClick = { showCreateDialog = true },
+            ),
+            ProfileTopAction(
+                label = "IMPORT",
+                emphasized = false,
+                enabled = canManageProfiles,
+                onClick = { showImportDialog = true },
+            ),
+        )
+    )
+
+    SectionDivider()
+    GroupLabel("Default")
+    SettingProfileRow(
+        profile = defaultProfile,
+        selected = defaultProfile.id == selectedProfile.id,
+        dirty = defaultProfile.id == selectedProfile.id && !settings.matchesAdvancedProfile(defaultProfile),
+        canUse = canManageProfiles,
+        canEdit = false,
+        canDelete = false,
+        canDrag = false,
+        dragging = false,
+        onUse = {
+            if (canManageProfiles) {
+                onSettingsChange(settings.selectAdvancedProfile(defaultProfile.id))
+            }
+        },
+        onDragStart = {},
+        onDrag = {},
+        onDragEnd = {},
+        onDragCancel = {},
+        onExport = { exportProfile = defaultProfile },
+        onEdit = {},
+        onDelete = {},
+    )
+    Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
+
+    GroupLabel("Custom Settings")
+    if (customProfiles.isEmpty()) {
+        Text(
+            text = "No saved setting profiles yet.",
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 10.sp,
+                color = WhiteDnsPalette.Muted,
+            ),
+        )
+        Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
+    }
+    customProfiles.forEachIndexed { index, profile ->
+        val isDragging = profile.id == draggedProfileId
+        val targetTranslationY = profileDragTranslationY(
+            itemIndex = index,
+            draggedIndex = draggedIndex,
+            targetIndex = dragTargetIndex,
+            itemHeightPx = measuredItemHeightPx.toFloat(),
+        )
+        val animatedTranslationY by animateFloatAsState(
+            targetValue = if (isDragging) 0f else targetTranslationY,
+            animationSpec = spring(),
+            label = "advancedProfileDragTranslation",
+        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .zIndex(if (isDragging) 1f else 0f)
+                .graphicsLayer {
+                    translationY = if (isDragging) dragOffsetY else animatedTranslationY
+                    shadowElevation = if (isDragging) 8f else 0f
+                    alpha = if (isDragging) 0.96f else 1f
+                }
+                .onGloballyPositioned { coordinates ->
+                    measuredItemHeightPx = coordinates.size.height.takeIf { it > 0 } ?: measuredItemHeightPx
+                },
+        ) {
+            SettingProfileRow(
+                profile = profile,
+                selected = profile.id == selectedProfile.id,
+                dirty = profile.id == selectedProfile.id && !settings.matchesAdvancedProfile(profile),
+                canUse = canManageProfiles,
+                canEdit = canManageProfiles,
+                canDelete = canManageProfiles,
+                canDrag = canManageProfiles && customProfiles.size > 1,
+                dragging = isDragging,
+                onUse = {
+                    if (canManageProfiles) {
+                        onSettingsChange(settings.selectAdvancedProfile(profile.id))
+                    }
+                },
+                onDragStart = {
+                    if (canManageProfiles && customProfiles.size > 1) {
+                        draggedProfileId = profile.id
+                        dragStartIndex = index
+                        dragOffsetY = 0f
+                    }
+                },
+                onDrag = { deltaY ->
+                    if (draggedProfileId == profile.id) {
+                        dragOffsetY += deltaY
+                    }
+                },
+                onDragEnd = {
+                    finishDrag(commit = true)
+                },
+                onDragCancel = {
+                    finishDrag(commit = false)
+                },
+                onExport = { exportProfile = profile },
+                onEdit = { editProfile = profile },
+                onDelete = {
+                    if (canManageProfiles) {
+                        deleteProfile = profile
+                    }
+                },
+            )
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
+        }
+    }
+
+    if (showCreateDialog) {
+        AdvancedSettingsProfileDialog(
+            profile = null,
+            initialName = advancedSaveAsInitialName(selectedProfile),
+            initialSettings = settings,
+            onDismiss = { showCreateDialog = false },
+            onSave = { profile ->
+                onSettingsChange(settings.upsertAdvancedProfile(profile))
+                showCreateDialog = false
+            },
+        )
+    }
+
+    if (showImportDialog) {
+        AdvancedSettingsImportDialog(
+            onDismiss = { showImportDialog = false },
+            onImport = { profileName, toml ->
+                runCatching {
+                    settings.importAdvancedSettingsProfileFromToml(profileName, toml)
+                }.onSuccess { importedSettings ->
+                    onSettingsChange(importedSettings)
+                    showImportDialog = false
+                }
+            },
+        )
+    }
+
+    editProfile?.let { profile ->
+        AdvancedSettingsProfileDialog(
+            profile = profile,
+            initialName = profile.name,
+            initialSettings = settings.applyAdvancedProfile(profile),
+            onDismiss = { editProfile = null },
+            onSave = { updatedProfile ->
+                onSettingsChange(settings.upsertAdvancedProfile(updatedProfile.copy(id = profile.id)))
+                editProfile = null
+            },
+        )
+    }
+
+    exportProfile?.let { profile ->
+        ConnectionProfileExportDialog(
+            title = "EXPORT SETTINGS",
+            fieldLabel = "advanced_settings.toml",
+            placeholder = "advanced_settings.toml",
+            showQr = false,
+            linkResult = remember(settings, profile) {
+                runCatching {
+                    StormDnsConfigRenderer.renderAdvancedSettingsToml(settings.applyAdvancedProfile(profile))
+                }
+            },
+            onDismiss = { exportProfile = null },
+            onShare = { toml ->
+                shareAdvancedSettingsToml(context, toml)
+            },
+        )
+    }
+
+    deleteProfile?.let { profile ->
+        DeleteProfileConfirmationDialog(
+            title = "DELETE SETTING PROFILE",
+            message = "Delete \"${profile.name}\"? This removes the saved setting profile and cannot be undone.",
+            confirmLabel = "DELETE",
+            onDismiss = { deleteProfile = null },
+            onConfirm = {
+                if (canManageProfiles) {
+                    onSettingsChange(settings.deleteAdvancedProfile(profile.id))
+                }
+                deleteProfile = null
+            },
+        )
+    }
+}
+
+@Composable
+private fun AdvancedSettingsProfileDialog(
+    profile: AdvancedSettingsProfile?,
+    initialName: String,
+    initialSettings: WhiteDnsSettings,
+    onDismiss: () -> Unit,
+    onSave: (AdvancedSettingsProfile) -> Unit,
+) {
+    var name by remember(profile?.id) { mutableStateOf(initialName) }
+    var draftSettings by remember(profile?.id) { mutableStateOf(initialSettings) }
+    val canSave = name.trim().isNotEmpty()
+
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(22.dp))
+                .background(WhiteDnsPalette.Surface)
+                .border(1.5.dp, WhiteDnsPalette.Border, RoundedCornerShape(22.dp))
+                .padding(18.dp),
+        ) {
+            Text(
+                text = if (profile == null) "CREATE SETTING PROFILE" else "EDIT SETTING PROFILE",
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 14.sp,
+                    color = WhiteDnsPalette.Ink,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.1.sp,
+                ),
+            )
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
+            WhiteDnsTextField(
+                label = "Name",
+                value = name,
+                onValueChange = { name = it },
+                placeholder = "Fast tunnel",
+            )
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 460.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                AdvancedSettingsFields(
+                    settings = draftSettings,
+                    showProxySettings = true,
+                    onSettingsChange = { draftSettings = it },
+                )
+            }
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CompactActionButton(
+                    modifier = Modifier.weight(1f),
+                    label = "CANCEL",
+                    emphasized = false,
+                    enabled = true,
+                    onClick = onDismiss,
+                )
+                CompactActionButton(
+                    modifier = Modifier.weight(1f),
+                    label = "SAVE",
+                    emphasized = true,
+                    enabled = canSave,
+                    onClick = {
+                        onSave(
+                            AdvancedSettingsProfile.fromSettings(
+                                settings = draftSettings,
+                                id = profile?.id.orEmpty(),
+                                name = name.trim(),
+                            ),
+                        )
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingProfileRow(
+    profile: AdvancedSettingsProfile,
+    selected: Boolean,
+    dirty: Boolean,
+    canUse: Boolean,
+    canEdit: Boolean,
+    canDelete: Boolean,
+    canDrag: Boolean,
+    dragging: Boolean,
+    onUse: () -> Unit,
+    onDragStart: () -> Unit,
+    onDrag: (Float) -> Unit,
+    onDragEnd: () -> Unit,
+    onDragCancel: () -> Unit,
+    onExport: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val summarySuffix = when {
+        dirty -> " - MODIFIED"
+        selected -> " - SELECTED"
+        else -> ""
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(11.dp))
+            .background(if (selected) WhiteDnsPalette.AccentSurface else WhiteDnsPalette.SurfaceAlt)
+            .border(
+                1.5.dp,
+                if (selected) WhiteDnsPalette.Accent.copy(alpha = 0.18f) else WhiteDnsPalette.Border,
+                RoundedCornerShape(11.dp),
+            )
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ProfileDragHandle(
+                enabled = canDrag,
+                dragging = dragging,
+                onDragStart = onDragStart,
+                onDrag = onDrag,
+                onDragEnd = onDragEnd,
+                onDragCancel = onDragCancel,
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = profile.name,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 13.sp,
+                        color = WhiteDnsPalette.Ink,
+                        fontWeight = FontWeight.Medium,
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(modifier = Modifier.height(WhiteDnsSpacing.xs))
+                Text(
+                    text = "${advancedProfileSummary(profile)}$summarySuffix",
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 10.sp,
+                        color = when {
+                            dirty -> WhiteDnsPalette.WarningText
+                            selected -> WhiteDnsPalette.AccentText
+                            else -> WhiteDnsPalette.Muted
+                        },
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            ProfileActionsMenu(
+                contentDescription = "Setting profile actions",
+                actions = listOf(
+                    ProfileMenuAction(
+                        label = if (selected) "Use profile (selected)" else "Use profile",
+                        icon = Icons.Rounded.Check,
+                        contentDescription = "Use setting profile",
+                        enabled = canUse,
+                        onClick = onUse,
+                    ),
+                    ProfileMenuAction(
+                        label = "Export profile",
+                        icon = Icons.Rounded.Link,
+                        contentDescription = "Export setting profile",
+                        enabled = true,
+                        onClick = onExport,
+                    ),
+                    ProfileMenuAction(
+                        label = "Edit profile",
+                        icon = Icons.Rounded.Edit,
+                        contentDescription = "Edit setting profile",
+                        enabled = canEdit,
+                        onClick = onEdit,
+                    ),
+                    ProfileMenuAction(
+                        label = "Delete profile",
+                        icon = Icons.Rounded.Delete,
+                        contentDescription = "Delete setting profile",
+                        enabled = canDelete,
+                        onClick = onDelete,
+                    ),
+                ),
+            )
+        }
     }
 }
 
@@ -2450,7 +3519,7 @@ private fun ResolverProfileDialog(
                     letterSpacing = 1.1.sp,
                 ),
             )
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
             WhiteDnsTextField(
                 label = "Name",
                 value = name,
@@ -2482,7 +3551,7 @@ private fun ResolverProfileDialog(
                 )
             }
             importError?.let { message ->
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(WhiteDnsSpacing.iconSpacing))
                 Text(
                     text = message,
                     style = MaterialTheme.typography.bodyMedium.copy(
@@ -2504,7 +3573,7 @@ private fun ResolverProfileDialog(
                 maxLines = 10,
             )
             validationMessage?.let { message ->
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(WhiteDnsSpacing.iconSpacing))
                 Text(
                     text = message,
                     style = MaterialTheme.typography.bodyMedium.copy(
@@ -2513,7 +3582,7 @@ private fun ResolverProfileDialog(
                     ),
                 )
             }
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -2601,7 +3670,7 @@ private fun ResolverProfileRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Spacer(modifier = Modifier.height(3.dp))
+                Spacer(modifier = Modifier.height(WhiteDnsSpacing.xs))
                 Text(
                     text = resolverSummary,
                     style = MaterialTheme.typography.bodyMedium.copy(
@@ -2612,26 +3681,31 @@ private fun ResolverProfileRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            ProfileIconButton(
-                icon = Icons.Rounded.Check,
-                contentDescription = "Use resolver profile",
-                emphasized = selected,
-                enabled = canEdit,
-                onClick = onUse,
-            )
-            ProfileIconButton(
-                icon = Icons.Rounded.Edit,
-                contentDescription = "Edit resolver profile",
-                emphasized = false,
-                enabled = canEdit,
-                onClick = onEdit,
-            )
-            ProfileIconButton(
-                icon = Icons.Rounded.Delete,
-                contentDescription = "Delete resolver profile",
-                emphasized = false,
-                enabled = canDelete,
-                onClick = onDelete,
+            ProfileActionsMenu(
+                contentDescription = "Resolver profile actions",
+                actions = listOf(
+                    ProfileMenuAction(
+                        label = if (selected) "Use profile (selected)" else "Use profile",
+                        icon = Icons.Rounded.Check,
+                        contentDescription = "Use resolver profile",
+                        enabled = canEdit,
+                        onClick = onUse,
+                    ),
+                    ProfileMenuAction(
+                        label = "Edit profile",
+                        icon = Icons.Rounded.Edit,
+                        contentDescription = "Edit resolver profile",
+                        enabled = canEdit,
+                        onClick = onEdit,
+                    ),
+                    ProfileMenuAction(
+                        label = "Delete profile",
+                        icon = Icons.Rounded.Delete,
+                        contentDescription = "Delete resolver profile",
+                        enabled = canDelete,
+                        onClick = onDelete,
+                    ),
+                ),
             )
         }
     }
@@ -2664,7 +3738,7 @@ private fun ConnectionProfileImportDialog(
                     letterSpacing = 1.1.sp,
                 ),
             )
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
             WhiteDnsTextField(
                 label = "Profile Links",
                 value = profileLinks,
@@ -2678,7 +3752,7 @@ private fun ConnectionProfileImportDialog(
                 maxLines = 9,
             )
             importError?.let { message ->
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(WhiteDnsSpacing.iconSpacing))
                 Text(
                     text = message,
                     style = MaterialTheme.typography.bodyMedium.copy(
@@ -2687,7 +3761,7 @@ private fun ConnectionProfileImportDialog(
                     ),
                 )
             }
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -2725,10 +3799,8 @@ private fun ConnectionProfileExportDialog(
     onShare: (String) -> Unit,
     placeholder: String = "stormdns://...",
     showQr: Boolean = true,
-    redactionSecrets: RedactionSecrets = RedactionSecrets(),
 ) {
     val context = LocalContext.current
-    var pendingFullExport by remember { mutableStateOf<FullExportAction?>(null) }
 
     Dialog(onDismissRequest = onDismiss) {
         Column(
@@ -2748,26 +3820,23 @@ private fun ConnectionProfileExportDialog(
                     letterSpacing = 1.1.sp,
                 ),
             )
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
             val link = linkResult.getOrNull()
             if (link != null) {
-                val redactedLink = remember(link, redactionSecrets) {
-                    SecretRedactor.redact(link, redactionSecrets)
-                }
-                if (showQr && !redactedLink.contains('\n')) {
-                    ProfileQrPreview(link = redactedLink)
-                    Spacer(modifier = Modifier.height(12.dp))
+                if (showQr && !link.contains('\n')) {
+                    ProfileQrPreview(link = link)
+                    Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
                 }
                 WhiteDnsTextField(
                     label = fieldLabel,
-                    value = redactedLink,
+                    value = link,
                     onValueChange = {},
                     placeholder = placeholder,
                     singleLine = false,
                     minLines = if (link.contains('\n')) 7 else 5,
                     maxLines = 12,
                 )
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -2788,8 +3857,8 @@ private fun ConnectionProfileExportDialog(
                             copyTextToClipboard(
                                 context = context,
                                 label = fieldLabel,
-                                text = redactedLink,
-                                sensitive = false,
+                                text = link,
+                                sensitive = true,
                             )
                         },
                     )
@@ -2799,20 +3868,10 @@ private fun ConnectionProfileExportDialog(
                         emphasized = true,
                         enabled = true,
                         onClick = {
-                            pendingFullExport = FullExportAction.Share
+                            onShare(link)
                         },
                     )
                 }
-                Spacer(modifier = Modifier.height(8.dp))
-                CompactActionButton(
-                    modifier = Modifier.fillMaxWidth(),
-                    label = "COPY FULL",
-                    emphasized = false,
-                    enabled = true,
-                    onClick = {
-                        pendingFullExport = FullExportAction.Copy
-                    },
-                )
             } else {
                 Text(
                     text = linkResult.exceptionOrNull()?.message ?: "Unable to export profile",
@@ -2821,95 +3880,13 @@ private fun ConnectionProfileExportDialog(
                         color = WhiteDnsPalette.Error,
                     ),
                 )
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
                 CompactActionButton(
                     modifier = Modifier.fillMaxWidth(),
                     label = "CLOSE",
                     emphasized = true,
                     enabled = true,
                     onClick = onDismiss,
-                )
-            }
-        }
-    }
-
-    pendingFullExport?.let { action ->
-        SensitiveExportConfirmationDialog(
-            actionLabel = if (action == FullExportAction.Copy) "COPY FULL" else "SHARE FULL",
-            onDismiss = { pendingFullExport = null },
-            onConfirm = {
-                val fullValue = linkResult.getOrNull() ?: return@SensitiveExportConfirmationDialog
-                when (action) {
-                    FullExportAction.Copy -> copyTextToClipboard(
-                        context = context,
-                        label = fieldLabel,
-                        text = fullValue,
-                        sensitive = true,
-                    )
-                    FullExportAction.Share -> onShare(fullValue)
-                }
-                pendingFullExport = null
-            },
-        )
-    }
-}
-
-private enum class FullExportAction {
-    Copy,
-    Share,
-}
-
-@Composable
-private fun SensitiveExportConfirmationDialog(
-    actionLabel: String,
-    onDismiss: () -> Unit,
-    onConfirm: () -> Unit,
-) {
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(22.dp))
-                .background(WhiteDnsPalette.Surface)
-                .border(1.5.dp, WhiteDnsPalette.Border, RoundedCornerShape(22.dp))
-                .padding(18.dp),
-        ) {
-            Text(
-                text = "SENSITIVE EXPORT",
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    fontSize = 14.sp,
-                    color = WhiteDnsPalette.Ink,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.1.sp,
-                ),
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            Text(
-                text = "This includes connection secrets such as server keys, profile links, or proxy credentials.",
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    fontSize = 11.sp,
-                    lineHeight = 16.sp,
-                    color = WhiteDnsPalette.Description,
-                ),
-            )
-            Spacer(modifier = Modifier.height(14.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                CompactActionButton(
-                    modifier = Modifier.weight(1f),
-                    label = "CANCEL",
-                    emphasized = false,
-                    enabled = true,
-                    onClick = onDismiss,
-                )
-                CompactActionButton(
-                    modifier = Modifier.weight(1f),
-                    label = actionLabel,
-                    emphasized = true,
-                    enabled = true,
-                    onClick = onConfirm,
                 )
             }
         }
@@ -3007,7 +3984,7 @@ private fun ConnectionProfileDialog(
                     letterSpacing = 1.1.sp,
                 ),
             )
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
             WhiteDnsTextField(
                 label = "Name",
                 value = name,
@@ -3032,7 +4009,7 @@ private fun ConnectionProfileDialog(
                 options = WhiteDnsOptions.encryptionMethods,
                 onValueChange = { encryptionMethod = it },
             )
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -3163,7 +4140,7 @@ private fun ConnectionProfileRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Spacer(modifier = Modifier.height(3.dp))
+                Spacer(modifier = Modifier.height(WhiteDnsSpacing.xs))
                 Text(
                     text = connectionSummary,
                     style = MaterialTheme.typography.bodyMedium.copy(
@@ -3178,27 +4155,187 @@ private fun ConnectionProfileRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            ProfileIconButton(
-                icon = Icons.Rounded.Link,
-                contentDescription = "Export connection profile",
-                emphasized = false,
-                enabled = profile.customServerDomain.isNotBlank() && profile.customServerEncryptionKey.isNotBlank(),
-                onClick = onExport,
+            ProfileActionsMenu(
+                contentDescription = "Connection profile actions",
+                actions = listOf(
+                    ProfileMenuAction(
+                        label = "Export profile",
+                        icon = Icons.Rounded.Link,
+                        contentDescription = "Export connection profile",
+                        enabled = profile.customServerDomain.isNotBlank() && profile.customServerEncryptionKey.isNotBlank(),
+                        onClick = onExport,
+                    ),
+                    ProfileMenuAction(
+                        label = if (selected) "Edit profile (selected)" else "Edit profile",
+                        icon = Icons.Rounded.Edit,
+                        contentDescription = "Edit connection profile",
+                        enabled = canEdit,
+                        onClick = onEdit,
+                    ),
+                    ProfileMenuAction(
+                        label = if (active) "Delete profile (active)" else "Delete profile",
+                        icon = Icons.Rounded.Delete,
+                        contentDescription = if (active) "Connected profile cannot be deleted" else "Delete connection profile",
+                        enabled = canDelete,
+                        onClick = onDelete,
+                    ),
+                ),
             )
-            ProfileIconButton(
-                icon = Icons.Rounded.Edit,
-                contentDescription = "Edit connection profile",
-                emphasized = selected,
-                enabled = canEdit,
-                onClick = onEdit,
+        }
+    }
+}
+
+private data class ProfileMenuAction(
+    val label: String,
+    val icon: ImageVector,
+    val contentDescription: String,
+    val enabled: Boolean,
+    val onClick: () -> Unit,
+)
+
+@Composable
+private fun ProfileActionsMenu(
+    contentDescription: String,
+    actions: List<ProfileMenuAction>,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val haptic = rememberHapticFeedback()
+    val enabled = actions.any { it.enabled }
+    val background = when {
+        !enabled -> WhiteDnsPalette.SurfaceAlt
+        expanded -> WhiteDnsPalette.AccentSurface
+        else -> WhiteDnsPalette.Surface
+    }
+    val border = when {
+        !enabled -> WhiteDnsPalette.Divider
+        expanded -> WhiteDnsPalette.Accent.copy(alpha = 0.28f)
+        else -> WhiteDnsPalette.Border
+    }
+    val iconColor = when {
+        !enabled -> WhiteDnsPalette.Disabled
+        expanded -> WhiteDnsPalette.AccentText
+        else -> WhiteDnsPalette.Muted
+    }
+
+    Box {
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(background)
+                .border(1.5.dp, border, RoundedCornerShape(10.dp))
+                .clickable(enabled = enabled) {
+                    haptic.performLight()
+                    expanded = true
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.MoreVert,
+                contentDescription = contentDescription,
+                tint = iconColor,
+                modifier = Modifier.size(22.dp),
             )
-            ProfileIconButton(
-                icon = Icons.Rounded.Delete,
-                contentDescription = if (active) "Connected profile cannot be deleted" else "Delete connection profile",
-                emphasized = false,
-                enabled = canDelete,
-                onClick = onDelete,
+        }
+        DropdownMenu(
+            expanded = expanded && enabled,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier
+                .widthIn(min = 196.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(WhiteDnsPalette.DropdownSurface),
+        ) {
+            actions.forEach { action ->
+                val itemColor = if (action.enabled) WhiteDnsPalette.Ink else WhiteDnsPalette.Disabled
+                DropdownMenuItem(
+                    modifier = Modifier
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .clip(RoundedCornerShape(10.dp)),
+                    enabled = action.enabled,
+                    leadingIcon = {
+                        Icon(
+                            imageVector = action.icon,
+                            contentDescription = action.contentDescription,
+                            tint = itemColor,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    },
+                    text = {
+                        Text(
+                            text = action.label,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontSize = 13.sp,
+                                color = itemColor,
+                                fontWeight = FontWeight.Medium,
+                            ),
+                        )
+                    },
+                    onClick = {
+                        haptic.performLight()
+                        expanded = false
+                        action.onClick()
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeleteProfileConfirmationDialog(
+    title: String,
+    message: String,
+    confirmLabel: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(22.dp))
+                .background(WhiteDnsPalette.Surface)
+                .border(1.5.dp, WhiteDnsPalette.Border, RoundedCornerShape(22.dp))
+                .padding(18.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 14.sp,
+                    color = WhiteDnsPalette.Ink,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.1.sp,
+                ),
             )
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.inputSpacing))
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp,
+                    color = WhiteDnsPalette.Description,
+                ),
+            )
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CompactActionButton(
+                    modifier = Modifier.weight(1f),
+                    label = "CANCEL",
+                    emphasized = false,
+                    enabled = true,
+                    onClick = onDismiss,
+                )
+                CompactActionButton(
+                    modifier = Modifier.weight(1f),
+                    label = confirmLabel,
+                    emphasized = true,
+                    enabled = true,
+                    onClick = onConfirm,
+                )
+            }
         }
     }
 }
@@ -3212,6 +4349,7 @@ private fun ProfileDragHandle(
     onDragEnd: () -> Unit,
     onDragCancel: () -> Unit,
 ) {
+    val haptic = rememberHapticFeedback()
     val background = when {
         !enabled -> WhiteDnsPalette.SurfaceAlt
         dragging -> WhiteDnsPalette.AccentSurface
@@ -3242,6 +4380,7 @@ private fun ProfileDragHandle(
                 }
                 detectVerticalDragGestures(
                     onDragStart = {
+                        haptic.performHeavy()
                         onDragStart()
                     },
                     onDragCancel = {
@@ -3276,6 +4415,7 @@ private fun ProfileIconButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val haptic = rememberHapticFeedback()
     val background = when {
         !enabled -> WhiteDnsPalette.SurfaceAlt
         emphasized -> WhiteDnsPalette.Accent
@@ -3298,7 +4438,10 @@ private fun ProfileIconButton(
             .clip(RoundedCornerShape(8.dp))
             .background(background)
             .border(1.5.dp, border, RoundedCornerShape(8.dp))
-            .clickable(enabled = enabled, onClick = onClick),
+            .clickable(enabled = enabled) {
+                haptic.performMedium()
+                onClick()
+            },
         contentAlignment = Alignment.Center,
     ) {
         Icon(
@@ -3317,21 +4460,27 @@ private fun CompactActionButton(
     enabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    tone: CompactActionTone = if (emphasized) CompactActionTone.Accent else CompactActionTone.Default,
 ) {
+    val haptic = rememberHapticFeedback()
     val background = when {
         !enabled -> WhiteDnsPalette.SurfaceAlt
-        emphasized -> WhiteDnsPalette.Accent
+        tone == CompactActionTone.Accent -> WhiteDnsPalette.Accent
+        tone == CompactActionTone.Success -> WhiteDnsPalette.Success
+        tone == CompactActionTone.Danger -> WhiteDnsPalette.Error
         else -> WhiteDnsPalette.Surface
     }
     val border = when {
         !enabled -> WhiteDnsPalette.Divider
-        emphasized -> WhiteDnsPalette.AccentPressed
+        tone == CompactActionTone.Accent -> WhiteDnsPalette.AccentPressed
+        tone == CompactActionTone.Success -> WhiteDnsPalette.SuccessSurface
+        tone == CompactActionTone.Danger -> WhiteDnsPalette.ErrorSurface
         else -> WhiteDnsPalette.Border
     }
     val textColor = when {
         !enabled -> WhiteDnsPalette.Disabled
-        emphasized -> WhiteDnsPalette.OnAccent
-        else -> WhiteDnsPalette.Muted
+        tone == CompactActionTone.Default -> WhiteDnsPalette.Muted
+        else -> WhiteDnsPalette.OnAccent
     }
 
     Box(
@@ -3339,7 +4488,10 @@ private fun CompactActionButton(
             .clip(RoundedCornerShape(9.dp))
             .background(background)
             .border(1.5.dp, border, RoundedCornerShape(9.dp))
-            .clickable(enabled = enabled, onClick = onClick)
+            .clickable(enabled = enabled) {
+                haptic.performMedium()
+                onClick()
+            }
             .padding(horizontal = 10.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -3758,9 +4910,17 @@ private fun RuntimeWorkersSettingsGroup(
 }
 
 @Composable
-private fun HeaderCard() {
+private fun HeaderCard(
+    themeMode: String,
+    onThemeModeChange: (String) -> Unit,
+) {
     val context = LocalContext.current
+    val haptic = rememberHapticFeedback()
+    var overflowExpanded by remember { mutableStateOf(false) }
+    var showAppSettingsDialog by remember { mutableStateOf(false) }
     var showDonationDialog by remember { mutableStateOf(false) }
+    val appVersion = remember(context.packageName) { appVersionName(context) }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -3779,7 +4939,10 @@ private fun HeaderCard() {
                     .clip(RoundedCornerShape(9.dp))
                     .background(WhiteDnsPalette.SurfaceAlt)
                     .border(1.5.dp, WhiteDnsPalette.Border, RoundedCornerShape(9.dp))
-                    .clickable { openWhiteDnsTelegram(context) },
+                    .clickable {
+                        haptic.performLight()
+                        openWhiteDnsTelegram(context)
+                    },
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
@@ -3799,48 +4962,154 @@ private fun HeaderCard() {
             )
         }
 
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        Box {
             Box(
                 modifier = Modifier
-                    .border(1.5.dp, WhiteDnsPalette.Border, RoundedCornerShape(7.dp))
-                    .background(WhiteDnsPalette.Surface, RoundedCornerShape(7.dp))
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(
+                        if (overflowExpanded) WhiteDnsPalette.AccentSurface else WhiteDnsPalette.Surface,
+                    )
+                    .border(
+                        1.5.dp,
+                        if (overflowExpanded) WhiteDnsPalette.Accent.copy(alpha = 0.28f) else WhiteDnsPalette.Border,
+                        RoundedCornerShape(10.dp),
+                    )
+                    .clickable {
+                        haptic.performLight()
+                        overflowExpanded = true
+                    },
+                contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = "v1.2.0",
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        fontSize = 10.sp,
-                        color = WhiteDnsPalette.Muted,
-                    ),
+                Icon(
+                    imageVector = Icons.Rounded.MoreVert,
+                    contentDescription = "App menu",
+                    tint = if (overflowExpanded) WhiteDnsPalette.AccentText else WhiteDnsPalette.Muted,
+                    modifier = Modifier.size(22.dp),
                 )
             }
-            Box(
+
+            DropdownMenu(
+                expanded = overflowExpanded,
+                onDismissRequest = { overflowExpanded = false },
                 modifier = Modifier
-                    .clip(RoundedCornerShape(7.dp))
-                    .background(WhiteDnsPalette.Accent)
-                    .border(1.5.dp, WhiteDnsPalette.AccentPressed, RoundedCornerShape(7.dp))
-                    .clickable { showDonationDialog = true }
-                    .padding(horizontal = 9.dp, vertical = 5.dp),
+                    .widthIn(min = 220.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(WhiteDnsPalette.DropdownSurface),
             ) {
-                Text(
-                    text = "DONATE",
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        fontSize = 9.sp,
-                        color = WhiteDnsPalette.OnAccent,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.7.sp,
-                    ),
+                DropdownMenuItem(
+                    modifier = Modifier
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .clip(RoundedCornerShape(10.dp)),
+                    enabled = false,
+                    text = {
+                        Column {
+                            Text(
+                                text = "Version",
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontSize = 10.sp,
+                                    color = WhiteDnsPalette.Muted,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.7.sp,
+                                ),
+                            )
+                            Spacer(modifier = Modifier.height(WhiteDnsSpacing.xs))
+                            Text(
+                                text = "v${appVersion.ifBlank { "unknown" }}",
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontSize = 13.sp,
+                                    color = WhiteDnsPalette.Ink,
+                                    fontWeight = FontWeight.Medium,
+                                ),
+                            )
+                        }
+                    },
+                    onClick = {},
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp)
+                        .height(1.5.dp)
+                        .background(WhiteDnsPalette.Divider),
+                )
+                DropdownMenuItem(
+                    modifier = Modifier
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .clip(RoundedCornerShape(10.dp)),
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Rounded.Settings,
+                            contentDescription = "App settings",
+                            tint = WhiteDnsPalette.Ink,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    },
+                    text = {
+                        Text(
+                            text = "App Settings",
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontSize = 13.sp,
+                                color = WhiteDnsPalette.Ink,
+                                fontWeight = FontWeight.Medium,
+                            ),
+                        )
+                    },
+                    onClick = {
+                        haptic.performLight()
+                        overflowExpanded = false
+                        showAppSettingsDialog = true
+                    },
+                )
+                DropdownMenuItem(
+                    modifier = Modifier
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .clip(RoundedCornerShape(10.dp)),
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Rounded.Favorite,
+                            contentDescription = "Donate",
+                            tint = WhiteDnsPalette.Ink,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    },
+                    text = {
+                        Text(
+                            text = "Donate",
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontSize = 13.sp,
+                                color = WhiteDnsPalette.Ink,
+                                fontWeight = FontWeight.Medium,
+                            ),
+                        )
+                    },
+                    onClick = {
+                        haptic.performLight()
+                        overflowExpanded = false
+                        showDonationDialog = true
+                    },
                 )
             }
         }
     }
 
+    if (showAppSettingsDialog) {
+        AppSettingsDialog(
+            themeMode = themeMode,
+            onThemeModeChange = onThemeModeChange,
+            onDismiss = { showAppSettingsDialog = false },
+        )
+    }
     if (showDonationDialog) {
         DonationDialog(onDismiss = { showDonationDialog = false })
     }
+}
+
+private fun appVersionName(context: Context): String {
+    return runCatching {
+        @Suppress("DEPRECATION")
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName
+    }.getOrNull().orEmpty()
 }
 
 private fun openWhiteDnsTelegram(context: Context) {
@@ -3849,6 +5118,48 @@ private fun openWhiteDnsTelegram(context: Context) {
         Uri.parse(WhiteDnsTelegramUrl),
     )
     context.startActivity(intent)
+}
+
+@Composable
+private fun AppSettingsDialog(
+    themeMode: String,
+    onThemeModeChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(22.dp))
+                .background(WhiteDnsPalette.Surface)
+                .border(1.5.dp, WhiteDnsPalette.Border, RoundedCornerShape(22.dp))
+                .padding(18.dp),
+        ) {
+            Text(
+                text = "APP SETTINGS",
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 14.sp,
+                    color = WhiteDnsPalette.Ink,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.1.sp,
+                ),
+            )
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
+            ThemeModeSegmentedControl(
+                selectedMode = themeMode,
+                onModeChange = onThemeModeChange,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.lg))
+            CompactActionButton(
+                modifier = Modifier.fillMaxWidth(),
+                label = "CLOSE",
+                emphasized = true,
+                enabled = true,
+                onClick = onDismiss,
+            )
+        }
+    }
 }
 
 @Composable
@@ -3877,7 +5188,7 @@ private fun DonationDialog(
                     letterSpacing = 1.1.sp,
                 ),
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
             Text(
                 text = "Donations will be used for new servers and app development.",
                 style = MaterialTheme.typography.bodyMedium.copy(
@@ -3886,7 +5197,7 @@ private fun DonationDialog(
                     color = WhiteDnsPalette.Description,
                 ),
             )
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
             DonationWallets.forEachIndexed { index, wallet ->
                 DonationWalletField(
                     label = wallet.label,
@@ -3901,10 +5212,10 @@ private fun DonationDialog(
                     },
                 )
                 if (index != DonationWallets.lastIndex) {
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(WhiteDnsSpacing.inputSpacing))
                 }
             }
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.lg))
             CompactActionButton(
                 modifier = Modifier.fillMaxWidth(),
                 label = "CLOSE",
@@ -3960,6 +5271,8 @@ private fun DonationWalletField(
 
 @Composable
 private fun NotificationPermissionBanner(onClick: () -> Unit) {
+    val haptic = rememberHapticFeedback()
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -3977,7 +5290,7 @@ private fun NotificationPermissionBanner(onClick: () -> Unit) {
                 letterSpacing = 1.1.sp,
             ),
         )
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(WhiteDnsSpacing.iconSpacing))
         Text(
             text = "Enable WhiteDNS notifications so Android can keep the full VPN service visible and running in the background.",
             style = MaterialTheme.typography.bodyMedium.copy(
@@ -3986,14 +5299,17 @@ private fun NotificationPermissionBanner(onClick: () -> Unit) {
                 color = WhiteDnsPalette.WarningText,
             ),
         )
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(WhiteDnsSpacing.inputSpacing))
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(10.dp))
                 .background(WhiteDnsPalette.Surface)
                 .border(1.5.dp, WhiteDnsPalette.Warning.copy(alpha = 0.32f), RoundedCornerShape(10.dp))
-                .clickable(onClick = onClick)
+                .clickable {
+                    haptic.performMedium()
+                    onClick()
+                }
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             contentAlignment = Alignment.Center,
         ) {
@@ -4012,6 +5328,8 @@ private fun NotificationPermissionBanner(onClick: () -> Unit) {
 
 @Composable
 private fun BatteryOptimizationBanner(onClick: () -> Unit) {
+    val haptic = rememberHapticFeedback()
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -4029,7 +5347,7 @@ private fun BatteryOptimizationBanner(onClick: () -> Unit) {
                 letterSpacing = 1.1.sp,
             ),
         )
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(WhiteDnsSpacing.iconSpacing))
         Text(
             text = "Allow WhiteDNS to ignore battery optimization so the VPN keeps running after you leave the app.",
             style = MaterialTheme.typography.bodyMedium.copy(
@@ -4038,14 +5356,17 @@ private fun BatteryOptimizationBanner(onClick: () -> Unit) {
                 color = WhiteDnsPalette.WarningText,
             ),
         )
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(WhiteDnsSpacing.inputSpacing))
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(10.dp))
                 .background(WhiteDnsPalette.Surface)
                 .border(1.5.dp, WhiteDnsPalette.Warning.copy(alpha = 0.32f), RoundedCornerShape(10.dp))
-                .clickable(onClick = onClick)
+                .clickable {
+                    haptic.performMedium()
+                    onClick()
+                }
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             contentAlignment = Alignment.Center,
         ) {
@@ -4064,6 +5385,8 @@ private fun BatteryOptimizationBanner(onClick: () -> Unit) {
 
 @Composable
 private fun FullVpnPerformanceWarning(onDismiss: () -> Unit) {
+    val haptic = rememberHapticFeedback()
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -4076,7 +5399,7 @@ private fun FullVpnPerformanceWarning(onDismiss: () -> Unit) {
     ) {
         Icon(
             imageVector = Icons.Rounded.WarningAmber,
-            contentDescription = null,
+            contentDescription = stringResource(R.string.cd_icon_warning),
             tint = WhiteDnsPalette.WarningText,
             modifier = Modifier.size(18.dp),
         )
@@ -4090,7 +5413,7 @@ private fun FullVpnPerformanceWarning(onDismiss: () -> Unit) {
                     letterSpacing = 0.9.sp,
                 ),
             )
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.xs))
             Text(
                 text = "Full VPN routes all device traffic through the DNS tunnel and may be slower or less stable. Proxy Mode is recommended for best performance.",
                 style = MaterialTheme.typography.bodyMedium.copy(
@@ -4105,7 +5428,10 @@ private fun FullVpnPerformanceWarning(onDismiss: () -> Unit) {
             modifier = Modifier
                 .size(28.dp)
                 .clip(CircleShape)
-                .clickable(onClick = onDismiss),
+                .clickable {
+                    haptic.performLight()
+                    onDismiss()
+                },
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -4151,7 +5477,7 @@ private fun SplitTunnelSettingsPanel(
             exit = fadeOut(animationSpec = tween(140)) + shrinkVertically(animationSpec = tween(140)),
         ) {
             Column {
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -4242,14 +5568,14 @@ private fun SplitTunnelAppDialog(
                     letterSpacing = 1.1.sp,
                 ),
             )
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
             WhiteDnsTextField(
                 label = "Search",
                 value = query,
                 onValueChange = { query = it },
                 placeholder = "App name or package",
             )
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.inputSpacing))
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -4281,7 +5607,7 @@ private fun SplitTunnelAppDialog(
                     }
                 }
             }
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -4324,18 +5650,26 @@ private fun SplitTunnelAppRow(
     checked: Boolean,
     onToggle: () -> Unit,
 ) {
+    val haptic = rememberHapticFeedback()
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(11.dp))
-            .clickable(onClick = onToggle)
+            .clickable {
+                haptic.performLight()
+                onToggle()
+            }
             .padding(vertical = 9.dp, horizontal = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Checkbox(
             checked = checked,
-            onCheckedChange = { onToggle() },
+            onCheckedChange = {
+                haptic.performLight()
+                onToggle()
+            },
             colors = CheckboxDefaults.colors(
                 checkedColor = WhiteDnsPalette.Accent,
                 uncheckedColor = WhiteDnsPalette.ControlBorder,
@@ -4373,6 +5707,7 @@ private fun ConnectButton(
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
+    val haptic = rememberHapticFeedback()
     val ringColor by animateColorAsState(
         targetValue = when (status) {
             ConnectionStatus.DISCONNECTED -> if (enabled) WhiteDnsPalette.Accent else WhiteDnsPalette.Divider
@@ -4424,6 +5759,9 @@ private fun ConnectButton(
         animationSpec = tween(300),
         label = "connectProgressFraction",
     )
+    val accentColor = WhiteDnsPalette.Accent
+    val borderColor = WhiteDnsPalette.Border
+    val successColor = WhiteDnsPalette.Success
     val circleSize = 156.dp
     val outerRingSize = 198.dp
     val label = when (status) {
@@ -4450,7 +5788,7 @@ private fun ConnectButton(
                 val strokeWidth = 3.dp.toPx()
                 val radius = (size.minDimension - strokeWidth) / 2f
                 val color = if (status == ConnectionStatus.CONNECTING) {
-                    WhiteDnsPalette.Accent.copy(alpha = pulseAlpha)
+                    accentColor.copy(alpha = pulseAlpha)
                 } else {
                     ringColor.copy(alpha = if (status == ConnectionStatus.CONNECTED) 0.30f else 0.15f)
                 }
@@ -4472,7 +5810,7 @@ private fun ConnectButton(
                 when (status) {
                     ConnectionStatus.CONNECTING -> {
                         drawArc(
-                            color = WhiteDnsPalette.Border.copy(alpha = 0.65f),
+                            color = borderColor.copy(alpha = 0.65f),
                             startAngle = -90f,
                             sweepAngle = 360f,
                             useCenter = false,
@@ -4481,7 +5819,7 @@ private fun ConnectButton(
                             style = Stroke(width = strokeWidth),
                         )
                         drawArc(
-                            color = WhiteDnsPalette.Accent,
+                            color = accentColor,
                             startAngle = -90f,
                             sweepAngle = 360f * progressFraction,
                             useCenter = false,
@@ -4494,7 +5832,7 @@ private fun ConnectButton(
                         )
                         rotate(spinAngle) {
                             drawArc(
-                                color = WhiteDnsPalette.Accent.copy(alpha = 0.22f),
+                                color = accentColor.copy(alpha = 0.22f),
                                 startAngle = 0f,
                                 sweepAngle = 42f,
                                 useCenter = false,
@@ -4509,7 +5847,7 @@ private fun ConnectButton(
                     }
                     ConnectionStatus.CONNECTED -> {
                         drawArc(
-                            color = WhiteDnsPalette.Success,
+                            color = successColor,
                             startAngle = -90f,
                             sweepAngle = 360f,
                             useCenter = false,
@@ -4533,7 +5871,10 @@ private fun ConnectButton(
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
-                        onClick = onClick,
+                        onClick = {
+                            haptic.performMedium()
+                            onClick()
+                        },
                     ),
                 contentAlignment = Alignment.Center,
             ) {
@@ -4547,11 +5888,17 @@ private fun ConnectButton(
                         } else {
                             Icons.Rounded.PowerSettingsNew
                         },
-                        contentDescription = label,
+                        contentDescription = stringResource(
+                            when (status) {
+                                ConnectionStatus.DISCONNECTED -> R.string.cd_connect_button_disconnected
+                                ConnectionStatus.CONNECTING -> R.string.cd_connect_button_connecting
+                                ConnectionStatus.CONNECTED -> R.string.cd_connect_button_connected
+                            }
+                        ),
                         tint = iconColor,
                         modifier = Modifier.size(if (status == ConnectionStatus.CONNECTED) 30.dp else 34.dp),
                     )
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(WhiteDnsSpacing.iconSpacing))
                     Text(
                         text = label,
                         style = MaterialTheme.typography.bodyMedium.copy(
@@ -4561,7 +5908,7 @@ private fun ConnectButton(
                         ),
                     )
                     if (status == ConnectionStatus.CONNECTING) {
-                        Spacer(modifier = Modifier.height(5.dp))
+                        Spacer(modifier = Modifier.height(WhiteDnsSpacing.xs))
                         Text(
                             text = progressState.label,
                             maxLines = 1,
@@ -4572,7 +5919,7 @@ private fun ConnectButton(
                                 color = WhiteDnsPalette.Muted,
                             ),
                         )
-                        Spacer(modifier = Modifier.height(2.dp))
+                        Spacer(modifier = Modifier.height(WhiteDnsSpacing.xs))
                         Text(
                             text = "${progressState.percent.coerceIn(0, 99)}%",
                             maxLines = 1,
@@ -4645,14 +5992,40 @@ private fun ResolverRuntimeSummary(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(14.dp),
-                    color = WhiteDnsPalette.Accent,
-                    strokeWidth = 2.dp,
-                )
+                // Enhanced progress indicator with percentage display
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier.size(20.dp)
+                ) {
+                    if (progressState.total > 0 && progressState.completed > 0) {
+                        // Determinate progress when total is known
+                        CircularProgressIndicator(
+                            progress = { progressState.completed.toFloat() / progressState.total.toFloat() },
+                            modifier = Modifier.size(20.dp),
+                            color = WhiteDnsPalette.Accent,
+                            strokeWidth = 2.5.dp,
+                        )
+                        // Show percentage inside circle
+                        Text(
+                            text = "${(progressState.completed * 100 / progressState.total)}%",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontSize = 7.sp,
+                                color = WhiteDnsPalette.Accent,
+                                fontWeight = FontWeight.Bold
+                            )
+                        )
+                    } else {
+                        // Indeterminate progress when total is unknown
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = WhiteDnsPalette.Accent,
+                            strokeWidth = 2.5.dp,
+                        )
+                    }
+                }
                 Text(
                     text = if (progressState.completed > 0) {
-                        "Background scanning in progress ${progressState.completed}/${progressState.total}"
+                        "Background scanning ${progressState.completed}/${progressState.total}"
                     } else {
                         "Background scanning in progress"
                     },
@@ -4711,7 +6084,7 @@ private fun ResolverRuntimeValue(
                 letterSpacing = 0.6.sp,
             ),
         )
-        Spacer(modifier = Modifier.height(3.dp))
+        Spacer(modifier = Modifier.height(WhiteDnsSpacing.xs))
         Text(
             text = value,
             maxLines = 1,
@@ -4774,7 +6147,14 @@ private fun ConnectionVerificationSummary(
     ) {
         Icon(
             imageVector = icon,
-            contentDescription = null,
+            contentDescription = stringResource(
+                when (verification.status) {
+                    ConnectionVerificationStatus.Verified -> R.string.cd_verification_success
+                    ConnectionVerificationStatus.Failed -> R.string.cd_verification_failed
+                    ConnectionVerificationStatus.Checking -> R.string.cd_verification_pending
+                    else -> R.string.cd_icon_link
+                }
+            ),
             tint = color,
             modifier = Modifier.size(18.dp),
         )
@@ -4790,7 +6170,7 @@ private fun ConnectionVerificationSummary(
                     letterSpacing = 0.7.sp,
                 ),
             )
-            Spacer(modifier = Modifier.height(2.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.xs))
             Text(
                 text = message,
                 maxLines = 2,
@@ -4833,7 +6213,7 @@ private fun ResolverRuntimeDialog(
                     letterSpacing = 1.1.sp,
                 ),
             )
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
             WhiteDnsTextField(
                 label = "Resolvers",
                 value = resolverText,
@@ -4843,7 +6223,7 @@ private fun ResolverRuntimeDialog(
                 minLines = 6,
                 maxLines = 12,
             )
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -4889,18 +6269,21 @@ private fun LiveSpeedStrip(
     ) {
         SpeedIndicator(
             icon = Icons.Filled.Download,
+            iconContentDescription = stringResource(R.string.cd_icon_download),
             label = "Down",
             value = formatDataSpeed(stats.downloadSpeedBytesPerSecond),
             modifier = Modifier.weight(1f),
         )
         SpeedIndicator(
             icon = Icons.Filled.Upload,
+            iconContentDescription = stringResource(R.string.cd_icon_upload),
             label = "Up",
             value = formatDataSpeed(stats.uploadSpeedBytesPerSecond),
             modifier = Modifier.weight(1f),
         )
         SpeedIndicator(
             icon = Icons.Filled.DataUsage,
+            iconContentDescription = stringResource(R.string.cd_icon_data_usage),
             label = "Total Usage",
             value = formatDataSize(stats.totalDataUsageBytes),
             modifier = Modifier.weight(1f),
@@ -4911,6 +6294,7 @@ private fun LiveSpeedStrip(
 @Composable
 private fun SpeedIndicator(
     icon: ImageVector,
+    iconContentDescription: String,
     label: String,
     value: String,
     modifier: Modifier = Modifier,
@@ -4925,7 +6309,7 @@ private fun SpeedIndicator(
     ) {
         Icon(
             imageVector = icon,
-            contentDescription = null,
+            contentDescription = iconContentDescription,
             tint = WhiteDnsPalette.Success,
             modifier = Modifier.size(17.dp),
         )
@@ -5001,21 +6385,22 @@ private fun ConnectionInfoCard(
                 ),
             )
         }
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
         CompactMetricRow(
             metrics = listOf(
                 CompactMetric(
                     icon = Icons.Filled.Apps,
+                    iconContentDescription = stringResource(R.string.cd_icon_apps),
                     label = "Apps",
                     value = stats.connectedApps.toString(),
                 ),
             ),
         )
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(WhiteDnsSpacing.inputSpacing))
         InfoRow(label = "Connection Profile", value = connectionProfileName)
         InfoRow(label = "Resolver Profile", value = resolverProfileName)
         InfoRow(label = "Setting Profile", value = settingProfileName)
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(WhiteDnsSpacing.inputSpacing))
         ResolverActionButton(
             modifier = Modifier.fillMaxWidth(),
             label = "DOWNLOAD TOML",
@@ -5028,6 +6413,7 @@ private fun ConnectionInfoCard(
 
 private data class CompactMetric(
     val icon: ImageVector,
+    val iconContentDescription: String,
     val label: String,
     val value: String,
 )
@@ -5070,7 +6456,7 @@ private fun CompactMetricPill(
     ) {
         Icon(
             imageVector = metric.icon,
-            contentDescription = null,
+            contentDescription = metric.iconContentDescription,
             tint = WhiteDnsPalette.Success,
             modifier = Modifier.size(15.dp),
         )
@@ -5185,16 +6571,18 @@ private fun InfoRow(
     label: String,
     value: String,
     showDivider: Boolean = true,
+    multilineValue: Boolean = false,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 9.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = if (multilineValue) Arrangement.spacedBy(12.dp) else Arrangement.SpaceBetween,
+        verticalAlignment = if (multilineValue) Alignment.Top else Alignment.CenterVertically,
     ) {
         Text(
             text = label,
+            modifier = if (multilineValue) Modifier.width(72.dp) else Modifier,
             style = MaterialTheme.typography.bodyMedium.copy(
                 fontSize = 12.sp,
                 color = WhiteDnsPalette.Muted,
@@ -5202,6 +6590,9 @@ private fun InfoRow(
         )
         Text(
             text = value,
+            modifier = if (multilineValue) Modifier.weight(1f) else Modifier,
+            maxLines = if (multilineValue) Int.MAX_VALUE else 1,
+            overflow = if (multilineValue) TextOverflow.Clip else TextOverflow.Ellipsis,
             style = MaterialTheme.typography.bodyMedium.copy(
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
@@ -5227,10 +6618,6 @@ private fun ConnectionLogsBlock(
     val logs = uiState.connectionLogs
     val visibleLogs = if (expanded) logs else logs.take(10)
     val context = LocalContext.current
-    val redactionSecrets = uiState.settings.redactionSecrets()
-    val redactedLogs = remember(logs, redactionSecrets) {
-        SecretRedactor.redact(logs.joinToString(separator = "\n"), redactionSecrets)
-    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -5257,7 +6644,7 @@ private fun ConnectionLogsBlock(
                         copyTextToClipboard(
                             context = context,
                             label = "WhiteDNS logs",
-                            text = redactedLogs,
+                            text = logs.joinToString(separator = "\n"),
                             sensitive = false,
                         )
                     },
@@ -5275,7 +6662,7 @@ private fun ConnectionLogsBlock(
                 )
             }
         }
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -5314,12 +6701,17 @@ private fun LogActionButton(
     label: String,
     onClick: () -> Unit,
 ) {
+    val haptic = rememberHapticFeedback()
+
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(8.dp))
             .background(WhiteDnsPalette.Surface)
             .border(1.5.dp, WhiteDnsPalette.Border, RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick)
+            .clickable {
+                haptic.performLight()
+                onClick()
+            }
             .padding(horizontal = 10.dp, vertical = 5.dp),
     ) {
         Text(
@@ -5350,6 +6742,16 @@ private fun shareClientConfigToml(context: Context, toml: String) {
         fileName = "client_config.toml",
         subject = "client_config.toml",
         chooserTitle = "Export client_config.toml",
+        text = toml,
+    )
+}
+
+private fun shareAdvancedSettingsToml(context: Context, toml: String) {
+    shareTextExport(
+        context = context,
+        fileName = "advanced_settings.toml",
+        subject = "advanced_settings.toml",
+        chooserTitle = "Export advanced_settings.toml",
         text = toml,
     )
 }
@@ -5422,17 +6824,6 @@ private fun copyTextToClipboard(
     clipboard.setPrimaryClip(clip)
 }
 
-private fun WhiteDnsSettings.redactionSecrets(): RedactionSecrets {
-    val connectionProfiles = normalizedConnectionProfiles()
-    val resolvedSettings = runtimeConnectionSettings().resolve()
-    return RedactionSecrets(
-        serverRoutes = connectionProfiles.map { it.customServerDomain },
-        encryptionKeys = connectionProfiles.map { it.customServerEncryptionKey },
-        socksUsers = listOf(resolvedSettings.socksUsername, socksUsername),
-        socksPasswords = listOf(resolvedSettings.socksPassword, socksPassword),
-    )
-}
-
 private fun buildDiagnosticsText(
     context: Context,
     uiState: WhiteDnsUiState,
@@ -5442,10 +6833,7 @@ private fun buildDiagnosticsText(
     val selectedProfile = settings.selectedConnectionProfile()
     val resolverProfile = settings.selectedResolverProfile()
     val verification = uiState.connectionVerification
-    val appVersion = runCatching {
-        @Suppress("DEPRECATION")
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName
-    }.getOrNull().orEmpty()
+    val appVersion = appVersionName(context)
 
     return buildString {
         appendLine("WhiteDNS diagnostics")
@@ -5454,7 +6842,7 @@ private fun buildDiagnosticsText(
         appendLine("Status: ${uiState.connectionStatus}")
         appendLine("Mode: ${WhiteDnsOptions.connectionModeLabel(resolvedSettings.connectionMode)}")
         appendLine("Profile: ${selectedProfile.name.ifBlank { selectedProfile.id }}")
-        appendLine("Server: [redacted]")
+        appendLine("Server: ${selectedProfile.customServerDomain.ifBlank { "not configured" }}")
         appendLine("Encryption key: ${selectedProfile.customServerEncryptionKey.ifBlank { "not configured" }}")
         appendLine("Resolver profile: ${resolverProfile?.name ?: "Manual resolvers"}")
         appendLine("Resolvers: ${resolvedSettings.resolverEntries.size}")
@@ -5481,18 +6869,26 @@ private fun buildDiagnosticsText(
         uiState.connectionLogs.forEach { log ->
             appendLine(log)
         }
-    }.trimEnd().let { diagnostics ->
-        SecretRedactor.redact(diagnostics, settings.redactionSecrets())
-    }
+    }.trimEnd()
 }
 
 private fun readResolverTextFromUri(context: Context, uri: Uri): Result<String> {
     return runCatching {
-        val rawText = context.contentResolver.openInputStream(uri)
+        val rawText = readTextFromUri(context, uri, "Unable to open resolver file").getOrThrow()
+        normalizeImportedResolverText(rawText)
+    }
+}
+
+private fun readTextFromUri(
+    context: Context,
+    uri: Uri,
+    errorMessage: String,
+): Result<String> {
+    return runCatching {
+        context.contentResolver.openInputStream(uri)
             ?.bufferedReader()
             ?.use { reader -> reader.readText() }
-            ?: throw IllegalArgumentException("Unable to open resolver file")
-        normalizeImportedResolverText(rawText)
+            ?: throw IllegalArgumentException(errorMessage)
     }
 }
 
@@ -5525,6 +6921,12 @@ private fun resolverValidationMessage(
 private val ResolverImportMimeTypes = arrayOf(
     "text/*",
     "application/json",
+    "application/octet-stream",
+)
+
+private val SettingsImportMimeTypes = arrayOf(
+    "text/*",
+    "application/toml",
     "application/octet-stream",
 )
 
@@ -5563,6 +6965,7 @@ private fun ResolverActionButton(
     emphasized: Boolean = false,
     enabled: Boolean = true,
 ) {
+    val haptic = rememberHapticFeedback()
     val background = when {
         !enabled -> WhiteDnsPalette.SurfaceAlt
         emphasized -> WhiteDnsPalette.Accent
@@ -5584,7 +6987,10 @@ private fun ResolverActionButton(
             .clip(RoundedCornerShape(10.dp))
             .background(background)
             .border(1.5.dp, border, RoundedCornerShape(10.dp))
-            .clickable(enabled = enabled, onClick = onClick)
+            .clickable(enabled = enabled) {
+                haptic.performLight()
+                onClick()
+            }
             .padding(horizontal = 10.dp, vertical = 9.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -5605,16 +7011,20 @@ private fun SectionCard(
     title: String,
     expanded: Boolean,
     icon: ImageVector = Icons.Rounded.Tune,
+    iconContentDescription: String,
+    collapsible: Boolean = true,
     onToggle: () -> Unit,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val haptic = rememberHapticFeedback()
+    val isOpen = expanded || !collapsible
     val rotation by animateFloatAsState(
-        targetValue = if (expanded) 180f else 0f,
+        targetValue = if (isOpen) 180f else 0f,
         animationSpec = tween(260, easing = FastOutSlowInEasing),
         label = "sectionRotation",
     )
     val borderColor by animateColorAsState(
-        targetValue = if (expanded) {
+        targetValue = if (isOpen) {
             WhiteDnsPalette.Accent.copy(alpha = 0.26f)
         } else {
             WhiteDnsPalette.Border
@@ -5623,7 +7033,7 @@ private fun SectionCard(
         label = "sectionBorderColor",
     )
     val iconBackground by animateColorAsState(
-        targetValue = if (expanded) {
+        targetValue = if (isOpen) {
             WhiteDnsPalette.AccentSurface
         } else {
             WhiteDnsPalette.SurfaceAlt
@@ -5632,7 +7042,7 @@ private fun SectionCard(
         label = "sectionIconBackground",
     )
     val iconColor by animateColorAsState(
-        targetValue = if (expanded) WhiteDnsPalette.AccentText else WhiteDnsPalette.Muted,
+        targetValue = if (isOpen) WhiteDnsPalette.AccentText else WhiteDnsPalette.Muted,
         animationSpec = tween(220),
         label = "sectionIconColor",
     )
@@ -5647,7 +7057,16 @@ private fun SectionCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onToggle)
+                .let { modifier ->
+                    if (collapsible) {
+                        modifier.clickable {
+                            haptic.performLight()
+                            onToggle()
+                        }
+                    } else {
+                        modifier
+                    }
+                }
                 .padding(horizontal = 14.dp, vertical = 13.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
@@ -5665,7 +7084,7 @@ private fun SectionCard(
                 ) {
                     Icon(
                         imageVector = icon,
-                        contentDescription = null,
+                        contentDescription = iconContentDescription,
                         tint = iconColor,
                         modifier = Modifier.size(17.dp),
                     )
@@ -5678,53 +7097,59 @@ private fun SectionCard(
                             letterSpacing = 0.6.sp,
                         ),
                     )
-                    Text(
-                        text = if (expanded) "TAP TO COLLAPSE" else "TAP TO CONFIGURE",
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontSize = 9.sp,
-                            color = WhiteDnsPalette.Description,
-                            fontWeight = FontWeight.Medium,
-                            letterSpacing = 1.1.sp,
-                        ),
-                    )
+                    if (collapsible) {
+                        Text(
+                            text = if (expanded) "TAP TO COLLAPSE" else "TAP TO CONFIGURE",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 9.sp,
+                                color = WhiteDnsPalette.Description,
+                                fontWeight = FontWeight.Medium,
+                                letterSpacing = 1.1.sp,
+                            ),
+                        )
+                    }
                 }
             }
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(
-                        if (expanded) {
-                            WhiteDnsPalette.Accent
-                        } else {
-                            WhiteDnsPalette.SurfaceAlt
-                        },
-                    )
-                    .padding(start = 10.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text(
-                    text = if (expanded) "OPEN" else "CLOSED",
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        fontSize = 9.sp,
-                        color = if (expanded) WhiteDnsPalette.OnAccent else WhiteDnsPalette.Muted,
-                        fontWeight = FontWeight.Medium,
-                        letterSpacing = 0.8.sp,
-                    ),
-                )
-                Icon(
-                    imageVector = Icons.Rounded.KeyboardArrowDown,
-                    contentDescription = null,
-                    tint = if (expanded) WhiteDnsPalette.OnAccent else WhiteDnsPalette.Muted,
+            if (collapsible) {
+                Row(
                     modifier = Modifier
-                        .size(16.dp)
-                        .graphicsLayer(rotationZ = rotation),
-                )
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(
+                            if (expanded) {
+                                WhiteDnsPalette.Accent
+                            } else {
+                                WhiteDnsPalette.SurfaceAlt
+                            },
+                        )
+                        .padding(start = 10.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = if (expanded) "OPEN" else "CLOSED",
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontSize = 9.sp,
+                            color = if (expanded) WhiteDnsPalette.OnAccent else WhiteDnsPalette.Muted,
+                            fontWeight = FontWeight.Medium,
+                            letterSpacing = 0.8.sp,
+                        ),
+                    )
+                    Icon(
+                        imageVector = Icons.Rounded.KeyboardArrowDown,
+                        contentDescription = stringResource(
+                            if (expanded) R.string.cd_advanced_settings_collapse else R.string.cd_advanced_settings_expand
+                        ),
+                        tint = if (expanded) WhiteDnsPalette.OnAccent else WhiteDnsPalette.Muted,
+                        modifier = Modifier
+                            .size(16.dp)
+                            .graphicsLayer(rotationZ = rotation),
+                    )
+                }
             }
         }
 
         AnimatedVisibility(
-            visible = expanded,
+            visible = isOpen,
             enter = fadeIn(animationSpec = tween(240)) + expandVertically(animationSpec = tween(240)),
             exit = fadeOut(animationSpec = tween(180)) + shrinkVertically(animationSpec = tween(180)),
         ) {
@@ -5751,19 +7176,19 @@ private fun GroupLabel(text: String) {
             letterSpacing = 1.8.sp,
         ),
     )
-    Spacer(modifier = Modifier.height(8.dp))
+    Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
 }
 
 @Composable
 private fun SectionDivider() {
-    Spacer(modifier = Modifier.height(12.dp))
+    Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(2.dp)
             .background(WhiteDnsPalette.Divider, RoundedCornerShape(1.dp)),
     )
-    Spacer(modifier = Modifier.height(12.dp))
+    Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
 }
 
 @Composable
@@ -5772,10 +7197,15 @@ private fun ToggleRow(
     enabled: Boolean,
     onToggle: () -> Unit,
 ) {
+    val haptic = rememberHapticFeedback()
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onToggle)
+            .clickable {
+                haptic.performLight()
+                onToggle()
+            }
             .padding(vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
@@ -5790,7 +7220,10 @@ private fun ToggleRow(
             )
         Switch(
             checked = enabled,
-            onCheckedChange = { onToggle() },
+            onCheckedChange = {
+                haptic.performLight()
+                onToggle()
+            },
             colors = SwitchDefaults.colors(
                 checkedThumbColor = WhiteDnsPalette.OnAccent,
                 checkedTrackColor = WhiteDnsPalette.Accent,
@@ -5875,7 +7308,7 @@ private fun FieldLabel(text: String) {
             letterSpacing = 0.9.sp,
         ),
     )
-    Spacer(modifier = Modifier.height(4.dp))
+    Spacer(modifier = Modifier.height(WhiteDnsSpacing.xs))
 }
 
 @Composable
@@ -5888,6 +7321,7 @@ private fun <T> WhiteDnsDropdownField(
     enabled: Boolean = true,
     compact: Boolean = false,
 ) {
+    val haptic = rememberHapticFeedback()
     var expanded by remember { mutableStateOf(false) }
     val selectedLabel = options.firstOrNull { it.value == value }?.label.orEmpty()
     val shape = RoundedCornerShape(if (compact) 10.dp else 12.dp)
@@ -5928,7 +7362,10 @@ private fun <T> WhiteDnsDropdownField(
                     .clip(shape)
                     .background(backgroundColor)
                     .border(1.5.dp, borderColor, shape)
-                    .clickable(enabled = enabled, onClick = { expanded = true })
+                    .clickable(enabled = enabled) {
+                        haptic.performLight()
+                        expanded = true
+                    }
                     .padding(horizontal = horizontalPadding, vertical = verticalPadding),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
@@ -5946,7 +7383,7 @@ private fun <T> WhiteDnsDropdownField(
                 )
                 Icon(
                     imageVector = Icons.Rounded.KeyboardArrowDown,
-                    contentDescription = null,
+                    contentDescription = stringResource(R.string.cd_dropdown_advanced_settings),
                     tint = when {
                         !enabled -> WhiteDnsPalette.Disabled
                         expanded -> WhiteDnsPalette.Accent
@@ -5997,7 +7434,7 @@ private fun <T> WhiteDnsDropdownField(
                                 if (selected) {
                                     Icon(
                                         imageVector = Icons.Rounded.Check,
-                                        contentDescription = null,
+                                        contentDescription = stringResource(R.string.cd_icon_check),
                                         tint = WhiteDnsPalette.AccentText,
                                         modifier = Modifier.size(16.dp),
                                     )
@@ -6005,6 +7442,7 @@ private fun <T> WhiteDnsDropdownField(
                             }
                         },
                         onClick = {
+                            haptic.performLight()
                             expanded = false
                             onValueChange(choice.value)
                         },
@@ -6065,9 +7503,9 @@ private fun loadSplitTunnelAppOptions(context: Context): List<SplitTunnelAppInfo
                 return@mapNotNull null
             }
             val label = resolveInfo.loadLabel(packageManager)
-                ?.toString()
-                ?.trim()
-                ?.takeIf(String::isNotEmpty)
+                .toString()
+                .trim()
+                .takeIf(String::isNotEmpty)
                 ?: appPackage
             SplitTunnelAppInfo(
                 packageName = appPackage,
@@ -6122,6 +7560,50 @@ private fun splitTunnelConnectionSummary(
         }
         else -> "All apps"
     }
+}
+
+// Haptic Feedback Utilities
+
+/**
+ * Remembers the haptic feedback instance from the current view.
+ */
+@Composable
+private fun rememberHapticFeedback(): HapticFeedback {
+    val view = LocalView.current
+    return remember {
+        object : HapticFeedback {
+            override fun performHapticFeedback(hapticFeedbackType: HapticFeedbackType) {
+                when (hapticFeedbackType) {
+                    HapticFeedbackType.LongPress -> view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    HapticFeedbackType.TextHandleMove -> view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Performs a light haptic feedback.
+ * Use for: tab switches, toggle interactions, minor actions.
+ */
+private fun HapticFeedback.performLight() {
+    performHapticFeedback(HapticFeedbackType.TextHandleMove)
+}
+
+/**
+ * Performs a medium haptic feedback.
+ * Use for: button clicks, profile actions, important interactions.
+ */
+private fun HapticFeedback.performMedium() {
+    performHapticFeedback(HapticFeedbackType.LongPress)
+}
+
+/**
+ * Performs a heavy haptic feedback.
+ * Use for: drag operations, destructive actions.
+ */
+private fun HapticFeedback.performHeavy() {
+    performHapticFeedback(HapticFeedbackType.LongPress)
 }
 
 private fun compactAppLabelSummary(appLabels: List<String>): String {

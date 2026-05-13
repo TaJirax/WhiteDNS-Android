@@ -64,6 +64,7 @@ class WhiteDnsSettingsStore(
             customServerEncryptionMethod = legacyCustomServerEncryptionMethod,
             connectionMode = legacyConnectionMode,
             protocolType = preferences.getString(KeyProtocolType, defaults.protocolType) ?: defaults.protocolType,
+            themeMode = preferences.getString(KeyThemeMode, defaults.themeMode) ?: defaults.themeMode,
             resolverText = if (resolverText == LegacyDefaultResolverText) defaults.resolverText else resolverText,
             listenIp = preferences.getString(KeyListenIp, defaults.listenIp) ?: defaults.listenIp,
             listenPort = preferences.getString(KeyListenPort, defaults.listenPort) ?: defaults.listenPort,
@@ -201,6 +202,7 @@ class WhiteDnsSettingsStore(
             .putInt(KeyCustomServerEncryptionMethod, normalizedSettings.customServerEncryptionMethod)
             .putString(KeyConnectionMode, normalizedSettings.connectionMode)
             .putString(KeyProtocolType, normalizedSettings.protocolType)
+            .putString(KeyThemeMode, normalizedSettings.themeMode)
             .putString(KeyResolverText, normalizedSettings.resolverText)
             .putString(KeyListenIp, normalizedSettings.listenIp)
             .putString(KeyListenPort, normalizedSettings.listenPort)
@@ -624,6 +626,7 @@ class WhiteDnsSettingsStore(
         const val KeyCustomServerEncryptionMethod = "custom_server_encryption_method"
         const val KeyConnectionMode = "connection_mode"
         const val KeyProtocolType = "protocol_type"
+        const val KeyThemeMode = "theme_mode"
         const val KeyResolverText = "resolver_text"
         const val KeyListenIp = "listen_ip"
         const val KeyListenPort = "listen_port"

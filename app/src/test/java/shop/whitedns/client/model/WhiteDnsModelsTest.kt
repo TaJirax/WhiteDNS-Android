@@ -3,6 +3,7 @@ package shop.whitedns.client.model
 import java.util.Base64
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -165,6 +166,15 @@ class WhiteDnsModelsTest {
     }
 
     @Test
+    fun syncSelectedConnectionProfileFieldsNormalizesThemeMode() {
+        val settings = WhiteDnsSettings(themeMode = "invalid")
+
+        val syncedSettings = settings.syncSelectedConnectionProfileFields()
+
+        assertEquals(WhiteDnsThemeMode.System, syncedSettings.themeMode)
+    }
+
+    @Test
     fun moveConnectionProfileReordersCustomProfilesForSelectionLists() {
         val first = ConnectionProfile(id = "profile-first", name = "First", serverMode = "custom")
         val second = ConnectionProfile(id = "profile-second", name = "Second", serverMode = "custom")
@@ -257,6 +267,42 @@ class WhiteDnsModelsTest {
     }
 
     @Test
+    fun saveResolverProfileAsAddsProfileWithoutChangingSelectedResolver() {
+        val selectedProfile = ResolverProfile(
+            id = "resolver-main",
+            name = "Main",
+            resolverText = "1.1.1.1",
+        )
+        val settings = WhiteDnsSettings(
+            selectedConnectionProfileId = "profile-main",
+            connectionProfiles = listOf(
+                ConnectionProfile(
+                    id = "profile-main",
+                    name = "Main",
+                    resolverProfileId = selectedProfile.id,
+                ),
+            ),
+            selectedResolverProfileId = selectedProfile.id,
+            resolverProfiles = listOf(selectedProfile),
+            resolverText = selectedProfile.resolverText,
+        )
+
+        val updatedSettings = settings.saveResolverProfileAs(
+            name = "Scan Results",
+            resolverText = "8.8.8.8:53, 9.9.9.9",
+        )
+
+        assertEquals(selectedProfile.id, updatedSettings.selectedResolverProfileId)
+        assertEquals(selectedProfile.id, updatedSettings.selectedConnectionProfile().resolverProfileId)
+        assertEquals(selectedProfile.resolverText, updatedSettings.resolverText)
+        assertEquals(2, updatedSettings.normalizedResolverProfiles().size)
+        assertEquals(
+            "8.8.8.8\n9.9.9.9",
+            updatedSettings.normalizedResolverProfiles().last().resolverText,
+        )
+    }
+
+    @Test
     fun saveSelectedAdvancedProfileDoesNotPersistDefaultProfile() {
         val settings = WhiteDnsSettings(uploadDuplication = "9")
 
@@ -304,6 +350,133 @@ class WhiteDnsModelsTest {
     }
 
     @Test
+    fun upsertAdvancedProfilePersistsSelectsAndAppliesProfile() {
+        val profile = AdvancedSettingsProfile.fromSettings(
+            settings = WhiteDnsSettings(uploadDuplication = "5", logLevel = "INFO"),
+            id = "advanced-fast",
+            name = "Fast",
+        )
+
+        val updatedSettings = WhiteDnsSettings().upsertAdvancedProfile(profile)
+
+        assertEquals("advanced-fast", updatedSettings.selectedAdvancedProfileId)
+        assertEquals("Fast", updatedSettings.selectedAdvancedProfile().name)
+        assertEquals("5", updatedSettings.uploadDuplication)
+        assertEquals("INFO", updatedSettings.logLevel)
+    }
+
+    @Test
+    fun moveAdvancedProfileToIndexReordersCustomProfilesAfterDefault() {
+        val first = AdvancedSettingsProfile.fromSettings(
+            settings = WhiteDnsSettings(uploadDuplication = "4"),
+            id = "advanced-first",
+            name = "First",
+        )
+        val second = AdvancedSettingsProfile.fromSettings(
+            settings = WhiteDnsSettings(uploadDuplication = "5"),
+            id = "advanced-second",
+            name = "Second",
+        )
+        val third = AdvancedSettingsProfile.fromSettings(
+            settings = WhiteDnsSettings(uploadDuplication = "6"),
+            id = "advanced-third",
+            name = "Third",
+        )
+        val settings = WhiteDnsSettings(
+            selectedAdvancedProfileId = first.id,
+            advancedProfiles = listOf(first, second, third),
+        )
+
+        val updatedSettings = settings.moveAdvancedProfileToIndex("advanced-first", 2)
+
+        assertEquals(
+            listOf(AdvancedSettingsProfile.DefaultId, "advanced-second", "advanced-third", "advanced-first"),
+            updatedSettings.normalizedAdvancedProfiles().map { it.id },
+        )
+        assertEquals(first.id, updatedSettings.selectedAdvancedProfileId)
+    }
+
+    @Test
+    fun deleteSelectedAdvancedProfileReturnsToDefaultSettings() {
+        val savedSettings = WhiteDnsSettings(
+            uploadDuplication = "5",
+            logLevel = "INFO",
+        ).saveCurrentAdvancedProfileAs("Fast")
+        val selectedProfileId = savedSettings.selectedAdvancedProfileId
+
+        val updatedSettings = savedSettings.deleteAdvancedProfile(selectedProfileId)
+
+        assertEquals(AdvancedSettingsProfile.DefaultId, updatedSettings.selectedAdvancedProfileId)
+        assertEquals("3", updatedSettings.uploadDuplication)
+        assertEquals("WARN", updatedSettings.logLevel)
+        assertTrue(updatedSettings.advancedProfiles.none { it.id == selectedProfileId })
+    }
+
+    @Test
+    fun importAdvancedSettingsProfileFromTomlIgnoresServerFieldsAndSavesProfile() {
+        val connectionProfile = ConnectionProfile(
+            id = "profile-main",
+            name = "Main",
+            customServerDomain = "existing.example.com",
+            customServerEncryptionKey = "existing-key",
+        )
+        val settings = WhiteDnsSettings(
+            selectedConnectionProfileId = connectionProfile.id,
+            connectionProfiles = listOf(connectionProfile),
+        )
+
+        val importedSettings = settings.importAdvancedSettingsProfileFromToml(
+            name = "Imported",
+            toml = """
+                DOMAINS = ["ignored.example.com"]
+                DATA_ENCRYPTION_METHOD = 5
+                ENCRYPTION_KEY = "ignored-key"
+                LISTEN_PORT = 12345
+                SOCKS5_AUTH = true
+                SOCKS5_USER = "alice"
+                UPLOAD_PACKET_DUPLICATION_COUNT = 4
+                LOG_LEVEL = "INFO"
+            """.trimIndent(),
+        )
+
+        assertEquals("Imported", importedSettings.selectedAdvancedProfile().name)
+        assertEquals("12345", importedSettings.listenPort)
+        assertEquals(true, importedSettings.socks5Authentication)
+        assertEquals("alice", importedSettings.socksUsername)
+        assertEquals("4", importedSettings.uploadDuplication)
+        assertEquals("INFO", importedSettings.logLevel)
+        assertEquals("existing.example.com", importedSettings.selectedConnectionProfile().customServerDomain)
+        assertEquals("existing-key", importedSettings.selectedConnectionProfile().customServerEncryptionKey)
+    }
+
+    @Test
+    fun importAdvancedSettingsProfileFromTomlRejectsInvalidValues() {
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            WhiteDnsSettings().importAdvancedSettingsProfileFromToml(
+                name = "Bad",
+                toml = "LISTEN_PORT = 70000",
+            )
+        }
+
+        assertTrue(error.message.orEmpty().contains("LISTEN_PORT"))
+    }
+
+    @Test
+    fun importAdvancedSettingsProfileFromTomlRejectsFilesWithoutSettings() {
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            WhiteDnsSettings().importAdvancedSettingsProfileFromToml(
+                name = "Server only",
+                toml = """
+                    DOMAINS = ["server.example.com"]
+                    ENCRYPTION_KEY = "secret-key"
+                """.trimIndent(),
+            )
+        }
+
+        assertTrue(error.message.orEmpty().contains("No supported advanced settings"))
+    }
+
+    @Test
     fun resolveBoundsTrafficWarmupSettings() {
         val settings = WhiteDnsSettings(
             trafficWarmupProbeCount = "99",
@@ -312,7 +485,7 @@ class WhiteDnsModelsTest {
 
         val resolvedSettings = settings.resolve()
 
-        assertEquals(true, resolvedSettings.trafficWarmupEnabled)
+        assertEquals(false, resolvedSettings.trafficWarmupEnabled)
         assertEquals(10, resolvedSettings.trafficWarmupProbeCount)
         assertEquals(2, resolvedSettings.trafficKeepaliveIntervalSeconds)
     }
@@ -441,7 +614,7 @@ class WhiteDnsModelsTest {
         assertEquals("7", importedSettings.downloadDuplication)
         assertEquals("4", importedSettings.rxTxWorkers)
         assertEquals("resolvers", importedSettings.startupMode)
-        assertEquals(true, importedSettings.trafficWarmupEnabled)
+        assertEquals(false, importedSettings.trafficWarmupEnabled)
         assertEquals("5", importedSettings.trafficKeepaliveIntervalSeconds)
         assertEquals(WhiteDnsOptions.SplitTunnelModeOff, importedSettings.splitTunnelMode)
         assertEquals(emptyList<String>(), importedSettings.splitTunnelPackages)
@@ -481,7 +654,7 @@ class WhiteDnsModelsTest {
         assertEquals("proxy", importedSettings.connectionMode)
         assertEquals("10886", importedSettings.listenPort)
         assertEquals(true, importedSettings.httpProxyEnabled)
-        assertEquals(true, importedSettings.trafficWarmupEnabled)
+        assertEquals(false, importedSettings.trafficWarmupEnabled)
         assertEquals("WARN", importedSettings.logLevel)
     }
 
@@ -635,6 +808,21 @@ class WhiteDnsModelsTest {
     }
 
     @Test
+    fun validateResolverTextAcceptsQuotedCommaSeparatedExportRows() {
+        val validation = validateResolverText(
+            """
+            "resolver","port"
+            "1.1.1.1:53","valid"
+            "8.8.8.8",53
+            "999.1.1.1","bad"
+            """.trimIndent(),
+        )
+
+        assertEquals(listOf("1.1.1.1", "8.8.8.8"), validation.normalizedResolvers)
+        assertEquals(listOf("resolver", "port", "valid", "53", "999.1.1.1", "bad"), validation.invalidEntries)
+    }
+
+    @Test
     fun validateResolverTextRejectsInvalidResolverEntries() {
         val validation = validateResolverText(
             """
@@ -651,6 +839,39 @@ class WhiteDnsModelsTest {
             listOf("google.com", "999.1.1.1", "8.8.8.8:70000", "10.0.0.0/8"),
             validation.invalidEntries,
         )
+    }
+
+    @Test
+    fun recoverIfStaleStopsOldRunningScanState() {
+        val recovered = WhiteDnsScanState(
+            sessionId = "scan-1",
+            status = WhiteDnsScanStatus.Running,
+            updatedAtMillis = 10_000L,
+            message = "Scanning",
+        ).recoverIfStale(
+            nowMillis = 30_000L,
+            staleAfterMillis = 15_000L,
+        )
+
+        assertEquals(WhiteDnsScanStatus.Stopped, recovered.status)
+        assertEquals("Previous scan is no longer active", recovered.message)
+        assertEquals(30_000L, recovered.updatedAtMillis)
+    }
+
+    @Test
+    fun recoverIfStaleKeepsFreshRunningScanState() {
+        val freshState = WhiteDnsScanState(
+            sessionId = "scan-2",
+            status = WhiteDnsScanStatus.Running,
+            updatedAtMillis = 20_000L,
+            message = "Scanning",
+        )
+        val recovered = freshState.recoverIfStale(
+            nowMillis = 30_000L,
+            staleAfterMillis = 15_000L,
+        )
+
+        assertEquals(freshState, recovered)
     }
 
     private fun decodeStormDnsProfilePayload(link: String): String {

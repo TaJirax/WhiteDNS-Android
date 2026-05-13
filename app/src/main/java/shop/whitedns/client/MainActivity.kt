@@ -44,7 +44,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         setContent {
-            WhiteDnsTheme {
+            WhiteDnsTheme(themeMode = viewModel.uiState.settings.themeMode) {
                 val context = LocalContext.current
                 var shouldConnectAfterNotificationPermission by rememberSaveable { mutableStateOf(false) }
                 val vpnPermissionLauncher = rememberLauncherForActivityResult(
@@ -123,6 +123,12 @@ class MainActivity : ComponentActivity() {
                             ConnectionStatus.CONNECTED -> viewModel.disconnect()
                         }
                     },
+                    onScanFileSelected = viewModel::beginScanFromFile,
+                    onScanStartClick = viewModel::startPreparedScan,
+                    onScanConnectionProfileChange = viewModel::updateScanConnectionProfile,
+                    onScanWorkerCountChange = viewModel::updateScanWorkerCount,
+                    onScanStopClick = viewModel::stopScan,
+                    onScanResumeClick = viewModel::resumeScan,
                     onSettingsChange = viewModel::updateSettings,
                 )
             }

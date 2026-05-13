@@ -65,6 +65,12 @@
             android:process=":proxy" />
 
         <service
+            android:name=".scan.WhiteDnsScanService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:process=":scan" />
+
+        <service
             android:name=".quicksettings.WhiteDnsTileService"
             android:exported="true"
             android:icon="@drawable/ic_notification"
