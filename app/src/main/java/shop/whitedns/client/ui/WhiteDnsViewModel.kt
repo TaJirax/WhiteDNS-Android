@@ -19,6 +19,9 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -27,9 +30,14 @@ import java.io.File
 import java.net.Inet4Address
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
+import java.net.ServerSocket
 import java.net.Socket
 import java.util.Collections
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
+import shop.whitedns.client.model.AdvancedSettingsProfile
+import shop.whitedns.client.model.AutoTuneTrialResult
+import shop.whitedns.client.model.ConnectionProfile
 import shop.whitedns.client.model.ConnectionProgressState
 import shop.whitedns.client.model.ConnectionStats
 import shop.whitedns.client.model.ConnectionStatus
@@ -45,7 +53,12 @@ import shop.whitedns.client.model.WhiteDnsRuntimeProxy
 import shop.whitedns.client.model.WhiteDnsSettings
 import shop.whitedns.client.model.WhiteDnsSettingsStore
 import shop.whitedns.client.model.WhiteDnsUiState
+import shop.whitedns.client.model.WhiteDnsAutoTunePresets
+import shop.whitedns.client.model.WhiteDnsParallelTest
+import shop.whitedns.client.model.applyAdvancedProfile
+import shop.whitedns.client.model.applyAutoTunePreset
 import shop.whitedns.client.model.importStormDnsProfileLink
+import shop.whitedns.client.model.normalizedAdvancedProfiles
 import shop.whitedns.client.model.normalizedConnectionProfiles
 import shop.whitedns.client.model.normalizedResolverProfiles
 import shop.whitedns.client.model.resolve
@@ -55,11 +68,12 @@ import shop.whitedns.client.model.syncSelectedConnectionProfileFields
 import shop.whitedns.client.proxy.WhiteDnsProxyEvent
 import shop.whitedns.client.proxy.WhiteDnsProxyEvents
 import shop.whitedns.client.proxy.WhiteDnsProxyService
-import shop.whitedns.client.runtime.StormDnsTrafficStats
+import shop.whitedns.client.runtime.StormDnsTrafficAccounting
 import shop.whitedns.client.runtime.WhiteDnsRuntimeState
 import shop.whitedns.client.runtime.WhiteDnsRuntimeStateStore
 import shop.whitedns.client.runtime.WhiteDnsTrafficWarmup
 import shop.whitedns.client.runtime.RuntimeLaunchRequestStore
+import shop.whitedns.client.runtime.formatTrafficSpeed
 import shop.whitedns.client.runtime.parseStormDnsConnectionProgressLine
 import shop.whitedns.client.runtime.parseStormDnsResolverStateLine
 import shop.whitedns.client.runtime.parseStormDnsTrafficStatsLine
@@ -70,6 +84,7 @@ import shop.whitedns.client.scan.WhiteDnsScanSettingsStore
 import shop.whitedns.client.scan.WhiteDnsScanStateStore
 import shop.whitedns.client.scan.WhiteDnsScannerResultStore
 import shop.whitedns.client.storm.StormDnsBuiltInPool
+import shop.whitedns.client.storm.StormDnsProcessManager
 import shop.whitedns.client.vpn.WhiteDnsVpnService
 import shop.whitedns.client.vpn.WhiteDnsVpnEvent
 import shop.whitedns.client.vpn.WhiteDnsVpnEvents
@@ -119,8 +134,9 @@ class WhiteDnsViewModel(
     private var trafficBaseline = TrafficSnapshot.empty()
     private var lastTrafficSnapshot = TrafficSnapshot.empty()
     private var activeVpnTrafficInterfaceName: String? = null
-    @Volatile
-    private var latestStormDnsTrafficStats: StormDnsTrafficStats? = null
+    private val stormDnsTrafficAccounting = StormDnsTrafficAccounting()
+    private val autoTuneTrialManagersLock = Any()
+    private var autoTuneTrialManagers: List<StormDnsProcessManager> = emptyList()
     private var lastProgressUiUpdateMillis = 0L
     private var lastResolverUiUpdateMillis = 0L
     private val socksStreamTrackerLock = Any()
@@ -200,7 +216,8 @@ class WhiteDnsViewModel(
             return
         }
 
-        val normalizedSettings = settings.syncSelectedConnectionProfileFields()
+        val syncedSettings = settings.syncSelectedConnectionProfileFields()
+        val normalizedSettings = syncedSettings
         val scanConnectionProfileId = resolveScanConnectionProfileId(
             settings = normalizedSettings,
             requestedProfileId = uiState.scanConnectionProfileId,
@@ -306,10 +323,11 @@ class WhiteDnsViewModel(
             resolverRuntimeState = ResolverRuntimeState(),
             connectionProgress = ConnectionProgressState(phase = "preparing", percent = 3),
             connectionVerification = ConnectionVerificationState(),
+            autoTuneTrialResults = emptyList(),
             connectionLogs = listOf("Starting StormDNS"),
         )
         activeVpnTrafficInterfaceName = null
-        latestStormDnsTrafficStats = null
+        resetTrafficAccounting()
         trafficBaseline = currentTrafficSnapshot()
         lastTrafficSnapshot = trafficBaseline
         resetSocksStreamTracker()
@@ -325,6 +343,7 @@ class WhiteDnsViewModel(
                     resolverRuntimeState = ResolverRuntimeState(),
                     connectionProgress = ConnectionProgressState(),
                     connectionVerification = ConnectionVerificationState(),
+                    autoTuneTrialResults = emptyList(),
                 )
                 return@launch
             }
@@ -344,58 +363,34 @@ class WhiteDnsViewModel(
                     resolverRuntimeState = ResolverRuntimeState(),
                     connectionProgress = ConnectionProgressState(),
                     connectionVerification = ConnectionVerificationState(),
+                    autoTuneTrialResults = emptyList(),
                 )
                 return@launch
             }
 
             activeServerProfile = serverProfile
             val runtimeSettings = settings.runtimeConnectionSettings()
+            val resolvedRuntimeSettings = runtimeSettings.resolve()
+            val useParallelTest = settings.autoTuneEnabled &&
+                resolvedRuntimeSettings.connectionMode in ParallelTestConnectionModes
             uiState = uiState.copy(
                 settings = settings,
                 activeConnectionProfileId = connectionProfile.id,
             )
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    val resolvedSettings = runtimeSettings.resolve()
-                    activeProxyListenPort = resolvedSettings.listenPort
-                    val modeLabel = if (resolvedSettings.connectionMode == "vpn") {
-                        "Full System VPN"
-                    } else {
-                        "Proxy Only"
-                    }
-                    appendLog(
-                        if (connectionProfile.serverMode == "custom") {
-                            "Using custom StormDNS server"
-                        } else {
-                            "Using configured StormDNS server"
-                        },
-                    )
-                    appendLog("Connection mode: $modeLabel")
-                    if (resolvedSettings.connectionMode == "vpn") {
-                        appendLog("Starting full-device VPN service")
-                        WhiteDnsVpnService.start(
-                            context = getApplication<Application>().applicationContext,
-                            sessionId = sessionId,
-                            serverProfile = serverProfile,
-                            settings = runtimeSettings,
-                        )
-                        true
-                    } else {
-                        appendLog("Starting local proxy service")
-                        WhiteDnsProxyService.start(
-                            context = getApplication<Application>().applicationContext,
-                            sessionId = sessionId,
-                            serverProfile = serverProfile,
-                            settings = runtimeSettings,
-                        )
-                        true
-                    }
-                }
-            }
-
-            val started = result.getOrElse { error ->
-                appendLog("Launch failed: ${error.message ?: error::class.java.simpleName}")
-                false
+            val started = if (useParallelTest) {
+                runParallelTestConnection(
+                    sessionId = sessionId,
+                    baseSettings = settings,
+                    connectionProfile = connectionProfile,
+                    serverProfile = serverProfile,
+                )
+            } else {
+                launchRuntime(
+                    sessionId = sessionId,
+                    connectionProfile = connectionProfile,
+                    serverProfile = serverProfile,
+                    runtimeSettings = runtimeSettings,
+                )
             }
 
             if (started) {
@@ -409,7 +404,7 @@ class WhiteDnsViewModel(
                 }
                 activeProxyListenPort = WhiteDnsRuntimeProxy.ListenPortInt
                 activeRuntimeSessionId = ""
-                latestStormDnsTrafficStats = null
+                resetTrafficAccounting()
                 resetSocksStreamTracker()
                 resetRuntimeUiThrottles()
                 appendLog("Connection failed")
@@ -426,12 +421,498 @@ class WhiteDnsViewModel(
         }
     }
 
+    private suspend fun launchRuntime(
+        sessionId: String,
+        connectionProfile: ConnectionProfile,
+        serverProfile: StormDnsServerProfile,
+        runtimeSettings: WhiteDnsSettings,
+    ): Boolean {
+        val result = withContext(Dispatchers.IO) {
+            runCatching {
+                val resolvedSettings = runtimeSettings.resolve()
+                activeProxyListenPort = resolvedSettings.listenPort
+                val modeLabel = if (resolvedSettings.connectionMode == "vpn") {
+                    "Full System VPN"
+                } else {
+                    "Proxy Only"
+                }
+                appendLog(
+                    if (connectionProfile.serverMode == "custom") {
+                        "Using custom StormDNS server"
+                    } else {
+                        "Using configured StormDNS server"
+                    },
+                )
+                appendLog("Connection mode: $modeLabel")
+                if (resolvedSettings.connectionMode == "vpn") {
+                    appendLog("Starting full-device VPN service")
+                    WhiteDnsVpnService.start(
+                        context = getApplication<Application>().applicationContext,
+                        sessionId = sessionId,
+                        serverProfile = serverProfile,
+                        settings = runtimeSettings,
+                    )
+                } else {
+                    appendLog("Starting local proxy service")
+                    WhiteDnsProxyService.start(
+                        context = getApplication<Application>().applicationContext,
+                        sessionId = sessionId,
+                        serverProfile = serverProfile,
+                        settings = runtimeSettings,
+                    )
+                }
+                true
+            }
+        }
+
+        return result.getOrElse { error ->
+            appendLog("Launch failed: ${error.message ?: error::class.java.simpleName}")
+            false
+        }
+    }
+
+    private suspend fun runParallelTestConnection(
+        sessionId: String,
+        baseSettings: WhiteDnsSettings,
+        connectionProfile: ConnectionProfile,
+        serverProfile: StormDnsServerProfile,
+    ): Boolean {
+        return runParallelProxyTestConnection(
+            sessionId = sessionId,
+            baseSettings = baseSettings,
+            connectionProfile = connectionProfile,
+            serverProfile = serverProfile,
+        )
+    }
+
+    private suspend fun runParallelProxyTestConnection(
+        sessionId: String,
+        baseSettings: WhiteDnsSettings,
+        connectionProfile: ConnectionProfile,
+        serverProfile: StormDnsServerProfile,
+    ): Boolean = coroutineScope {
+        val finalConnectionMode = baseSettings.runtimeConnectionSettings().resolve().connectionMode
+        val finalModeLabel = if (finalConnectionMode == WhiteDnsRuntimeStateStore.ModeVpn) {
+            "Full VPN"
+        } else {
+            "Proxy Mode"
+        }
+        val selectedConfigs = buildParallelTestConfigs(baseSettings)
+        if (selectedConfigs.isEmpty()) {
+            appendLog("Parallel Test: no configuration selected")
+            uiState = uiState.copy(
+                connectionProgress = ConnectionProgressState(),
+                connectionVerification = ConnectionVerificationState(
+                    status = ConnectionVerificationStatus.Failed,
+                    message = "Parallel Test failed: no configuration selected",
+                    checkedAtMillis = System.currentTimeMillis(),
+                ),
+            )
+            return@coroutineScope false
+        }
+
+        val ports = allocateRandomLocalPorts(selectedConfigs.size)
+        val trialPlans = selectedConfigs.mapIndexed { index, config ->
+            AutoTuneTrialPlan(
+                config = config,
+                settings = config.userSettings
+                    .copy(
+                        connectionMode = WhiteDnsRuntimeStateStore.ModeProxy,
+                        listenIp = WhiteDnsRuntimeProxy.ListenIp,
+                        listenPort = ports[index].toString(),
+                        httpProxyEnabled = false,
+                        localDnsEnabled = false,
+                        trafficWarmupEnabled = false,
+                        autoTuneEnabled = true,
+                    )
+                    .syncSelectedConnectionProfileFields(),
+                result = AutoTuneTrialResult(
+                    configId = config.id,
+                    label = config.label,
+                    listenIp = WhiteDnsRuntimeProxy.ListenIp,
+                    listenPort = ports[index],
+                    status = "starting",
+                    message = "Starting",
+                ),
+            )
+        }
+        val trialManagers = trialPlans.associate { plan ->
+            plan.config.id to StormDnsProcessManager(appContext)
+        }
+
+        setAutoTuneTrialManagers(trialManagers.values.toList())
+        uiState = uiState.copy(
+            settings = baseSettings,
+            connectionStatus = ConnectionStatus.CONNECTING,
+            connectionStats = ConnectionStats(),
+            resolverRuntimeState = ResolverRuntimeState(),
+            connectionProgress = ConnectionProgressState(
+                phase = "autotune",
+                percent = 5,
+                completed = 0,
+                total = trialPlans.size,
+            ),
+            connectionVerification = ConnectionVerificationState(
+                status = ConnectionVerificationStatus.Checking,
+                message = "Parallel Test: testing ${trialPlans.size} SOCKS configurations before $finalModeLabel",
+            ),
+            autoTuneTrialResults = trialPlans.map { it.result },
+            activeConnectionProfileId = connectionProfile.id,
+        )
+        appendLog("Parallel Test: testing ${trialPlans.size} SOCKS configurations in parallel before $finalModeLabel")
+
+        try {
+            val startups = trialPlans.map { plan ->
+                async(Dispatchers.IO) {
+                    startParallelAutoTuneTrial(
+                        plan = plan,
+                        manager = trialManagers.getValue(plan.config.id),
+                        serverProfile = serverProfile,
+                    )
+                }
+            }.awaitAll()
+            val readyStartups = startups.filter { it.ready }
+            if (readyStartups.isNotEmpty()) {
+                withContext(Dispatchers.Main.immediate) {
+                    uiState = uiState.copy(
+                        connectionVerification = ConnectionVerificationState(
+                            status = ConnectionVerificationStatus.Checking,
+                            message = "Parallel Test: running tests on ${readyStartups.size} SOCKS configurations",
+                        ),
+                    )
+                }
+                delay(AutoTuneMeasurementSettleMillis)
+            }
+            val measuredResults = readyStartups.map { startup ->
+                async(Dispatchers.IO) {
+                    measureParallelAutoTuneTrial(startup)
+                }
+            }.awaitAll()
+            val trialResults = measuredResults + startups
+                .filterNot { it.ready }
+                .map { it.result }
+            val selectedResult = trialResults
+                .filter { it.scoreBytesPerSecond > 0L }
+                .sortedWith(
+                    compareByDescending<AutoTuneResult> { it.scoreBytesPerSecond }
+                        .thenBy { it.pingMillis ?: Long.MAX_VALUE },
+                )
+                .firstOrNull()
+                ?: trialResults
+                    .filter { it.ready }
+                    .maxByOrNull { it.scoreBytesPerSecond }
+                ?: run {
+                    appendLog("Parallel Test: no SOCKS configuration became ready")
+                    uiState = uiState.copy(
+                        connectionProgress = ConnectionProgressState(),
+                        connectionVerification = ConnectionVerificationState(
+                            status = ConnectionVerificationStatus.Failed,
+                            message = "Parallel Test failed: no SOCKS configuration became ready",
+                            checkedAtMillis = System.currentTimeMillis(),
+                        ),
+                    )
+                    return@coroutineScope false
+                }
+
+            val selectedUserSettings = selectedResult.config.userSettings
+                .copy(
+                    connectionMode = finalConnectionMode,
+                    autoTuneEnabled = true,
+                )
+                .syncSelectedConnectionProfileFields()
+            val selectedRuntimeSettings = selectedUserSettings.runtimeConnectionSettings()
+            activeRuntimeSessionId = sessionId
+            activeProxyListenPort = selectedRuntimeSettings.resolve().listenPort
+            uiState = uiState.copy(
+                settings = baseSettings,
+                connectionStatus = ConnectionStatus.CONNECTING,
+                connectionStats = ConnectionStats(),
+                resolverRuntimeState = ResolverRuntimeState(),
+                connectionProgress = ConnectionProgressState(phase = "preparing", percent = 3),
+                connectionVerification = ConnectionVerificationState(),
+                autoTuneTrialResults = uiState.autoTuneTrialResults.map { result ->
+                    result.copy(selected = result.configId == selectedResult.config.id)
+                },
+                activeConnectionProfileId = connectionProfile.id,
+            )
+            appendLog(
+                "Parallel Test: selected ${selectedResult.config.label} for this connection " +
+                    "(${formatTrafficSpeed(selectedResult.scoreBytesPerSecond)}, " +
+                    "ping ${formatAutoTuneLatency(selectedResult.pingMillis)}); starting $finalModeLabel",
+            )
+            launchRuntime(
+                sessionId = sessionId,
+                connectionProfile = connectionProfile,
+                serverProfile = serverProfile,
+                runtimeSettings = selectedRuntimeSettings,
+            )
+        } finally {
+            withContext(Dispatchers.IO) {
+                stopAutoTuneTrialManagers()
+            }
+        }
+    }
+
+    private fun buildParallelTestConfigs(baseSettings: WhiteDnsSettings): List<AutoTuneTrialConfig> {
+        val advancedProfiles = baseSettings.normalizedAdvancedProfiles()
+        val selectedConfigIds = WhiteDnsParallelTest.normalizeConfigIds(
+            configIds = baseSettings.parallelTestSelectedConfigIds,
+            advancedProfiles = advancedProfiles,
+        )
+        return selectedConfigIds.mapNotNull { configId ->
+            WhiteDnsParallelTest.presetIdFromConfigId(configId)?.let { presetId ->
+                val preset = WhiteDnsAutoTunePresets.all.firstOrNull { it.id == presetId } ?: return@mapNotNull null
+                return@mapNotNull AutoTuneTrialConfig(
+                    id = configId,
+                    label = preset.label,
+                    userSettings = baseSettings
+                        .applyAutoTunePreset(preset)
+                        .copy(
+                            autoTuneEnabled = true,
+                            parallelTestSelectedConfigIds = selectedConfigIds,
+                        )
+                        .syncSelectedConnectionProfileFields(),
+                )
+            }
+
+            WhiteDnsParallelTest.settingProfileIdFromConfigId(configId)?.let { profileId ->
+                val profile = advancedProfiles.firstOrNull { it.id == profileId } ?: return@mapNotNull null
+                return@mapNotNull AutoTuneTrialConfig(
+                    id = configId,
+                    label = profile.name.ifBlank { "Setting" },
+                    userSettings = baseSettings
+                        .applyAdvancedProfile(profile)
+                        .copy(
+                            autoTuneEnabled = true,
+                            parallelTestSelectedConfigIds = selectedConfigIds,
+                        )
+                        .syncSelectedConnectionProfileFields(),
+                )
+            }
+
+            null
+        }.take(WhiteDnsParallelTest.MaxSelectedConfigs)
+    }
+
+    private suspend fun startParallelAutoTuneTrial(
+        plan: AutoTuneTrialPlan,
+        manager: StormDnsProcessManager,
+        serverProfile: StormDnsServerProfile,
+    ): AutoTuneTrialStartup {
+        val startupFailure = AtomicReference<String?>(null)
+        return try {
+            withContext(Dispatchers.Main.immediate) {
+                updateAutoTuneTrialResult(plan.result.copy(status = "starting", message = "Starting SOCKS proxy"))
+            }
+            manager.start(serverProfile, plan.settings) { line ->
+                detectStormDnsStartupFailure(line)?.let { failure ->
+                    startupFailure.compareAndSet(null, failure)
+                }
+            }
+            val ready = waitForAutoTuneTrialReady(
+                manager = manager,
+                listenPort = plan.result.listenPort,
+                startupFailure = startupFailure,
+            )
+            if (!ready) {
+                val failureMessage = startupFailure.get() ?: "SOCKS proxy did not become ready"
+                val failedResult = plan.result.copy(status = "failed", message = failureMessage)
+                withContext(Dispatchers.Main.immediate) {
+                    updateAutoTuneTrialResult(failedResult)
+                    updateAutoTuneProgress()
+                }
+                return AutoTuneTrialStartup(
+                    plan = plan,
+                    manager = manager,
+                    ready = false,
+                    result = autoTuneResultForPlan(plan, ready = false),
+                )
+            }
+
+            withContext(Dispatchers.Main.immediate) {
+                updateAutoTuneTrialResult(plan.result.copy(status = "listening", message = "SOCKS proxy ready"))
+            }
+            AutoTuneTrialStartup(
+                plan = plan,
+                manager = manager,
+                ready = true,
+                result = autoTuneResultForPlan(plan, ready = true),
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            val message = error.message ?: error::class.java.simpleName
+            withContext(Dispatchers.Main.immediate) {
+                updateAutoTuneTrialResult(plan.result.copy(status = "failed", message = message))
+                updateAutoTuneProgress()
+            }
+            AutoTuneTrialStartup(
+                plan = plan,
+                manager = manager,
+                ready = false,
+                result = autoTuneResultForPlan(plan, ready = false),
+            )
+        }
+    }
+
+    private suspend fun measureParallelAutoTuneTrial(startup: AutoTuneTrialStartup): AutoTuneResult {
+        val plan = startup.plan
+        withContext(Dispatchers.Main.immediate) {
+            updateAutoTuneTrialResult(plan.result.copy(status = "measuring", message = "Measuring speed"))
+        }
+        val probeResult = WhiteDnsTrafficWarmup.measureDownloadThroughput(plan.settings.resolve())
+        val score = probeResult?.bytesPerSecond ?: 0L
+        val pingMillis = probeResult?.latencyMillis
+        val completedResult = plan.result.copy(
+            status = "ready",
+            speedBytesPerSecond = score,
+            pingMillis = pingMillis,
+            message = if (score > 0L) "Measured" else "No speed result",
+        )
+        withContext(Dispatchers.Main.immediate) {
+            updateAutoTuneTrialResult(completedResult)
+            updateAutoTuneProgress()
+        }
+        appendLog(
+            "Parallel Test: ${plan.config.label} ${plan.result.listenIp}:${plan.result.listenPort} " +
+                "${formatTrafficSpeed(score)}, ping ${formatAutoTuneLatency(pingMillis)}",
+        )
+        return AutoTuneResult(
+            config = plan.config,
+            listenIp = plan.result.listenIp,
+            listenPort = plan.result.listenPort,
+            scoreBytesPerSecond = score,
+            pingMillis = pingMillis,
+            ready = true,
+        )
+    }
+
+    private suspend fun waitForAutoTuneTrialReady(
+        manager: StormDnsProcessManager,
+        listenPort: Int,
+        startupFailure: AtomicReference<String?>,
+    ): Boolean {
+        val deadline = System.currentTimeMillis() + AutoTuneReadyTimeoutMillis
+        while (System.currentTimeMillis() < deadline) {
+            if (startupFailure.get() != null) {
+                return false
+            }
+            if (!manager.isRunning()) {
+                return false
+            }
+            if (canConnectToLocalPort(listenPort)) {
+                return true
+            }
+            delay(AutoTuneSignalPollMillis)
+        }
+        return false
+    }
+
+    private fun updateAutoTuneTrialResult(result: AutoTuneTrialResult) {
+        val currentResults = uiState.autoTuneTrialResults
+        val resultIndex = currentResults.indexOfFirst { it.configId == result.configId }
+        val nextResults = if (resultIndex >= 0) {
+            currentResults.toMutableList().also { results ->
+                results[resultIndex] = result
+            }
+        } else {
+            currentResults + result
+        }
+        uiState = uiState.copy(autoTuneTrialResults = nextResults)
+    }
+
+    private fun updateAutoTuneProgress() {
+        val results = uiState.autoTuneTrialResults
+        val completed = results.count { it.status == "ready" || it.status == "failed" }
+        val total = results.size.coerceAtLeast(1)
+        uiState = uiState.copy(
+            connectionProgress = ConnectionProgressState(
+                phase = "autotune",
+                percent = ((completed * 100) / total).coerceIn(5, 99),
+                completed = completed,
+                total = results.size,
+            ),
+            connectionVerification = ConnectionVerificationState(
+                status = ConnectionVerificationStatus.Checking,
+                message = "Parallel Test: measured $completed/${results.size} SOCKS configurations",
+            ),
+        )
+    }
+
+    private fun autoTuneResultForPlan(
+        plan: AutoTuneTrialPlan,
+        ready: Boolean,
+    ): AutoTuneResult {
+        return AutoTuneResult(
+            config = plan.config,
+            listenIp = plan.result.listenIp,
+            listenPort = plan.result.listenPort,
+            scoreBytesPerSecond = 0L,
+            pingMillis = null,
+            ready = ready,
+        )
+    }
+
+    private fun allocateRandomLocalPorts(count: Int): List<Int> {
+        val ports = linkedSetOf<Int>()
+        val blockedPorts = setOf(
+            WhiteDnsRuntimeProxy.ListenPortInt,
+            WhiteDnsRuntimeProxy.HttpProxyPortInt,
+            WhiteDnsRuntimeProxy.LocalDnsPortInt,
+        )
+        while (ports.size < count) {
+            val port = ServerSocket(0).use { socket ->
+                socket.reuseAddress = true
+                socket.localPort
+            }
+            if (port !in blockedPorts) {
+                ports += port
+            }
+        }
+        return ports.toList()
+    }
+
+    private fun setAutoTuneTrialManagers(managers: List<StormDnsProcessManager>) {
+        synchronized(autoTuneTrialManagersLock) {
+            autoTuneTrialManagers = managers
+        }
+    }
+
+    private fun stopAutoTuneTrialManagers() {
+        val managers = synchronized(autoTuneTrialManagersLock) {
+            autoTuneTrialManagers.also {
+                autoTuneTrialManagers = emptyList()
+            }
+        }
+        managers.forEach { manager ->
+            runCatching {
+                manager.stop()
+            }
+        }
+    }
+
+    private fun detectStormDnsStartupFailure(line: String): String? {
+        val normalized = line.lowercase()
+        return when {
+            "no valid connections found after mtu testing" in normalized ||
+                "mtu tests failed: no valid connections" in normalized ||
+                "no valid connections after mtu testing" in normalized ->
+                "No DNS resolver passed MTU testing"
+            else -> null
+        }
+    }
+
+    private fun formatAutoTuneLatency(pingMillis: Long?): String {
+        return pingMillis?.let { "${it}ms" } ?: "n/a"
+    }
+
     fun disconnect() {
         connectJob?.cancel()
         statsJob?.cancel()
         runtimeRefreshJob?.cancel()
         verificationJob?.cancel()
         viewModelScope.launch(Dispatchers.IO) {
+            stopAutoTuneTrialManagers()
             stopAllRuntimeServices()
             if (uiState.settings.resolve().connectionMode == "vpn") {
                 delay(VpnStopBeforeStormDnsStopDelayMillis)
@@ -440,7 +921,7 @@ class WhiteDnsViewModel(
         activeProxyListenPort = WhiteDnsRuntimeProxy.ListenPortInt
         activeVpnTrafficInterfaceName = null
         activeRuntimeSessionId = ""
-        latestStormDnsTrafficStats = null
+        resetTrafficAccounting()
         resetSocksStreamTracker()
         resetRuntimeUiThrottles()
         appendLog("Disconnected")
@@ -450,6 +931,7 @@ class WhiteDnsViewModel(
             resolverRuntimeState = ResolverRuntimeState(),
             connectionProgress = ConnectionProgressState(),
             connectionVerification = ConnectionVerificationState(),
+            autoTuneTrialResults = emptyList(),
             activeConnectionProfileId = null,
         )
     }
@@ -476,6 +958,21 @@ class WhiteDnsViewModel(
     }
 
     fun beginScanFromFile(uri: Uri) {
+        beginScanFromSource(sourceName = "Resolver file") { sessionId ->
+            importScanResolverFile(uri, sessionId)
+        }
+    }
+
+    fun beginScanFromDefaultResolvers() {
+        beginScanFromSource(sourceName = "Default resolver list") { sessionId ->
+            importDefaultScanResolverFile(sessionId)
+        }
+    }
+
+    private fun beginScanFromSource(
+        sourceName: String,
+        importSource: (String) -> ImportedScanResolverFile,
+    ) {
         if (uiState.scanState.isRunning) {
             return
         }
@@ -498,10 +995,10 @@ class WhiteDnsViewModel(
                 val importingState = WhiteDnsScanState(
                     sessionId = sessionId,
                     status = WhiteDnsScanStatus.Starting,
-                    sourceName = "Resolver file",
+                    sourceName = sourceName,
                     workerCount = workerCount,
                     updatedAtMillis = System.currentTimeMillis(),
-                    message = "Importing resolver file",
+                    message = "Importing $sourceName",
                 )
                 withContext(Dispatchers.IO) {
                     WhiteDnsScanStateStore.write(appContext, importingState)
@@ -509,7 +1006,7 @@ class WhiteDnsViewModel(
                 uiState = uiState.copy(scanState = importingState)
 
                 val imported = withContext(Dispatchers.IO) {
-                    importScanResolverFile(uri, sessionId)
+                    importSource(sessionId)
                 }
 
                 withContext(Dispatchers.IO) {
@@ -803,6 +1300,7 @@ class WhiteDnsViewModel(
         runtimeRefreshJob?.cancel()
         verificationJob?.cancel()
         scanLaunchJob?.cancel()
+        stopAutoTuneTrialManagers()
         WhiteDnsProxyEvents.removeListener(proxyEventListener)
         WhiteDnsVpnEvents.removeListener(vpnEventListener)
         unregisterRuntimeBroadcastReceivers()
@@ -850,7 +1348,7 @@ class WhiteDnsViewModel(
         val progressState = parseStormDnsConnectionProgressLine(message)
         val resolverState = parseStormDnsResolverStateLine(message)
         if (trafficStats != null) {
-            latestStormDnsTrafficStats = trafficStats
+            stormDnsTrafficAccounting.record(trafficStats)
         }
         trackSocksStreamLogLine(message)
         val isTelemetry = trafficStats != null ||
@@ -922,7 +1420,7 @@ class WhiteDnsViewModel(
             activeProxyListenPort = WhiteDnsRuntimeProxy.ListenPortInt
             activeVpnTrafficInterfaceName = null
             activeRuntimeSessionId = ""
-            latestStormDnsTrafficStats = null
+            resetTrafficAccounting()
             resetSocksStreamTracker()
             resetRuntimeUiThrottles()
             uiState = uiState.copy(
@@ -955,7 +1453,7 @@ class WhiteDnsViewModel(
             activeProxyListenPort = WhiteDnsRuntimeProxy.ListenPortInt
             activeVpnTrafficInterfaceName = null
             activeRuntimeSessionId = ""
-            latestStormDnsTrafficStats = null
+            resetTrafficAccounting()
             resetSocksStreamTracker()
             resetRuntimeUiThrottles()
             uiState = uiState.copy(
@@ -1029,7 +1527,7 @@ class WhiteDnsViewModel(
         activeProxyListenPort = state.listenPort.takeIf { it > 0 }
             ?: restoredSettings.runtimeConnectionSettings().resolve().listenPort
         activeVpnTrafficInterfaceName = null
-        latestStormDnsTrafficStats = null
+        resetTrafficAccounting()
         resetSocksStreamTracker()
         resetRuntimeUiThrottles()
         val modeLabel = if (state.mode == WhiteDnsRuntimeStateStore.ModeVpn) {
@@ -1063,7 +1561,7 @@ class WhiteDnsViewModel(
         }
         activeProxyListenPort = WhiteDnsRuntimeProxy.ListenPortInt
         activeVpnTrafficInterfaceName = null
-        latestStormDnsTrafficStats = null
+        resetTrafficAccounting()
         resetSocksStreamTracker()
         resetRuntimeUiThrottles()
         uiState = uiState.copy(
@@ -1147,25 +1645,51 @@ class WhiteDnsViewModel(
             mkdirs()
         }
         val resolverFile = File(scanDir, "input.resolvers")
-        val candidateCount = appContext.contentResolver.openInputStream(uri)
+        val summary = appContext.contentResolver.openInputStream(uri)
             ?.bufferedReader(Charsets.UTF_8)
             ?.useLines { lines ->
-                WhiteDnsScannerResultStore.copyCandidateScanResolverFile(
+                WhiteDnsScannerResultStore.writePendingScanResolverFile(
                     lines = lines,
                     outputFile = resolverFile,
                 )
             }
             ?: throw IllegalArgumentException("Unable to open resolver file")
-        if (candidateCount == 0) {
-            throw IllegalArgumentException("No resolver entries found in file")
+        if (summary.totalResolverCount == 0) {
+            throw IllegalArgumentException("No valid resolver entries found in file")
         }
         return ImportedScanResolverFile(
             file = resolverFile,
             sourceName = displayNameForUri(uri),
-            pendingResolverCount = candidateCount,
-            totalResolverCount = candidateCount,
-            alreadyValidResolverCount = 0,
-            invalidEntryCount = 0,
+            pendingResolverCount = summary.pendingResolverCount,
+            totalResolverCount = summary.totalResolverCount,
+            alreadyValidResolverCount = summary.alreadyValidResolverCount,
+            invalidEntryCount = summary.invalidEntryCount,
+        )
+    }
+
+    private fun importDefaultScanResolverFile(sessionId: String): ImportedScanResolverFile {
+        val scanDir = File(File(appContext.noBackupFilesDir, "stormdns/scan"), sessionId).apply {
+            mkdirs()
+        }
+        val resolverFile = File(scanDir, "default.resolvers")
+        val summary = appContext.assets.open(DefaultScanResolverAssetName)
+            .bufferedReader(Charsets.UTF_8)
+            .useLines { lines ->
+                WhiteDnsScannerResultStore.writePendingScanResolverFile(
+                    lines = lines,
+                    outputFile = resolverFile,
+                )
+            }
+        if (summary.totalResolverCount == 0) {
+            throw IllegalArgumentException("No valid resolver entries found in default list")
+        }
+        return ImportedScanResolverFile(
+            file = resolverFile,
+            sourceName = "Default resolver list",
+            pendingResolverCount = summary.pendingResolverCount,
+            totalResolverCount = summary.totalResolverCount,
+            alreadyValidResolverCount = summary.alreadyValidResolverCount,
+            invalidEntryCount = summary.invalidEntryCount,
         )
     }
 
@@ -1363,7 +1887,7 @@ class WhiteDnsViewModel(
             countActiveProxyClients(listenPort),
             countTrackedSocksStreams(),
         )
-        latestStormDnsTrafficStats?.let { stats ->
+        stormDnsTrafficAccounting.latest()?.let { stats ->
             val peakSpeed = maxOf(
                 uiState.connectionStats.peakSpeedBytesPerSecond,
                 stats.downloadSpeedBytesPerSecond + stats.uploadSpeedBytesPerSecond,
@@ -1529,16 +2053,28 @@ class WhiteDnsViewModel(
     }
 
     private fun updateResolverStateOnMain(resolverState: ResolverRuntimeState) {
-        if (resolverState == uiState.resolverRuntimeState) {
+        val currentState = uiState.resolverRuntimeState
+        val nextState = resolverState.withMergedValidResolvers(currentState.validResolvers)
+        if (nextState == currentState) {
             return
         }
         val now = System.currentTimeMillis()
-        val firstVisibleState = uiState.resolverRuntimeState == ResolverRuntimeState()
+        val firstVisibleState = currentState == ResolverRuntimeState()
         if (!firstVisibleState && now - lastResolverUiUpdateMillis < RuntimeResolverUiUpdateIntervalMillis) {
             return
         }
         lastResolverUiUpdateMillis = now
-        uiState = uiState.copy(resolverRuntimeState = resolverState)
+        uiState = uiState.copy(resolverRuntimeState = nextState)
+    }
+
+    private fun ResolverRuntimeState.withMergedValidResolvers(
+        currentValidResolvers: List<String>,
+    ): ResolverRuntimeState {
+        if (currentValidResolvers.isEmpty()) {
+            return this
+        }
+        val mergedValidResolvers = (currentValidResolvers + validResolvers).distinct()
+        return copy(validResolvers = mergedValidResolvers)
     }
 
     private fun countActiveProxyClients(listenPort: Int): Int {
@@ -1623,6 +2159,10 @@ class WhiteDnsViewModel(
         lastResolverUiUpdateMillis = 0L
     }
 
+    private fun resetTrafficAccounting() {
+        stormDnsTrafficAccounting.reset()
+    }
+
     private fun pruneTrackedSocksStreamsLocked(now: Long) {
         socksStreamLastSeenMillis.entries.removeAll { (_, lastSeenMillis) ->
             now - lastSeenMillis > SocksStreamTrackingTtlMillis
@@ -1700,15 +2240,51 @@ class WhiteDnsViewModel(
         const val VerificationStartDelayMillis = 700L
         const val VerificationProbeAttempts = 2
         const val VerificationProbeRetryDelayMillis = 750L
+        const val AutoTuneReadyTimeoutMillis = 90_000L
+        const val AutoTuneSignalPollMillis = 100L
+        const val AutoTuneMeasurementSettleMillis = 1_500L
         const val MaxScanWorkerDigits = 3
         const val StaleScanStateTimeoutMillis = 15_000L
         const val ScannerResultProfileName = "Scanner result"
+        const val DefaultScanResolverAssetName = "default_resolvers.txt"
         const val UidTrafficSourcePrefix = "uid:"
         const val VpnTrafficSourcePrefix = "vpn:"
+        val ParallelTestConnectionModes = setOf(
+            WhiteDnsRuntimeStateStore.ModeProxy,
+            WhiteDnsRuntimeStateStore.ModeVpn,
+        )
         val socksStreamOpenedRegex = Regex("""New SOCKS\d TCP CONNECT .*Stream ID:\s*(\d+)""")
         val socksStreamClosedRegex = Regex("""ARQ Stream Closed .*Stream:\s*(\d+)""")
         val SafeNetworkInterfaceNameRegex = Regex("""[A-Za-z0-9_.:-]+""")
     }
+
+    private data class AutoTuneTrialConfig(
+        val id: String,
+        val label: String,
+        val userSettings: WhiteDnsSettings,
+    )
+
+    private data class AutoTuneTrialPlan(
+        val config: AutoTuneTrialConfig,
+        val settings: WhiteDnsSettings,
+        val result: AutoTuneTrialResult,
+    )
+
+    private data class AutoTuneTrialStartup(
+        val plan: AutoTuneTrialPlan,
+        val manager: StormDnsProcessManager,
+        val ready: Boolean,
+        val result: AutoTuneResult,
+    )
+
+    private data class AutoTuneResult(
+        val config: AutoTuneTrialConfig,
+        val listenIp: String,
+        val listenPort: Int,
+        val scoreBytesPerSecond: Long,
+        val pingMillis: Long?,
+        val ready: Boolean,
+    )
 
     private data class TrafficSnapshot(
         val rxBytes: Long,

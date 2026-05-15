@@ -64,7 +64,18 @@ data class ResolverProfile(
     val resolverText: String,
 ) : Serializable {
     companion object {
+        const val DefaultId = "resolver-default"
+        const val DefaultName = "Default Resolver"
+
         fun newId(): String = "resolver-${System.currentTimeMillis()}"
+
+        fun defaultProfile(resolverText: String): ResolverProfile {
+            return ResolverProfile(
+                id = DefaultId,
+                name = DefaultName,
+                resolverText = resolverText,
+            )
+        }
     }
 }
 
@@ -121,6 +132,7 @@ data class AdvancedSettingsProfile(
     val trafficWarmupEnabled: Boolean,
     val trafficWarmupProbeCount: String,
     val trafficKeepaliveIntervalSeconds: String,
+    val autoTuneEnabled: Boolean,
     val logLevel: String,
 ) : Serializable {
     companion object {
@@ -194,6 +206,7 @@ data class AdvancedSettingsProfile(
                 trafficWarmupEnabled = settings.trafficWarmupEnabled,
                 trafficWarmupProbeCount = settings.trafficWarmupProbeCount,
                 trafficKeepaliveIntervalSeconds = settings.trafficKeepaliveIntervalSeconds,
+                autoTuneEnabled = settings.autoTuneEnabled,
                 logLevel = settings.logLevel,
             )
         }
@@ -251,7 +264,7 @@ data class WhiteDnsSettings(
     val mtuTestParallelismLogs: String = "32",
     val rxTxWorkers: String = "4",
     val tunnelProcessWorkers: String = "4",
-    val tunnelPacketTimeoutSeconds: String = "8.0",
+    val tunnelPacketTimeoutSeconds: String = "10.0",
     val dispatcherIdlePollIntervalSeconds: String = "0.020",
     val txChannelSize: String = "2048",
     val rxChannelSize: String = "2048",
@@ -276,7 +289,10 @@ data class WhiteDnsSettings(
     val trafficWarmupEnabled: Boolean = false,
     val trafficWarmupProbeCount: String = "4",
     val trafficKeepaliveIntervalSeconds: String = "5",
+    val autoTuneEnabled: Boolean = WhiteDnsParallelTest.EnabledByDefault,
+    val parallelTestSelectedConfigIds: List<String> = WhiteDnsParallelTest.defaultConfigIds,
     val fullVpnPerformanceWarningDismissed: Boolean = false,
+    val batteryOptimizationWarningDismissed: Boolean = false,
     val splitTunnelMode: String = WhiteDnsOptions.SplitTunnelModeOff,
     val splitTunnelPackages: List<String> = emptyList(),
     val logLevel: String = "WARN",
@@ -336,6 +352,7 @@ data class ResolvedWhiteDnsSettings(
     val trafficWarmupEnabled: Boolean,
     val trafficWarmupProbeCount: Int,
     val trafficKeepaliveIntervalSeconds: Int,
+    val autoTuneEnabled: Boolean,
     val splitTunnelMode: String,
     val splitTunnelPackages: List<String>,
     val logLevel: String,
@@ -371,6 +388,11 @@ data class ConnectionProgressState(
     val label: String
         get() = when (phase.lowercase()) {
             "preparing" -> "Preparing"
+            "autotune" -> if (total > 0) {
+                "Parallel Test $completed/$total"
+            } else {
+                "Parallel Test"
+            }
             "starting" -> "Starting"
             "mtu" -> if (total > 0) {
                 "Scanning $completed/$total"
@@ -397,6 +419,18 @@ data class ConnectionVerificationState(
     val status: String = ConnectionVerificationStatus.Idle,
     val message: String = "",
     val checkedAtMillis: Long = 0,
+)
+
+data class AutoTuneTrialResult(
+    val configId: String,
+    val label: String,
+    val listenIp: String,
+    val listenPort: Int,
+    val status: String = "pending",
+    val speedBytesPerSecond: Long = 0L,
+    val pingMillis: Long? = null,
+    val message: String = "",
+    val selected: Boolean = false,
 )
 
 object WhiteDnsScanStatus {
@@ -480,6 +514,7 @@ data class WhiteDnsUiState(
     val resolverRuntimeState: ResolverRuntimeState = ResolverRuntimeState(),
     val connectionProgress: ConnectionProgressState = ConnectionProgressState(),
     val connectionVerification: ConnectionVerificationState = ConnectionVerificationState(),
+    val autoTuneTrialResults: List<AutoTuneTrialResult> = emptyList(),
     val scanState: WhiteDnsScanState = WhiteDnsScanState(),
     val scanWorkerCount: String = WhiteDnsScanDefaults.DefaultWorkerCount.toString(),
     val scanConnectionProfileId: String = ConnectionProfile.DefaultId,
@@ -607,16 +642,22 @@ fun WhiteDnsSettings.normalizedConnectionProfiles(): List<ConnectionProfile> {
 }
 
 fun WhiteDnsSettings.normalizedResolverProfiles(): List<ResolverProfile> {
-    return resolverProfiles
+    val profiles = resolverProfiles
         .filter { it.id.isNotBlank() }
         .distinctBy { it.id }
         .mapIndexed { index, profile ->
             profile.copy(
-                name = profile.name.ifBlank { "Resolvers ${index + 1}" },
+                name = when {
+                    profile.id == ResolverProfile.DefaultId -> ResolverProfile.DefaultName
+                    else -> profile.name.ifBlank { "Resolvers ${index + 1}" }
+                },
                 resolverText = normalizeResolverText(profile.resolverText),
             )
         }
         .filter { it.resolverText.isNotBlank() }
+    val defaultProfile = profiles.firstOrNull { it.id == ResolverProfile.DefaultId }
+    val customProfiles = profiles.filter { it.id != ResolverProfile.DefaultId }
+    return listOfNotNull(defaultProfile) + customProfiles
 }
 
 fun WhiteDnsSettings.normalizedAdvancedProfiles(): List<AdvancedSettingsProfile> {
@@ -764,6 +805,7 @@ fun WhiteDnsSettings.applyAdvancedProfile(profile: AdvancedSettingsProfile): Whi
         trafficWarmupEnabled = profile.trafficWarmupEnabled,
         trafficWarmupProbeCount = profile.trafficWarmupProbeCount,
         trafficKeepaliveIntervalSeconds = profile.trafficKeepaliveIntervalSeconds,
+        autoTuneEnabled = this.autoTuneEnabled,
         logLevel = profile.logLevel,
     ).syncSelectedConnectionProfileFields()
 }
@@ -877,6 +919,9 @@ fun WhiteDnsSettings.upsertConnectionProfile(profile: ConnectionProfile): WhiteD
 }
 
 fun WhiteDnsSettings.upsertResolverProfile(profile: ResolverProfile): WhiteDnsSettings {
+    if (profile.id == ResolverProfile.DefaultId) {
+        return syncSelectedConnectionProfileFields()
+    }
     val normalizedProfile = profile.copy(
         id = profile.id.ifBlank { ResolverProfile.newId() },
         name = profile.name.ifBlank { "Resolvers" },
@@ -951,8 +996,12 @@ fun WhiteDnsSettings.moveResolverProfile(profileId: String, direction: Int): Whi
     if (direction == 0) {
         return syncSelectedConnectionProfileFields()
     }
+    if (profileId == ResolverProfile.DefaultId) {
+        return syncSelectedConnectionProfileFields()
+    }
     val profiles = normalizedResolverProfiles()
-    val fromIndex = profiles.indexOfFirst { it.id == profileId }
+    val customProfiles = profiles.filter { it.id != ResolverProfile.DefaultId }
+    val fromIndex = customProfiles.indexOfFirst { it.id == profileId }
     if (fromIndex == -1) {
         return copy(resolverProfiles = profiles).syncSelectedConnectionProfileFields()
     }
@@ -960,17 +1009,22 @@ fun WhiteDnsSettings.moveResolverProfile(profileId: String, direction: Int): Whi
 }
 
 fun WhiteDnsSettings.moveResolverProfileToIndex(profileId: String, targetIndex: Int): WhiteDnsSettings {
+    if (profileId == ResolverProfile.DefaultId) {
+        return syncSelectedConnectionProfileFields()
+    }
     val profiles = normalizedResolverProfiles()
-    val fromIndex = profiles.indexOfFirst { it.id == profileId }
+    val defaultProfile = profiles.firstOrNull { it.id == ResolverProfile.DefaultId }
+    val customProfiles = profiles.filter { it.id != ResolverProfile.DefaultId }
+    val fromIndex = customProfiles.indexOfFirst { it.id == profileId }
     if (fromIndex == -1) {
         return copy(resolverProfiles = profiles).syncSelectedConnectionProfileFields()
     }
-    val toIndex = targetIndex.coerceIn(0, profiles.lastIndex)
+    val toIndex = targetIndex.coerceIn(0, customProfiles.lastIndex)
     if (fromIndex == toIndex) {
         return copy(resolverProfiles = profiles).syncSelectedConnectionProfileFields()
     }
     return copy(
-        resolverProfiles = profiles.moved(fromIndex, toIndex),
+        resolverProfiles = listOfNotNull(defaultProfile) + customProfiles.moved(fromIndex, toIndex),
     ).syncSelectedConnectionProfileFields()
 }
 
@@ -1036,6 +1090,9 @@ fun WhiteDnsSettings.updateManualResolverText(resolverText: String): WhiteDnsSet
 }
 
 fun WhiteDnsSettings.deleteResolverProfile(profileId: String): WhiteDnsSettings {
+    if (profileId == ResolverProfile.DefaultId) {
+        return syncSelectedConnectionProfileFields()
+    }
     val profiles = normalizedResolverProfiles()
     if (profiles.none { it.id == profileId }) {
         return syncSelectedConnectionProfileFields()
@@ -1066,6 +1123,51 @@ fun WhiteDnsSettings.deleteConnectionProfile(profileId: String): WhiteDnsSetting
     } else {
         selectedConnectionProfileId
     }
+    return copy(
+        connectionProfiles = remainingProfiles,
+        selectedConnectionProfileId = nextSelectedId,
+    ).syncSelectedConnectionProfileFields()
+}
+
+fun WhiteDnsSettings.duplicateConnectionProfileCount(): Int {
+    return normalizedConnectionProfiles()
+        .mapNotNull { it.duplicateServerKey() }
+        .groupingBy { it }
+        .eachCount()
+        .values
+        .sumOf { count -> (count - 1).coerceAtLeast(0) }
+}
+
+fun WhiteDnsSettings.deleteDuplicateConnectionProfiles(protectedProfileId: String? = null): WhiteDnsSettings {
+    val profiles = normalizedConnectionProfiles()
+    if (profiles.size <= 1) {
+        return syncSelectedConnectionProfileFields()
+    }
+
+    val duplicateGroups = profiles
+        .withIndex()
+        .mapNotNull { indexedProfile ->
+            indexedProfile.value.duplicateServerKey()?.let { key -> key to indexedProfile }
+        }
+        .groupBy(keySelector = { it.first }, valueTransform = { it.second })
+        .values
+        .filter { it.size > 1 }
+    if (duplicateGroups.isEmpty()) {
+        return copy(connectionProfiles = profiles).syncSelectedConnectionProfileFields()
+    }
+
+    val removedToSurvivorId = mutableMapOf<String, String>()
+    duplicateGroups.forEach { group ->
+        val survivor = group.firstOrNull { it.value.id == protectedProfileId }
+            ?: group.firstOrNull { it.value.id == selectedConnectionProfileId }
+            ?: group.minBy { it.index }
+        group
+            .filterNot { it.value.id == survivor.value.id }
+            .forEach { removedToSurvivorId[it.value.id] = survivor.value.id }
+    }
+
+    val remainingProfiles = profiles.filterNot { it.id in removedToSurvivorId.keys }
+    val nextSelectedId = removedToSurvivorId[selectedConnectionProfileId] ?: selectedConnectionProfileId
     return copy(
         connectionProfiles = remainingProfiles,
         selectedConnectionProfileId = nextSelectedId,
@@ -1103,6 +1205,21 @@ private fun <T> List<T>.moved(fromIndex: Int, toIndex: Int): List<T> {
     val item = reordered.removeAt(fromIndex)
     reordered.add(toIndex, item)
     return reordered
+}
+
+private data class ConnectionServerKey(
+    val domain: String,
+    val encryptionKey: String,
+)
+
+private fun ConnectionProfile.duplicateServerKey(): ConnectionServerKey? {
+    val domain = customServerDomain.trim().trimEnd('.').lowercase()
+    val encryptionKey = customServerEncryptionKey.trim()
+    return if (domain.isNotBlank() && encryptionKey.isNotBlank()) {
+        ConnectionServerKey(domain = domain, encryptionKey = encryptionKey)
+    } else {
+        null
+    }
 }
 
 fun WhiteDnsSettings.resetAdvancedSettings(): WhiteDnsSettings {
@@ -1159,6 +1276,7 @@ fun WhiteDnsSettings.resetAdvancedSettings(): WhiteDnsSettings {
         trafficWarmupEnabled = defaults.trafficWarmupEnabled,
         trafficWarmupProbeCount = defaults.trafficWarmupProbeCount,
         trafficKeepaliveIntervalSeconds = defaults.trafficKeepaliveIntervalSeconds,
+        autoTuneEnabled = defaults.autoTuneEnabled,
         logLevel = defaults.logLevel,
     ).syncSelectedConnectionProfileFields()
 }
@@ -1185,7 +1303,7 @@ fun validateResolverText(raw: String): ResolverTextValidation {
     )
 }
 
-private fun normalizeResolverText(raw: String): String {
+internal fun normalizeResolverText(raw: String): String {
     return validateResolverText(raw).normalizedText
 }
 
@@ -1439,8 +1557,8 @@ fun WhiteDnsSettings.resolve(): ResolvedWhiteDnsSettings {
         socksUsername = socksUsername.take(255),
         socksPassword = socksPassword.take(255),
         balancingStrategy = listOf(1, 2, 3, 4).firstOrNull { it == balancingStrategy } ?: 3,
-        uploadDuplication = boundedInt(uploadDuplication, defaultValue = 3, minValue = 1, maxValue = 8),
-        downloadDuplication = boundedInt(downloadDuplication, defaultValue = 7, minValue = 1, maxValue = 8),
+        uploadDuplication = boundedInt(uploadDuplication, defaultValue = 3, minValue = 1, maxValue = 30),
+        downloadDuplication = boundedInt(downloadDuplication, defaultValue = 7, minValue = 1, maxValue = 30),
         uploadCompression = uploadCompression.coerceIn(0, 3),
         downloadCompression = downloadCompression.coerceIn(0, 3),
         baseEncodeData = baseEncodeData,
@@ -1458,7 +1576,7 @@ fun WhiteDnsSettings.resolve(): ResolvedWhiteDnsSettings {
         tunnelProcessWorkers = resolvedTunnelProcessWorkers,
         tunnelPacketTimeoutSeconds = boundedDouble(
             tunnelPacketTimeoutSeconds,
-            defaultValue = 8.0,
+            defaultValue = 10.0,
             minValue = 0.5,
             maxValue = 120.0,
         ),
@@ -1564,6 +1682,7 @@ fun WhiteDnsSettings.resolve(): ResolvedWhiteDnsSettings {
             minValue = 2,
             maxValue = 300,
         ),
+        autoTuneEnabled = autoTuneEnabled,
         splitTunnelMode = normalizeSplitTunnelMode(splitTunnelMode),
         splitTunnelPackages = normalizePackageNames(splitTunnelPackages),
         logLevel = when (logLevel) {

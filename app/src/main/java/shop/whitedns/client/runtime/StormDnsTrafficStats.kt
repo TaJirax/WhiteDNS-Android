@@ -10,6 +10,47 @@ data class StormDnsTrafficStats(
     val uploadSpeedBytesPerSecond: Long,
 )
 
+class StormDnsTrafficAccounting {
+    private var lastRawStats: StormDnsTrafficStats? = null
+    private var accumulatedDownloadBytes: Long = 0L
+    private var accumulatedUploadBytes: Long = 0L
+    private var latestStats: StormDnsTrafficStats? = null
+
+    @Synchronized
+    fun reset() {
+        lastRawStats = null
+        accumulatedDownloadBytes = 0L
+        accumulatedUploadBytes = 0L
+        latestStats = null
+    }
+
+    @Synchronized
+    fun record(rawStats: StormDnsTrafficStats): StormDnsTrafficStats {
+        val previous = lastRawStats
+        accumulatedDownloadBytes += rawStats.downloadBytes.deltaSince(previous?.downloadBytes)
+        accumulatedUploadBytes += rawStats.uploadBytes.deltaSince(previous?.uploadBytes)
+        lastRawStats = rawStats
+        return rawStats.copy(
+            downloadBytes = accumulatedDownloadBytes,
+            uploadBytes = accumulatedUploadBytes,
+        ).also { latestStats = it }
+    }
+
+    @Synchronized
+    fun latest(): StormDnsTrafficStats? = latestStats
+
+    private fun Long.deltaSince(previous: Long?): Long {
+        if (previous == null) {
+            return coerceAtLeast(0)
+        }
+        return if (this >= previous) {
+            this - previous
+        } else {
+            coerceAtLeast(0)
+        }
+    }
+}
+
 fun parseStormDnsTrafficStatsLine(line: String): StormDnsTrafficStats? {
     val cleanLine = line
         .replace(AnsiEscapeRegex, "")

@@ -163,6 +163,7 @@ object RuntimeLaunchRequestStore {
             .put("trafficWarmupEnabled", settings.trafficWarmupEnabled)
             .put("trafficWarmupProbeCount", settings.trafficWarmupProbeCount)
             .put("trafficKeepaliveIntervalSeconds", settings.trafficKeepaliveIntervalSeconds)
+            .put("autoTuneEnabled", settings.autoTuneEnabled)
             .put("fullVpnPerformanceWarningDismissed", settings.fullVpnPerformanceWarningDismissed)
             .put("splitTunnelMode", settings.splitTunnelMode)
             .put("splitTunnelPackages", splitTunnelPackages)
@@ -216,7 +217,7 @@ object RuntimeLaunchRequestStore {
             mtuTestParallelismLogs = json.optString("mtuTestParallelismLogs", "32"),
             rxTxWorkers = json.optString("rxTxWorkers", "4"),
             tunnelProcessWorkers = json.optString("tunnelProcessWorkers", "4"),
-            tunnelPacketTimeoutSeconds = json.optString("tunnelPacketTimeoutSeconds", "8.0"),
+            tunnelPacketTimeoutSeconds = json.optString("tunnelPacketTimeoutSeconds", "10.0"),
             dispatcherIdlePollIntervalSeconds = json.optString("dispatcherIdlePollIntervalSeconds", "0.020"),
             txChannelSize = json.optString("txChannelSize", "2048"),
             rxChannelSize = json.optString("rxChannelSize", "2048"),
@@ -238,9 +239,10 @@ object RuntimeLaunchRequestStore {
             localDnsPort = json.optString("localDnsPort", "10888"),
             startupMode = json.optString("startupMode", "resolvers"),
             pingWatchdogSeconds = json.optString("pingWatchdogSeconds", "300"),
-            trafficWarmupEnabled = json.optBoolean("trafficWarmupEnabled", true),
+            trafficWarmupEnabled = json.optBoolean("trafficWarmupEnabled", false),
             trafficWarmupProbeCount = json.optString("trafficWarmupProbeCount", "4"),
             trafficKeepaliveIntervalSeconds = json.optString("trafficKeepaliveIntervalSeconds", "5"),
+            autoTuneEnabled = json.optBoolean("autoTuneEnabled", false),
             fullVpnPerformanceWarningDismissed = json.optBoolean("fullVpnPerformanceWarningDismissed", false),
             splitTunnelMode = json.optString("splitTunnelMode", "off"),
             splitTunnelPackages = decodeStringArray(json.optJSONArray("splitTunnelPackages")),

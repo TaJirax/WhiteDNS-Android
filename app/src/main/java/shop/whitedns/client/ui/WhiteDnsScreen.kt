@@ -76,7 +76,9 @@ import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.NetworkPing
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.WarningAmber
@@ -134,6 +136,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import shop.whitedns.client.R
 import shop.whitedns.client.model.AdvancedSettingsProfile
+import shop.whitedns.client.model.AutoTuneTrialResult
 import shop.whitedns.client.model.Choice
 import shop.whitedns.client.model.ConnectionProfile
 import shop.whitedns.client.model.ConnectionProgressState
@@ -150,10 +153,13 @@ import shop.whitedns.client.model.WhiteDnsScanStatus
 import shop.whitedns.client.model.WhiteDnsSettings
 import shop.whitedns.client.model.WhiteDnsUiState
 import shop.whitedns.client.model.applyAdvancedProfile
+import shop.whitedns.client.model.applyAutoTunePreset
 import shop.whitedns.client.model.applyResolverProfileToSelectedConnection
 import shop.whitedns.client.model.deleteConnectionProfile
+import shop.whitedns.client.model.deleteDuplicateConnectionProfiles
 import shop.whitedns.client.model.deleteAdvancedProfile
 import shop.whitedns.client.model.deleteResolverProfile
+import shop.whitedns.client.model.duplicateConnectionProfileCount
 import shop.whitedns.client.model.exportAllStormDnsProfileLinks
 import shop.whitedns.client.model.exportStormDnsProfileLink
 import shop.whitedns.client.model.importStormDnsProfileLinks
@@ -178,6 +184,9 @@ import shop.whitedns.client.model.upsertConnectionProfile
 import shop.whitedns.client.model.upsertAdvancedProfile
 import shop.whitedns.client.model.upsertResolverProfile
 import shop.whitedns.client.model.validateResolverText
+import shop.whitedns.client.model.WhiteDnsAutoTunePresets
+import shop.whitedns.client.model.WhiteDnsParallelTest
+import shop.whitedns.client.model.syncSelectedConnectionProfileFields
 import shop.whitedns.client.storm.StormDnsConfigRenderer
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
@@ -195,6 +204,7 @@ fun WhiteDnsScreen(
     onNotificationPermissionClick: () -> Unit,
     onConnectClick: () -> Unit,
     onScanFileSelected: (Uri) -> Unit,
+    onScanDefaultListSelected: () -> Unit,
     onScanStartClick: () -> Unit,
     onScanConnectionProfileChange: (String) -> Unit,
     onScanWorkerCountChange: (String) -> Unit,
@@ -238,6 +248,7 @@ fun WhiteDnsScreen(
                 WhiteDnsTab.SCAN -> ScanTabContent(
                     uiState = uiState,
                     onScanFileSelected = onScanFileSelected,
+                    onScanDefaultListSelected = onScanDefaultListSelected,
                     onScanStartClick = onScanStartClick,
                     onScanConnectionProfileChange = onScanConnectionProfileChange,
                     onScanWorkerCountChange = onScanWorkerCountChange,
@@ -319,6 +330,11 @@ private fun ConnectTabContent(
     var selectorSheetType by rememberSaveable { mutableStateOf<HomeSelectorType?>(null) }
     var selectorSheetVisible by rememberSaveable { mutableStateOf(false) }
     var showConnectionTomlDialog by rememberSaveable { mutableStateOf(false) }
+    var showConnectionEditDialog by remember { mutableStateOf(false) }
+    var showResolverEditDialog by remember { mutableStateOf(false) }
+    var showAdvancedEditDialog by remember { mutableStateOf(false) }
+    var autoTuneSaveResult by remember { mutableStateOf<AutoTuneTrialResult?>(null) }
+    var parallelTestSelectionExpanded by rememberSaveable { mutableStateOf(true) }
     val runtimeSettings = remember(settings) { settings.runtimeConnectionSettings() }
     val resolvedSettings = remember(runtimeSettings) { runtimeSettings.resolve() }
     val connectionProfiles = remember(settings) { settings.normalizedConnectionProfiles() }
@@ -388,7 +404,25 @@ private fun ConnectTabContent(
     val proxyAddress = "$proxyIpAddress:${resolvedSettings.listenPort}"
     val httpProxyAddress = "$proxyIpAddress:${resolvedSettings.httpProxyPort}"
     val showNotificationBanner = resolvedSettings.connectionMode == "vpn" && !uiState.notificationsEnabled
-    val showBatteryBanner = !uiState.batteryOptimizationIgnored
+    val showBatteryBanner = !uiState.batteryOptimizationIgnored &&
+        !settings.batteryOptimizationWarningDismissed
+    val shouldCollapseParallelTestSelection =
+        settings.autoTuneEnabled &&
+            resolvedSettings.connectionMode == "vpn" &&
+            uiState.connectionStatus == ConnectionStatus.CONNECTED &&
+            uiState.autoTuneTrialResults.any { it.selected }
+
+    LaunchedEffect(
+        shouldCollapseParallelTestSelection,
+        settings.autoTuneEnabled,
+        uiState.connectionStatus,
+    ) {
+        when {
+            shouldCollapseParallelTestSelection -> parallelTestSelectionExpanded = false
+            !settings.autoTuneEnabled || uiState.connectionStatus == ConnectionStatus.DISCONNECTED ->
+                parallelTestSelectionExpanded = true
+        }
+    }
 
     fun normalizeManualResolverInput() {
         if (selectedResolverProfile != null || !resolverValidation.isValid) {
@@ -449,7 +483,12 @@ private fun ConnectTabContent(
                 exit = fadeOut(animationSpec = tween(160)) + shrinkVertically(animationSpec = tween(160)),
             ) {
                 Column {
-                    BatteryOptimizationBanner(onClick = onBatteryOptimizationClick)
+                    BatteryOptimizationBanner(
+                        onClick = onBatteryOptimizationClick,
+                        onDismiss = {
+                            onSettingsChange(settings.copy(batteryOptimizationWarningDismissed = true))
+                        },
+                    )
                     Spacer(modifier = Modifier.height(WhiteDnsSpacing.xl))
                 }
             }
@@ -463,7 +502,9 @@ private fun ConnectTabContent(
                     selectedMode = resolvedSettings.connectionMode,
                     enabled = uiState.connectionStatus == ConnectionStatus.DISCONNECTED,
                     onModeChange = { connectionMode ->
-                        onSettingsChange(settings.copy(connectionMode = connectionMode))
+                        onSettingsChange(
+                            settings.copy(connectionMode = connectionMode),
+                        )
                     },
                 )
             AnimatedVisibility(
@@ -512,6 +553,47 @@ private fun ConnectTabContent(
                 },
             )
             AnimatedVisibility(
+                visible = resolvedSettings.connectionMode == "proxy" || resolvedSettings.connectionMode == "vpn",
+                enter = fadeIn(animationSpec = tween(180)) + expandVertically(animationSpec = tween(180)),
+                exit = fadeOut(animationSpec = tween(140)) + shrinkVertically(animationSpec = tween(140)),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = WhiteDnsSpacing.md),
+                ) {
+                    ToggleRow(
+                        label = "Parallel Test",
+                        enabled = settings.autoTuneEnabled,
+                        onToggle = {
+                            val selectedIds = WhiteDnsParallelTest.normalizeConfigIds(
+                                configIds = settings.parallelTestSelectedConfigIds,
+                                advancedProfiles = advancedProfiles,
+                            )
+                            onSettingsChange(
+                                settings.copy(
+                                    autoTuneEnabled = !settings.autoTuneEnabled,
+                                    parallelTestSelectedConfigIds = selectedIds,
+                                ),
+                            )
+                        },
+                    )
+                    AnimatedVisibility(
+                        visible = settings.autoTuneEnabled,
+                        enter = fadeIn(animationSpec = tween(180)) + expandVertically(animationSpec = tween(180)),
+                        exit = fadeOut(animationSpec = tween(140)) + shrinkVertically(animationSpec = tween(140)),
+                    ) {
+                        ParallelTestSelectionPanel(
+                            settings = settings,
+                            advancedProfiles = advancedProfiles,
+                            expanded = parallelTestSelectionExpanded,
+                            onExpandedChange = { parallelTestSelectionExpanded = it },
+                            onSettingsChange = onSettingsChange,
+                        )
+                    }
+                }
+            }
+            AnimatedVisibility(
                 visible = uiState.connectionStatus != ConnectionStatus.CONNECTED,
                 enter = fadeIn(animationSpec = tween(180)) + expandVertically(animationSpec = tween(180)),
                 exit = fadeOut(animationSpec = tween(140)) + shrinkVertically(animationSpec = tween(140)),
@@ -529,6 +611,10 @@ private fun ConnectTabContent(
                             selected = true,
                             enabled = uiState.connectionStatus == ConnectionStatus.DISCONNECTED,
                             onClick = { openSelector(HomeSelectorType.CONNECTION) },
+                            onEditClick = {
+                                showResolverRequiredMessage = false
+                                showConnectionEditDialog = true
+                            },
                         )
                         HomeSelectorCard(
                             label = "Resolver",
@@ -537,12 +623,21 @@ private fun ConnectTabContent(
                             selected = selectedResolverProfile != null,
                             enabled = uiState.connectionStatus == ConnectionStatus.DISCONNECTED,
                             onClick = { openSelector(HomeSelectorType.RESOLVER) },
+                            editEnabled = selectedResolverProfile?.id != ResolverProfile.DefaultId,
+                            onEditClick = {
+                                showResolverRequiredMessage = false
+                                showResolverEditDialog = true
+                            },
                         )
                         AdvancedProfileControls(
                             selectedProfile = selectedAdvancedProfile,
                             dirty = advancedProfileDirty,
                             enabled = uiState.connectionStatus == ConnectionStatus.DISCONNECTED,
                             onSelectClick = { openSelector(HomeSelectorType.ADVANCED) },
+                            onEditClick = {
+                                showResolverRequiredMessage = false
+                                showAdvancedEditDialog = true
+                            },
                         )
                     }
                 }
@@ -616,7 +711,8 @@ private fun ConnectTabContent(
             }
 
             AnimatedVisibility(
-                visible = uiState.connectionStatus == ConnectionStatus.CONNECTED,
+                visible = uiState.connectionStatus == ConnectionStatus.CONNECTED ||
+                    uiState.autoTuneTrialResults.isNotEmpty(),
                 enter = fadeIn(animationSpec = tween(260)) + expandVertically(animationSpec = tween(260)),
                 exit = fadeOut(animationSpec = tween(180)) + shrinkVertically(animationSpec = tween(180)),
             ) {
@@ -638,6 +734,10 @@ private fun ConnectTabContent(
                         username = resolvedSettings.socksUsername,
                         password = resolvedSettings.socksPassword,
                         stats = uiState.connectionStats,
+                        autoTuneResults = uiState.autoTuneTrialResults,
+                        onSaveAutoTuneResult = { result ->
+                            autoTuneSaveResult = result
+                        },
                         showProxyDetails = resolvedSettings.connectionMode == "proxy",
                         splitTunnelMode = resolvedSettings.splitTunnelMode,
                         splitTunnelPackages = resolvedSettings.splitTunnelPackages,
@@ -721,6 +821,329 @@ private fun ConnectTabContent(
                 onShare = { toml ->
                     shareClientConfigToml(context, toml)
                 },
+            )
+        }
+
+        if (showConnectionEditDialog) {
+            ConnectionProfileDialog(
+                profile = selectedConnectionProfile,
+                onDismiss = { showConnectionEditDialog = false },
+                onSave = { updatedProfile ->
+                    val nextProfile = updatedProfile.copy(
+                        id = selectedConnectionProfile.id,
+                        serverMode = "custom",
+                        resolverProfileId = selectedConnectionProfile.resolverProfileId,
+                        connectionMode = selectedConnectionProfile.connectionMode,
+                    )
+                    onSettingsChange(
+                        settings
+                            .upsertConnectionProfile(nextProfile)
+                            .selectConnectionProfile(selectedConnectionProfile.id),
+                    )
+                    showConnectionEditDialog = false
+                },
+            )
+        }
+
+        if (showResolverEditDialog) {
+            ResolverProfileDialog(
+                profile = selectedResolverProfile,
+                initialResolverText = selectedResolverProfile?.resolverText ?: settings.resolverText,
+                onDismiss = { showResolverEditDialog = false },
+                onSave = { profile ->
+                    val nextSettings = if (selectedResolverProfile == null) {
+                        settings.upsertResolverProfile(profile)
+                    } else {
+                        settings.upsertResolverProfile(profile.copy(id = selectedResolverProfile.id))
+                    }
+                    onSettingsChange(nextSettings)
+                    showResolverEditDialog = false
+                },
+            )
+        }
+
+        if (showAdvancedEditDialog) {
+            val editingProfile = selectedAdvancedProfile.takeIf { it.id != AdvancedSettingsProfile.DefaultId }
+            AdvancedSettingsProfileDialog(
+                profile = editingProfile,
+                initialName = editingProfile?.name ?: advancedSaveAsInitialName(selectedAdvancedProfile),
+                initialSettings = settings,
+                onDismiss = { showAdvancedEditDialog = false },
+                onSave = { profile ->
+                    val nextProfile = if (editingProfile == null) {
+                        profile
+                    } else {
+                        profile.copy(id = editingProfile.id)
+                    }
+                    onSettingsChange(settings.upsertAdvancedProfile(nextProfile))
+                    showAdvancedEditDialog = false
+                },
+            )
+        }
+
+        autoTuneSaveResult?.let { result ->
+            val initialSettings = remember(result.configId, settings, advancedProfiles) {
+                parallelTestInitialSettingsForResult(
+                    result = result,
+                    settings = settings,
+                    advancedProfiles = advancedProfiles,
+                )
+            }
+            if (initialSettings == null) {
+                autoTuneSaveResult = null
+            } else {
+                AdvancedSettingsProfileDialog(
+                    profile = null,
+                    initialName = result.label,
+                    initialSettings = initialSettings,
+                    onDismiss = { autoTuneSaveResult = null },
+                    onSave = { profile ->
+                        onSettingsChange(settings.upsertAdvancedProfile(profile))
+                        autoTuneSaveResult = null
+                    },
+                )
+            }
+        }
+    }
+}
+
+private fun parallelTestInitialSettingsForResult(
+    result: AutoTuneTrialResult,
+    settings: WhiteDnsSettings,
+    advancedProfiles: List<AdvancedSettingsProfile>,
+): WhiteDnsSettings? {
+    WhiteDnsParallelTest.presetIdFromConfigId(result.configId)?.let { presetId ->
+        val preset = WhiteDnsAutoTunePresets.all.firstOrNull { it.id == presetId } ?: return null
+        return settings
+            .applyAutoTunePreset(preset)
+            .copy(autoTuneEnabled = false)
+            .syncSelectedConnectionProfileFields()
+    }
+    WhiteDnsParallelTest.settingProfileIdFromConfigId(result.configId)?.let { profileId ->
+        val profile = advancedProfiles.firstOrNull { it.id == profileId } ?: return null
+        return settings
+            .applyAdvancedProfile(profile)
+            .copy(autoTuneEnabled = false)
+            .syncSelectedConnectionProfileFields()
+    }
+    return null
+}
+
+@Composable
+private fun ParallelTestSelectionPanel(
+    settings: WhiteDnsSettings,
+    advancedProfiles: List<AdvancedSettingsProfile>,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onSettingsChange: (WhiteDnsSettings) -> Unit,
+) {
+    val haptic = rememberHapticFeedback()
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
+        label = "parallelTestSelectionArrow",
+    )
+    val userProfiles = advancedProfiles.filter { it.id != AdvancedSettingsProfile.DefaultId }
+    val selectedIds = WhiteDnsParallelTest.normalizeConfigIds(
+        configIds = settings.parallelTestSelectedConfigIds,
+        advancedProfiles = advancedProfiles,
+    )
+    val selectedSet = selectedIds.toSet()
+    val whiteDnsConfigIds = WhiteDnsParallelTest.defaultConfigIds
+    val selectedWhiteDnsCount = whiteDnsConfigIds.count { it in selectedSet }
+    val allWhiteDnsSelected = selectedWhiteDnsCount == whiteDnsConfigIds.size
+    val canAddWhiteDnsConfigs = allWhiteDnsSelected ||
+        selectedIds.size - selectedWhiteDnsCount + whiteDnsConfigIds.size <= WhiteDnsParallelTest.MaxSelectedConfigs
+
+    fun updateSelectedConfigIds(nextIds: List<String>) {
+        val normalizedIds = WhiteDnsParallelTest.normalizeConfigIds(
+            configIds = nextIds,
+            advancedProfiles = advancedProfiles,
+            defaultIfEmpty = false,
+        )
+        onSettingsChange(settings.copy(parallelTestSelectedConfigIds = normalizedIds))
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = WhiteDnsSpacing.sm),
+        verticalArrangement = Arrangement.spacedBy(WhiteDnsSpacing.sm),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .clickable {
+                    haptic.performLight()
+                    onExpandedChange(!expanded)
+                }
+                .padding(vertical = 8.dp, horizontal = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Selected ${selectedIds.size}/${WhiteDnsParallelTest.MaxSelectedConfigs}",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 10.sp,
+                    color = WhiteDnsPalette.FieldLabel,
+                    fontWeight = FontWeight.SemiBold,
+                ),
+            )
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(if (expanded) WhiteDnsPalette.Accent else WhiteDnsPalette.SurfaceAlt)
+                    .padding(start = 10.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = if (expanded) "OPEN" else "CLOSED",
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 9.sp,
+                        color = if (expanded) WhiteDnsPalette.OnAccent else WhiteDnsPalette.Muted,
+                        fontWeight = FontWeight.Medium,
+                        letterSpacing = 0.8.sp,
+                    ),
+                )
+                Icon(
+                    imageVector = Icons.Rounded.KeyboardArrowDown,
+                    contentDescription = if (expanded) {
+                        "Collapse Parallel Test configs"
+                    } else {
+                        "Expand Parallel Test configs"
+                    },
+                    tint = if (expanded) WhiteDnsPalette.OnAccent else WhiteDnsPalette.Muted,
+                    modifier = Modifier
+                        .size(16.dp)
+                        .graphicsLayer(rotationZ = arrowRotation),
+                )
+            }
+        }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn(animationSpec = tween(180)) + expandVertically(animationSpec = tween(180)),
+            exit = fadeOut(animationSpec = tween(140)) + shrinkVertically(animationSpec = tween(140)),
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(WhiteDnsSpacing.sm),
+            ) {
+                Text(
+                    text = "Parallel Test starts selected configs as temporary SOCKS proxies, measures speed and ping after each tunnel is ready, then connects with the best result. In Full VPN mode, the test still runs through SOCKS first and starts the Android VPN after a result is selected.",
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = 11.sp,
+                        color = WhiteDnsPalette.Muted,
+                        lineHeight = 16.sp,
+                    ),
+                )
+                ParallelTestConfigRow(
+                    label = "WhiteDNS configs",
+                    detail = "Adds 7 suggested configs",
+                    checked = allWhiteDnsSelected,
+                    enabled = canAddWhiteDnsConfigs,
+                    onToggle = {
+                        haptic.performLight()
+                        val withoutWhiteDnsConfigs = selectedIds.filterNot { it in whiteDnsConfigIds }
+                        if (allWhiteDnsSelected) {
+                            if (withoutWhiteDnsConfigs.isNotEmpty()) {
+                                updateSelectedConfigIds(withoutWhiteDnsConfigs)
+                            }
+                        } else if (canAddWhiteDnsConfigs) {
+                            updateSelectedConfigIds(whiteDnsConfigIds + withoutWhiteDnsConfigs)
+                        }
+                    },
+                )
+                if (userProfiles.isNotEmpty()) {
+                    Text(
+                        modifier = Modifier.padding(top = WhiteDnsSpacing.xs),
+                        text = "Your configs",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 10.sp,
+                            color = WhiteDnsPalette.FieldLabel,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                    )
+                    userProfiles.forEach { profile ->
+                        val configId = WhiteDnsParallelTest.settingConfigId(profile.id)
+                        val checked = configId in selectedSet
+                        val enabled = checked || selectedIds.size < WhiteDnsParallelTest.MaxSelectedConfigs
+                        ParallelTestConfigRow(
+                            label = profile.name.ifBlank { "Setting" },
+                            detail = advancedProfileSummary(profile),
+                            checked = checked,
+                            enabled = enabled,
+                            onToggle = {
+                                haptic.performLight()
+                                val nextIds = if (checked) {
+                                    if (selectedIds.size == 1) {
+                                        selectedIds
+                                    } else {
+                                        selectedIds.filterNot { it == configId }
+                                    }
+                                } else {
+                                    selectedIds + configId
+                                }
+                                updateSelectedConfigIds(nextIds)
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ParallelTestConfigRow(
+    label: String,
+    detail: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onToggle: () -> Unit,
+) {
+    val contentAlpha = if (enabled) 1f else 0.46f
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(11.dp))
+            .clickable(enabled = enabled, onClick = onToggle)
+            .padding(vertical = 7.dp, horizontal = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Checkbox(
+            checked = checked,
+            enabled = enabled,
+            onCheckedChange = { onToggle() },
+            colors = CheckboxDefaults.colors(
+                checkedColor = WhiteDnsPalette.Accent,
+                uncheckedColor = WhiteDnsPalette.ControlBorder,
+                checkmarkColor = WhiteDnsPalette.OnAccent,
+                disabledCheckedColor = WhiteDnsPalette.Accent.copy(alpha = 0.42f),
+                disabledUncheckedColor = WhiteDnsPalette.ControlBorder.copy(alpha = 0.42f),
+            ),
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 12.sp,
+                    color = WhiteDnsPalette.Ink.copy(alpha = contentAlpha),
+                    fontWeight = FontWeight.Medium,
+                ),
+            )
+            Text(
+                text = detail,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontSize = 10.sp,
+                    color = WhiteDnsPalette.Muted.copy(alpha = contentAlpha),
+                ),
             )
         }
     }
@@ -850,6 +1273,7 @@ private fun LogsTabContent(
 private fun ScanTabContent(
     uiState: WhiteDnsUiState,
     onScanFileSelected: (Uri) -> Unit,
+    onScanDefaultListSelected: () -> Unit,
     onScanStartClick: () -> Unit,
     onScanConnectionProfileChange: (String) -> Unit,
     onScanWorkerCountChange: (String) -> Unit,
@@ -911,15 +1335,27 @@ private fun ScanTabContent(
                 .padding(top = 36.dp),
             verticalArrangement = Arrangement.spacedBy(WhiteDnsSpacing.md),
         ) {
-            CompactActionButton(
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                label = "SELECT RESOLVER FILE",
-                emphasized = !scanState.isRunning,
-                enabled = !scanState.isRunning,
-                onClick = {
-                    scanFileLauncher.launch(ResolverImportMimeTypes)
-                },
-            )
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CompactActionButton(
+                    modifier = Modifier.weight(1f),
+                    label = "DEFAULT LIST",
+                    emphasized = !scanState.isRunning,
+                    enabled = !scanState.isRunning,
+                    onClick = onScanDefaultListSelected,
+                )
+                CompactActionButton(
+                    modifier = Modifier.weight(1f),
+                    label = "SELECT FILE",
+                    emphasized = false,
+                    enabled = !scanState.isRunning,
+                    onClick = {
+                        scanFileLauncher.launch(ResolverImportMimeTypes)
+                    },
+                )
+            }
             ScanWorkerSlider(
                 workerCount = workerCount,
                 enabled = !scanState.isRunning,
@@ -1658,6 +2094,8 @@ private fun HomeSelectorCard(
     enabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onEditClick: (() -> Unit)? = null,
+    editEnabled: Boolean = enabled,
 ) {
     val haptic = rememberHapticFeedback()
     val borderColor = when {
@@ -1711,6 +2149,15 @@ private fun HomeSelectorCard(
                     ),
                 )
             }
+            if (onEditClick != null) {
+                ProfileIconButton(
+                    icon = Icons.Rounded.Edit,
+                    contentDescription = "Edit $label",
+                    emphasized = false,
+                    enabled = editEnabled,
+                    onClick = onEditClick,
+                )
+            }
             Icon(
                 imageVector = Icons.Rounded.KeyboardArrowDown,
                 contentDescription = stringResource(R.string.cd_dropdown_advanced_settings),
@@ -1727,6 +2174,7 @@ private fun AdvancedProfileControls(
     dirty: Boolean,
     enabled: Boolean,
     onSelectClick: () -> Unit,
+    onEditClick: () -> Unit,
 ) {
     HomeSelectorCard(
         label = "Setting",
@@ -1735,6 +2183,7 @@ private fun AdvancedProfileControls(
         selected = !dirty,
         enabled = enabled,
         onClick = onSelectClick,
+        onEditClick = onEditClick,
     )
 }
 
@@ -2570,12 +3019,14 @@ private fun ConnectionProfilesSettings(
     var showImportDialog by remember { mutableStateOf(false) }
     var exportProfile by remember { mutableStateOf<ConnectionProfile?>(null) }
     var showExportAllDialog by remember { mutableStateOf(false) }
+    var showDeleteDuplicatesDialog by remember { mutableStateOf(false) }
     var deleteProfile by remember { mutableStateOf<ConnectionProfile?>(null) }
     var draggedProfileId by remember { mutableStateOf<String?>(null) }
     var dragStartIndex by remember { mutableStateOf(0) }
     var dragOffsetY by remember { mutableStateOf(0f) }
     var measuredItemHeightPx by remember { mutableStateOf(0) }
     val canManageProfiles = connectionStatus != ConnectionStatus.CONNECTING
+    val duplicateProfileCount = settings.duplicateConnectionProfileCount()
     val draggedIndex = draggedProfileId?.let { profileId ->
         customProfiles.indexOfFirst { it.id == profileId }.takeIf { it >= 0 }
     }
@@ -2632,6 +3083,14 @@ private fun ConnectionProfilesSettings(
                 enabled = canManageProfiles,
                 onClick = {
                     showImportDialog = true
+                },
+            ),
+            ProfileTopAction(
+                label = "DELETE DUPS",
+                emphasized = false,
+                enabled = canManageProfiles && duplicateProfileCount > 0,
+                onClick = {
+                    showDeleteDuplicatesDialog = true
                 },
             ),
             ProfileTopAction(
@@ -2790,6 +3249,26 @@ private fun ConnectionProfilesSettings(
         )
     }
 
+    if (showDeleteDuplicatesDialog) {
+        DeleteProfileConfirmationDialog(
+            title = "DELETE DUPLICATE CONNECTIONS",
+            message = "Delete $duplicateProfileCount duplicate connection profile" +
+                if (duplicateProfileCount == 1) {
+                    "? Duplicates are matched by server domain and encryption key. The active or selected profile is kept when possible."
+                } else {
+                    "s? Duplicates are matched by server domain and encryption key. The active or selected profile is kept when possible."
+                },
+            confirmLabel = "DELETE",
+            onDismiss = { showDeleteDuplicatesDialog = false },
+            onConfirm = {
+                if (canManageProfiles && duplicateProfileCount > 0) {
+                    onSettingsChange(settings.deleteDuplicateConnectionProfiles(activeConnectionProfileId))
+                }
+                showDeleteDuplicatesDialog = false
+            },
+        )
+    }
+
     dialogProfile?.let { profile ->
         ConnectionProfileDialog(
             profile = profile,
@@ -2912,6 +3391,7 @@ private fun ResolverProfilesSettings(
         Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
     }
     profiles.forEachIndexed { index, profile ->
+        val isDefaultProfile = profile.id == ResolverProfile.DefaultId
         val isDragging = profile.id == draggedProfileId
         val targetTranslationY = profileDragTranslationY(
             itemIndex = index,
@@ -2940,9 +3420,12 @@ private fun ResolverProfilesSettings(
             ResolverProfileRow(
                 profile = profile,
                 selected = profile.id == selectedProfile?.id,
-                canEdit = canChangeProfiles,
-                canDelete = canChangeProfiles,
-                canDrag = canChangeProfiles && profiles.size > 1,
+                canUse = canChangeProfiles,
+                canEdit = canChangeProfiles && !isDefaultProfile,
+                canDelete = canChangeProfiles && !isDefaultProfile,
+                canDrag = canChangeProfiles &&
+                    !isDefaultProfile &&
+                    profiles.count { it.id != ResolverProfile.DefaultId } > 1,
                 dragging = isDragging,
                 onUse = {
                     if (canChangeProfiles) {
@@ -2950,7 +3433,7 @@ private fun ResolverProfilesSettings(
                     }
                 },
                 onDragStart = {
-                    if (canChangeProfiles && profiles.size > 1) {
+                    if (canChangeProfiles && !isDefaultProfile && profiles.size > 1) {
                         draggedProfileId = profile.id
                         dragStartIndex = index
                         dragOffsetY = 0f
@@ -2969,7 +3452,7 @@ private fun ResolverProfilesSettings(
                 },
                 onEdit = { dialogProfile = profile },
                 onDelete = {
-                    if (canChangeProfiles) {
+                    if (canChangeProfiles && !isDefaultProfile) {
                         deleteProfile = profile
                     }
                 },
@@ -3618,6 +4101,7 @@ private fun ResolverProfileDialog(
 private fun ResolverProfileRow(
     profile: ResolverProfile,
     selected: Boolean,
+    canUse: Boolean,
     canEdit: Boolean,
     canDelete: Boolean,
     canDrag: Boolean,
@@ -3688,7 +4172,7 @@ private fun ResolverProfileRow(
                         label = if (selected) "Use profile (selected)" else "Use profile",
                         icon = Icons.Rounded.Check,
                         contentDescription = "Use resolver profile",
-                        enabled = canEdit,
+                        enabled = canUse,
                         onClick = onUse,
                     ),
                     ProfileMenuAction(
@@ -4036,6 +4520,7 @@ private fun ConnectionProfileDialog(
                                 customServerEncryptionKey = encryptionKey.trim(),
                                 customServerEncryptionMethod = encryptionMethod,
                                 resolverProfileId = profile?.resolverProfileId.orEmpty(),
+                                connectionMode = profile?.connectionMode ?: "proxy",
                             ),
                         )
                     },
@@ -4686,12 +5171,12 @@ private fun RuntimeWorkersSettingsGroup(
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         WhiteDnsTextField(
             modifier = Modifier.weight(1f),
-            label = "Packet Timeout",
+            label = "Tunnel Packet Timeout",
             value = settings.tunnelPacketTimeoutSeconds,
             onValueChange = {
                 onSettingsChange(settings.copy(tunnelPacketTimeoutSeconds = filterDecimalInput(it)))
             },
-            placeholder = "8.0",
+            placeholder = "10.0",
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Decimal,
                 capitalization = KeyboardCapitalization.None,
@@ -5327,7 +5812,10 @@ private fun NotificationPermissionBanner(onClick: () -> Unit) {
 }
 
 @Composable
-private fun BatteryOptimizationBanner(onClick: () -> Unit) {
+private fun BatteryOptimizationBanner(
+    onClick: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     val haptic = rememberHapticFeedback()
 
     Column(
@@ -5338,15 +5826,39 @@ private fun BatteryOptimizationBanner(onClick: () -> Unit) {
             .border(1.5.dp, WhiteDnsPalette.Warning.copy(alpha = 0.26f), RoundedCornerShape(16.dp))
             .padding(14.dp),
     ) {
-        Text(
-            text = "BACKGROUND VPN MAY STOP",
-            style = MaterialTheme.typography.bodyMedium.copy(
-                fontSize = 10.sp,
-                color = WhiteDnsPalette.WarningText,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 1.1.sp,
-            ),
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "BACKGROUND VPN MAY STOP",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 10.sp,
+                    color = WhiteDnsPalette.WarningText,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.1.sp,
+                ),
+            )
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .clickable {
+                        haptic.performLight()
+                        onDismiss()
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = "Dismiss battery optimization warning",
+                    tint = WhiteDnsPalette.WarningText,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
         Spacer(modifier = Modifier.height(WhiteDnsSpacing.iconSpacing))
         Text(
             text = "Allow WhiteDNS to ignore battery optimization so the VPN keeps running after you leave the app.",
@@ -6354,6 +6866,8 @@ private fun ConnectionInfoCard(
     username: String,
     password: String,
     stats: ConnectionStats,
+    autoTuneResults: List<AutoTuneTrialResult>,
+    onSaveAutoTuneResult: (AutoTuneTrialResult) -> Unit,
     showProxyDetails: Boolean,
     splitTunnelMode: String,
     splitTunnelPackages: List<String>,
@@ -6385,6 +6899,12 @@ private fun ConnectionInfoCard(
                 ),
             )
         }
+        if (autoTuneResults.isNotEmpty()) {
+            AutoTuneResultsSection(
+                results = autoTuneResults,
+                onSaveResult = onSaveAutoTuneResult,
+            )
+        }
         Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
         CompactMetricRow(
             metrics = listOf(
@@ -6409,6 +6929,252 @@ private fun ConnectionInfoCard(
             onClick = onDownloadToml,
         )
     }
+}
+
+@Composable
+private fun AutoTuneResultsSection(
+    results: List<AutoTuneTrialResult>,
+    onSaveResult: (AutoTuneTrialResult) -> Unit,
+) {
+    Spacer(modifier = Modifier.height(WhiteDnsSpacing.inputSpacing))
+    GroupLabel("Parallel Test Results")
+    results.forEachIndexed { index, result ->
+        AutoTuneResultRow(
+            result = result,
+            onSaveResult = onSaveResult,
+        )
+        if (index < results.lastIndex) {
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.5.dp)
+                    .background(WhiteDnsPalette.Divider),
+            )
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
+        }
+    }
+}
+
+@Composable
+private fun AutoTuneResultRow(
+    result: AutoTuneTrialResult,
+    onSaveResult: (AutoTuneTrialResult) -> Unit,
+) {
+    val inProgress = result.isAutoTuneInProgress()
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (result.selected) WhiteDnsPalette.AccentSurface else Color.Transparent)
+            .border(
+                1.5.dp,
+                if (result.selected) WhiteDnsPalette.Accent.copy(alpha = 0.18f) else Color.Transparent,
+                RoundedCornerShape(12.dp),
+            )
+            .padding(horizontal = 8.dp, vertical = 8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = autoTuneResultLabel(result),
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 13.sp,
+                    color = WhiteDnsPalette.Ink,
+                    fontWeight = FontWeight.Medium,
+                ),
+            )
+            if (inProgress) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    color = WhiteDnsPalette.Accent,
+                    strokeWidth = 2.dp,
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            AutoTuneMetricPill(
+                metric = autoTuneMtuMetric(result),
+                modifier = Modifier.weight(1f),
+            )
+            AutoTuneMetricPill(
+                metric = AutoTuneDisplayMetric(
+                    icon = Icons.Rounded.Speed,
+                    iconContentDescription = "Parallel Test speed",
+                    label = "Speed",
+                    value = autoTuneSpeedValue(result),
+                    color = WhiteDnsPalette.Success,
+                    surface = WhiteDnsPalette.SuccessSurface,
+                    loading = result.status == "measuring",
+                ),
+                modifier = Modifier.weight(1f),
+            )
+            AutoTuneMetricPill(
+                metric = AutoTuneDisplayMetric(
+                    icon = Icons.Rounded.NetworkPing,
+                    iconContentDescription = "Parallel Test ping",
+                    label = "Ping",
+                    value = result.pingMillis?.let { "${it}ms" } ?: "-",
+                    color = WhiteDnsPalette.AccentText,
+                    surface = WhiteDnsPalette.AccentSurface,
+                    loading = false,
+                ),
+                modifier = Modifier.weight(1f),
+            )
+        }
+        autoTuneStatusMessage(result)?.let { message ->
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                    color = if (result.status == "failed") WhiteDnsPalette.WarningText else WhiteDnsPalette.Muted,
+                    fontWeight = if (result.status == "failed") FontWeight.Medium else FontWeight.Normal,
+                ),
+            )
+        }
+        Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
+        CompactActionButton(
+            modifier = Modifier.fillMaxWidth(),
+            label = "SAVE SETTING AS",
+            emphasized = result.selected,
+            enabled = true,
+            onClick = { onSaveResult(result) },
+        )
+    }
+}
+
+@Composable
+private fun AutoTuneMetricPill(
+    metric: AutoTuneDisplayMetric,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(metric.surface)
+            .border(1.5.dp, metric.color.copy(alpha = 0.16f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 7.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        if (metric.loading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(14.dp),
+                color = metric.color,
+                strokeWidth = 2.dp,
+            )
+        } else {
+            Icon(
+                imageVector = metric.icon,
+                contentDescription = metric.iconContentDescription,
+                tint = metric.color,
+                modifier = Modifier.size(14.dp),
+            )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = metric.label,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 7.sp,
+                    letterSpacing = 0.5.sp,
+                    color = WhiteDnsPalette.Muted,
+                ),
+            )
+            Text(
+                text = metric.value,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = WhiteDnsPalette.Ink,
+                ),
+            )
+        }
+    }
+}
+
+private data class AutoTuneDisplayMetric(
+    val icon: ImageVector,
+    val iconContentDescription: String,
+    val label: String,
+    val value: String,
+    val color: Color,
+    val surface: Color,
+    val loading: Boolean = false,
+)
+
+@Composable
+private fun autoTuneMtuMetric(result: AutoTuneTrialResult): AutoTuneDisplayMetric {
+    return when (result.status) {
+        "failed" -> AutoTuneDisplayMetric(
+            icon = Icons.Rounded.Close,
+            iconContentDescription = "MTU failed",
+            label = "MTU",
+            value = "Fail",
+            color = WhiteDnsPalette.Error,
+            surface = WhiteDnsPalette.ErrorSurface,
+        )
+        "listening", "measuring", "ready" -> AutoTuneDisplayMetric(
+            icon = Icons.Rounded.Check,
+            iconContentDescription = "MTU passed",
+            label = "MTU",
+            value = "Pass",
+            color = WhiteDnsPalette.Success,
+            surface = WhiteDnsPalette.SuccessSurface,
+        )
+        else -> AutoTuneDisplayMetric(
+            icon = Icons.Rounded.Tune,
+            iconContentDescription = "MTU testing",
+            label = "MTU",
+            value = "Test",
+            color = WhiteDnsPalette.AccentText,
+            surface = WhiteDnsPalette.AccentSurface,
+            loading = true,
+        )
+    }
+}
+
+private fun autoTuneResultLabel(result: AutoTuneTrialResult): String {
+    return if (result.selected) {
+        "${result.label} - Selected"
+    } else {
+        result.label
+    }
+}
+
+private fun autoTuneSpeedValue(result: AutoTuneTrialResult): String {
+    return if (result.speedBytesPerSecond > 0L) {
+        formatDataSpeed(result.speedBytesPerSecond)
+    } else {
+        "-"
+    }
+}
+
+private fun autoTuneStatusMessage(result: AutoTuneTrialResult): String? {
+    return when (result.status) {
+        "starting" -> "Starting test"
+        "listening" -> "Measuring speed"
+        "measuring" -> "Measuring speed"
+        "failed" -> result.message.ifBlank { "Failed" }
+        else -> result.message.takeIf { it.isNotBlank() && it != "Measured" }
+    }
+}
+
+private fun AutoTuneTrialResult.isAutoTuneInProgress(): Boolean {
+    return status == "pending" || status == "starting" || status == "listening" || status == "measuring"
 }
 
 private data class CompactMetric(

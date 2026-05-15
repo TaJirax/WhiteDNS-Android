@@ -7,12 +7,14 @@ import org.json.JSONObject
 class WhiteDnsSettingsStore(
     context: Context,
 ) {
-    private val preferences = context.getSharedPreferences(PreferencesName, Context.MODE_PRIVATE)
+    private val appContext = context.applicationContext
+    private val preferences = appContext.getSharedPreferences(PreferencesName, Context.MODE_PRIVATE)
 
     fun load(): WhiteDnsSettings {
         val defaults = WhiteDnsSettings()
         migrateAdvancedDefaultsIfNeeded()
         val resolverText = preferences.getString(KeyResolverText, defaults.resolverText) ?: defaults.resolverText
+        val selectedResolverProfileStored = preferences.contains(KeySelectedResolverProfileId)
         val legacyServerMode = defaults.serverMode
         val legacyCustomServerDomain = preferences.getString(KeyCustomServerDomain, defaults.customServerDomain)
             ?: defaults.customServerDomain
@@ -38,9 +40,26 @@ class WhiteDnsSettingsStore(
             raw = preferences.getString(KeyConnectionProfiles, null),
             fallbackProfile = legacyProfile,
         )
-        val resolverProfiles = decodeResolverProfiles(
-            raw = preferences.getString(KeyResolverProfiles, null),
+        val defaultResolverProfile = loadDefaultResolverProfile()
+        val resolverProfiles = includeDefaultResolverProfile(
+            profiles = decodeResolverProfiles(
+                raw = preferences.getString(KeyResolverProfiles, null),
+            ),
+            defaultProfile = defaultResolverProfile,
         )
+        val selectedResolverProfileId = preferences.getString(
+            KeySelectedResolverProfileId,
+            defaults.selectedResolverProfileId,
+        ) ?: defaults.selectedResolverProfileId
+        val initialSelectedResolverProfileId = if (
+            !selectedResolverProfileStored &&
+            defaultResolverProfile != null &&
+            (resolverText.isBlank() || resolverText == LegacyDefaultResolverText)
+        ) {
+            ResolverProfile.DefaultId
+        } else {
+            selectedResolverProfileId
+        }
         val advancedProfiles = decodeAdvancedProfiles(
             raw = preferences.getString(KeyAdvancedProfiles, null),
         )
@@ -50,8 +69,7 @@ class WhiteDnsSettingsStore(
                 connectionProfiles.first().id,
             ) ?: connectionProfiles.first().id,
             connectionProfiles = connectionProfiles,
-            selectedResolverProfileId = preferences.getString(KeySelectedResolverProfileId, defaults.selectedResolverProfileId)
-                ?: defaults.selectedResolverProfileId,
+            selectedResolverProfileId = initialSelectedResolverProfileId,
             resolverProfiles = resolverProfiles,
             selectedAdvancedProfileId = preferences.getString(
                 KeySelectedAdvancedProfileId,
@@ -176,15 +194,24 @@ class WhiteDnsSettingsStore(
                 KeyTrafficKeepaliveIntervalSeconds,
                 defaults.trafficKeepaliveIntervalSeconds,
             ) ?: defaults.trafficKeepaliveIntervalSeconds,
+            autoTuneEnabled = preferences.getBoolean(KeyAutoTuneEnabled, defaults.autoTuneEnabled),
+            parallelTestSelectedConfigIds = decodePackageNames(
+                preferences.getString(KeyParallelTestSelectedConfigIds, null),
+            ).ifEmpty { defaults.parallelTestSelectedConfigIds },
             fullVpnPerformanceWarningDismissed = preferences.getBoolean(
                 KeyFullVpnPerformanceWarningDismissed,
                 defaults.fullVpnPerformanceWarningDismissed,
+            ),
+            batteryOptimizationWarningDismissed = preferences.getBoolean(
+                KeyBatteryOptimizationWarningDismissed,
+                defaults.batteryOptimizationWarningDismissed,
             ),
             splitTunnelMode = preferences.getString(KeySplitTunnelMode, defaults.splitTunnelMode)
                 ?: defaults.splitTunnelMode,
             splitTunnelPackages = decodePackageNames(preferences.getString(KeySplitTunnelPackages, null)),
             logLevel = preferences.getString(KeyLogLevel, defaults.logLevel) ?: defaults.logLevel,
         ).syncSelectedConnectionProfileFields()
+            .recoverPersistedParallelTestPreset()
     }
 
     fun save(settings: WhiteDnsSettings) {
@@ -254,9 +281,18 @@ class WhiteDnsSettingsStore(
             .putBoolean(KeyTrafficWarmupEnabled, normalizedSettings.trafficWarmupEnabled)
             .putString(KeyTrafficWarmupProbeCount, normalizedSettings.trafficWarmupProbeCount)
             .putString(KeyTrafficKeepaliveIntervalSeconds, normalizedSettings.trafficKeepaliveIntervalSeconds)
+            .putBoolean(KeyAutoTuneEnabled, normalizedSettings.autoTuneEnabled)
+            .putString(
+                KeyParallelTestSelectedConfigIds,
+                encodePackageNames(normalizedSettings.parallelTestSelectedConfigIds),
+            )
             .putBoolean(
                 KeyFullVpnPerformanceWarningDismissed,
                 normalizedSettings.fullVpnPerformanceWarningDismissed,
+            )
+            .putBoolean(
+                KeyBatteryOptimizationWarningDismissed,
+                normalizedSettings.batteryOptimizationWarningDismissed,
             )
             .putString(KeySplitTunnelMode, normalizedSettings.splitTunnelMode)
             .putString(KeySplitTunnelPackages, encodePackageNames(normalizedSettings.splitTunnelPackages))
@@ -325,6 +361,31 @@ class WhiteDnsSettingsStore(
             }
                 .filter { it.id.isNotBlank() && it.resolverText.isNotBlank() }
         }.getOrDefault(emptyList())
+    }
+
+    private fun includeDefaultResolverProfile(
+        profiles: List<ResolverProfile>,
+        defaultProfile: ResolverProfile?,
+    ): List<ResolverProfile> {
+        val customProfiles = profiles.filter { it.id != ResolverProfile.DefaultId }
+        return if (defaultProfile == null) {
+            customProfiles
+        } else {
+            listOf(defaultProfile) + customProfiles
+        }
+    }
+
+    private fun loadDefaultResolverProfile(): ResolverProfile? {
+        val resolverText = runCatching {
+            appContext.assets.open(DefaultResolverAssetName)
+                .bufferedReader(Charsets.UTF_8)
+                .use { reader ->
+                    normalizeResolverText(reader.readText())
+                }
+        }.getOrDefault("")
+        return resolverText
+            .takeIf { it.isNotBlank() }
+            ?.let { ResolverProfile.defaultProfile(it) }
     }
 
     private fun encodeResolverProfiles(profiles: List<ResolverProfile>): String {
@@ -483,6 +544,7 @@ class WhiteDnsSettingsStore(
                         "trafficKeepaliveIntervalSeconds",
                         defaultProfile.trafficKeepaliveIntervalSeconds,
                     ),
+                    autoTuneEnabled = item.optBoolean("autoTuneEnabled", defaultProfile.autoTuneEnabled),
                     logLevel = item.optString("logLevel", defaultProfile.logLevel),
                 )
             }
@@ -549,6 +611,7 @@ class WhiteDnsSettingsStore(
                         .put("trafficWarmupEnabled", profile.trafficWarmupEnabled)
                         .put("trafficWarmupProbeCount", profile.trafficWarmupProbeCount)
                         .put("trafficKeepaliveIntervalSeconds", profile.trafficKeepaliveIntervalSeconds)
+                        .put("autoTuneEnabled", profile.autoTuneEnabled)
                         .put("logLevel", profile.logLevel),
                 )
             }
@@ -590,7 +653,8 @@ class WhiteDnsSettingsStore(
             }
         }
 
-        replaceOldDefault(KeyTunnelPacketTimeoutSeconds, oldValue = "12.0", newValue = "8.0")
+        replaceOldDefault(KeyTunnelPacketTimeoutSeconds, oldValue = "12.0", newValue = "10.0")
+        replaceOldDefault(KeyTunnelPacketTimeoutSeconds, oldValue = "8.0", newValue = "10.0")
         replaceOldDefault(KeyTxChannelSize, oldValue = "4096", newValue = "2048")
         replaceOldDefault(KeyRxChannelSize, oldValue = "4096", newValue = "2048")
         replaceOldDefault(KeyStreamQueueInitialCapacity, oldValue = "256", newValue = "128")
@@ -611,13 +675,14 @@ class WhiteDnsSettingsStore(
 
     private companion object {
         const val PreferencesName = "white_dns_settings"
-        const val AdvancedDefaultsRevision = 4
+        const val AdvancedDefaultsRevision = 5
         const val LegacyDefaultResolverText = "1.1.1.1\n8.8.8.8\n9.9.9.9"
         const val KeyAdvancedDefaultsRevision = "advanced_defaults_revision"
         const val KeySelectedConnectionProfileId = "selected_connection_profile_id"
         const val KeyConnectionProfiles = "connection_profiles"
         const val KeySelectedResolverProfileId = "selected_resolver_profile_id"
         const val KeyResolverProfiles = "resolver_profiles"
+        const val DefaultResolverAssetName = "default_resolvers.txt"
         const val KeySelectedAdvancedProfileId = "selected_advanced_profile_id"
         const val KeyAdvancedProfiles = "advanced_profiles"
         const val KeyServerMode = "server_mode"
@@ -678,7 +743,10 @@ class WhiteDnsSettingsStore(
         const val KeyTrafficWarmupEnabled = "traffic_warmup_enabled"
         const val KeyTrafficWarmupProbeCount = "traffic_warmup_probe_count"
         const val KeyTrafficKeepaliveIntervalSeconds = "traffic_keepalive_interval_seconds"
+        const val KeyAutoTuneEnabled = "auto_tune_enabled"
+        const val KeyParallelTestSelectedConfigIds = "parallel_test_selected_config_ids"
         const val KeyFullVpnPerformanceWarningDismissed = "full_vpn_performance_warning_dismissed"
+        const val KeyBatteryOptimizationWarningDismissed = "battery_optimization_warning_dismissed"
         const val KeySplitTunnelMode = "split_tunnel_mode"
         const val KeySplitTunnelPackages = "split_tunnel_packages"
         const val KeyLogLevel = "log_level"

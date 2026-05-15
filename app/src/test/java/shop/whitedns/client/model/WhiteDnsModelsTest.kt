@@ -57,6 +57,79 @@ class WhiteDnsModelsTest {
     }
 
     @Test
+    fun recoverPersistedParallelTestPresetResetsUnsavedBuiltInPreset() {
+        val preset = WhiteDnsAutoTunePresets.all.first()
+        val settings = WhiteDnsSettings(autoTuneEnabled = true)
+            .applyAutoTunePreset(preset)
+
+        val recoveredSettings = settings.recoverPersistedParallelTestPreset()
+        val defaults = WhiteDnsSettings()
+
+        assertEquals(defaults.minUploadMtu, recoveredSettings.minUploadMtu)
+        assertEquals(defaults.maxUploadMtu, recoveredSettings.maxUploadMtu)
+        assertEquals(defaults.minDownloadMtu, recoveredSettings.minDownloadMtu)
+        assertEquals(defaults.maxDownloadMtu, recoveredSettings.maxDownloadMtu)
+        assertEquals(defaults.uploadDuplication, recoveredSettings.uploadDuplication)
+        assertEquals(defaults.downloadDuplication, recoveredSettings.downloadDuplication)
+        assertEquals(true, recoveredSettings.autoTuneEnabled)
+    }
+
+    @Test
+    fun recoverPersistedParallelTestPresetKeepsSavedAdvancedProfile() {
+        val preset = WhiteDnsAutoTunePresets.all.first()
+        val presetSettings = WhiteDnsSettings()
+            .applyAutoTunePreset(preset)
+            .copy(autoTuneEnabled = false)
+        val profile = AdvancedSettingsProfile.fromSettings(
+            settings = presetSettings,
+            id = "advanced-saved",
+            name = "Saved preset",
+        )
+        val settings = WhiteDnsSettings(
+            selectedAdvancedProfileId = profile.id,
+            advancedProfiles = listOf(profile),
+        ).applyAdvancedProfile(profile)
+
+        val recoveredSettings = settings.recoverPersistedParallelTestPreset()
+
+        assertEquals(profile.id, recoveredSettings.selectedAdvancedProfileId)
+        assertEquals(preset.minUploadMtu, recoveredSettings.minUploadMtu)
+        assertEquals(preset.maxDownloadMtu, recoveredSettings.maxDownloadMtu)
+        assertEquals(preset.uploadDuplication, recoveredSettings.uploadDuplication)
+        assertEquals(preset.downloadDuplication, recoveredSettings.downloadDuplication)
+    }
+
+    @Test
+    fun recoverPersistedParallelTestPresetRestoresDirtySelectedAdvancedProfile() {
+        val preset = WhiteDnsAutoTunePresets.all.first()
+        val customSettings = WhiteDnsSettings(
+            minUploadMtu = "42",
+            maxUploadMtu = "240",
+            minDownloadMtu = "420",
+            maxDownloadMtu = "2400",
+        )
+        val profile = AdvancedSettingsProfile.fromSettings(
+            settings = customSettings,
+            id = "advanced-custom",
+            name = "Custom",
+        )
+        val accidentallyPersistedSettings = WhiteDnsSettings(
+            selectedAdvancedProfileId = profile.id,
+            advancedProfiles = listOf(profile),
+            autoTuneEnabled = true,
+        ).applyAutoTunePreset(preset)
+
+        val recoveredSettings = accidentallyPersistedSettings.recoverPersistedParallelTestPreset()
+
+        assertEquals(profile.id, recoveredSettings.selectedAdvancedProfileId)
+        assertEquals(customSettings.minUploadMtu, recoveredSettings.minUploadMtu)
+        assertEquals(customSettings.maxUploadMtu, recoveredSettings.maxUploadMtu)
+        assertEquals(customSettings.minDownloadMtu, recoveredSettings.minDownloadMtu)
+        assertEquals(customSettings.maxDownloadMtu, recoveredSettings.maxDownloadMtu)
+        assertEquals(true, recoveredSettings.autoTuneEnabled)
+    }
+
+    @Test
     fun syncSelectedConnectionProfileFieldsUsesSelectedResolverProfileText() {
         val resolverProfile = ResolverProfile(
             id = "resolver-main",
@@ -209,6 +282,75 @@ class WhiteDnsModelsTest {
     }
 
     @Test
+    fun deleteDuplicateConnectionProfilesRemovesLaterProfilesWithSameServerDomainAndKey() {
+        val first = ConnectionProfile(
+            id = "profile-first",
+            name = "First",
+            customServerDomain = "Server.Example.com.",
+            customServerEncryptionKey = "secret-key",
+        )
+        val duplicate = ConnectionProfile(
+            id = "profile-duplicate",
+            name = "Duplicate",
+            customServerDomain = "server.example.com",
+            customServerEncryptionKey = "secret-key",
+        )
+        val other = ConnectionProfile(
+            id = "profile-other",
+            name = "Other",
+            customServerDomain = "server.example.com",
+            customServerEncryptionKey = "other-key",
+        )
+        val settings = WhiteDnsSettings(
+            selectedConnectionProfileId = first.id,
+            connectionProfiles = listOf(first, duplicate, other),
+        )
+
+        val updatedSettings = settings.deleteDuplicateConnectionProfiles()
+
+        assertEquals(1, settings.duplicateConnectionProfileCount())
+        assertEquals(listOf(first.id, other.id), updatedSettings.normalizedConnectionProfiles().map { it.id })
+        assertEquals(first.id, updatedSettings.selectedConnectionProfileId)
+    }
+
+    @Test
+    fun deleteDuplicateConnectionProfilesKeepsProtectedProfileWhenItIsDuplicate() {
+        val first = ConnectionProfile(
+            id = "profile-first",
+            name = "First",
+            customServerDomain = "server.example.com",
+            customServerEncryptionKey = "secret-key",
+        )
+        val protected = ConnectionProfile(
+            id = "profile-protected",
+            name = "Protected",
+            customServerDomain = "server.example.com",
+            customServerEncryptionKey = "secret-key",
+        )
+        val settings = WhiteDnsSettings(
+            selectedConnectionProfileId = first.id,
+            connectionProfiles = listOf(first, protected),
+        )
+
+        val updatedSettings = settings.deleteDuplicateConnectionProfiles(protectedProfileId = protected.id)
+
+        assertEquals(listOf(protected.id), updatedSettings.normalizedConnectionProfiles().map { it.id })
+        assertEquals(protected.id, updatedSettings.selectedConnectionProfileId)
+    }
+
+    @Test
+    fun duplicateConnectionProfileCountIgnoresIncompleteServerProfiles() {
+        val first = ConnectionProfile(id = "profile-first", name = "First")
+        val second = ConnectionProfile(id = "profile-second", name = "Second")
+        val settings = WhiteDnsSettings(connectionProfiles = listOf(first, second))
+
+        val updatedSettings = settings.deleteDuplicateConnectionProfiles()
+
+        assertEquals(0, settings.duplicateConnectionProfileCount())
+        assertEquals(listOf(first.id, second.id), updatedSettings.normalizedConnectionProfiles().map { it.id })
+    }
+
+    @Test
     fun moveResolverProfileReordersProfilesAndKeepsSelection() {
         val first = ResolverProfile(id = "resolver-first", name = "First", resolverText = "1.1.1.1")
         val second = ResolverProfile(id = "resolver-second", name = "Second", resolverText = "8.8.8.8")
@@ -244,6 +386,40 @@ class WhiteDnsModelsTest {
             updatedSettings.normalizedResolverProfiles().map { it.id },
         )
         assertEquals(first.id, updatedSettings.selectedResolverProfileId)
+    }
+
+    @Test
+    fun defaultResolverProfileStaysFirstAndCannotBeDeletedOrMoved() {
+        val defaultProfile = ResolverProfile.defaultProfile("1.1.1.1")
+        val first = ResolverProfile(id = "resolver-first", name = "First", resolverText = "8.8.8.8")
+        val second = ResolverProfile(id = "resolver-second", name = "Second", resolverText = "9.9.9.9")
+        val settings = WhiteDnsSettings(
+            resolverProfiles = listOf(first, defaultProfile, second),
+            selectedResolverProfileId = ResolverProfile.DefaultId,
+        )
+
+        val normalizedSettings = settings.syncSelectedConnectionProfileFields()
+        val deletedSettings = normalizedSettings.deleteResolverProfile(ResolverProfile.DefaultId)
+        val movedSettings = normalizedSettings.moveResolverProfileToIndex(ResolverProfile.DefaultId, 2)
+        val customMovedSettings = normalizedSettings.moveResolverProfileToIndex(second.id, 0)
+
+        assertEquals(
+            listOf(ResolverProfile.DefaultId, first.id, second.id),
+            normalizedSettings.normalizedResolverProfiles().map { it.id },
+        )
+        assertEquals(
+            normalizedSettings.normalizedResolverProfiles(),
+            deletedSettings.normalizedResolverProfiles(),
+        )
+        assertEquals(
+            normalizedSettings.normalizedResolverProfiles(),
+            movedSettings.normalizedResolverProfiles(),
+        )
+        assertEquals(
+            listOf(ResolverProfile.DefaultId, second.id, first.id),
+            customMovedSettings.normalizedResolverProfiles().map { it.id },
+        )
+        assertEquals(defaultProfile.resolverText, normalizedSettings.resolverText)
     }
 
     @Test
@@ -498,6 +674,71 @@ class WhiteDnsModelsTest {
         assertEquals(300, resolvedSettings.minDownloadMtu)
         assertEquals(140, resolvedSettings.maxUploadMtu)
         assertEquals(3000, resolvedSettings.maxDownloadMtu)
+    }
+
+    @Test
+    fun applyAutoTunePresetAppliesHighDuplicationAndMtuValues() {
+        val settings = WhiteDnsSettings(autoTuneEnabled = true)
+            .applyAutoTunePreset(WhiteDnsAutoTunePresets.all.first())
+        val resolvedSettings = settings.resolve()
+
+        assertEquals(true, settings.autoTuneEnabled)
+        assertEquals(100, resolvedSettings.minUploadMtu)
+        assertEquals(1000, resolvedSettings.maxUploadMtu)
+        assertEquals(200, resolvedSettings.minDownloadMtu)
+        assertEquals(4000, resolvedSettings.maxDownloadMtu)
+        assertEquals(0.5, resolvedSettings.mtuTestTimeoutResolvers, 0.0)
+        assertEquals(256, resolvedSettings.dnsResponseFragmentStoreCapacity)
+        assertEquals(15, resolvedSettings.uploadDuplication)
+        assertEquals(30, resolvedSettings.downloadDuplication)
+        assertEquals(2, resolvedSettings.uploadCompression)
+        assertEquals(3, resolvedSettings.downloadCompression)
+    }
+
+    @Test
+    fun parallelTestIsDisabledByDefault() {
+        val settings = WhiteDnsSettings()
+
+        assertEquals(false, settings.autoTuneEnabled)
+        assertEquals(false, settings.resolve().autoTuneEnabled)
+    }
+
+    @Test
+    fun defaultTunnelPacketTimeoutMatchesStormDnsDefault() {
+        val settings = WhiteDnsSettings()
+
+        assertEquals("10.0", settings.tunnelPacketTimeoutSeconds)
+        assertEquals(10.0, settings.resolve().tunnelPacketTimeoutSeconds, 0.0)
+    }
+
+    @Test
+    fun normalizeParallelTestConfigIdsDefaultsAndCapsSelection() {
+        val profiles = (1..5).map { index ->
+            AdvancedSettingsProfile.fromSettings(
+                settings = WhiteDnsSettings(),
+                id = "profile-$index",
+                name = "Profile $index",
+            )
+        }
+        val requestedIds = WhiteDnsParallelTest.defaultConfigIds +
+            profiles.map { WhiteDnsParallelTest.settingConfigId(it.id) }
+
+        val defaultIds = WhiteDnsParallelTest.normalizeConfigIds(
+            configIds = emptyList(),
+            advancedProfiles = profiles,
+        )
+        val cappedIds = WhiteDnsParallelTest.normalizeConfigIds(
+            configIds = requestedIds,
+            advancedProfiles = profiles,
+        )
+
+        assertEquals(WhiteDnsParallelTest.defaultConfigIds, defaultIds)
+        assertEquals(WhiteDnsParallelTest.MaxSelectedConfigs, cappedIds.size)
+        assertEquals(
+            WhiteDnsParallelTest.defaultConfigIds +
+                profiles.take(3).map { WhiteDnsParallelTest.settingConfigId(it.id) },
+            cappedIds,
+        )
     }
 
     @Test

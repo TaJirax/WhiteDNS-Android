@@ -45,6 +45,7 @@ class StormDnsConfigRendererTest {
         assertTrue(toml.contains("ENCRYPTION_KEY = \"secret-key\""))
         assertTrue(toml.contains("LISTEN_PORT = 12345"))
         assertTrue(toml.contains("UPLOAD_PACKET_DUPLICATION_COUNT = 4"))
+        assertTrue(toml.contains("STATS_REPORT_INTERVAL_SECONDS = 1.0"))
         assertTrue(toml.contains("LOG_LEVEL = \"INFO\""))
     }
 
@@ -58,8 +59,10 @@ class StormDnsConfigRendererTest {
             httpProxyEnabled = false,
             httpProxyPort = "12346",
             uploadDuplication = "4",
+            tunnelPacketTimeoutSeconds = "11.5",
             trafficWarmupEnabled = false,
             trafficWarmupProbeCount = "2",
+            autoTuneEnabled = true,
             logLevel = "INFO",
         )
 
@@ -70,8 +73,10 @@ class StormDnsConfigRendererTest {
         assertTrue(toml.contains("HTTP_PROXY_ENABLED = false"))
         assertTrue(toml.contains("HTTP_PROXY_PORT = 12346"))
         assertTrue(toml.contains("UPLOAD_PACKET_DUPLICATION_COUNT = 4"))
-        assertTrue(toml.contains("TRAFFIC_WARMUP_ENABLED = false"))
+        assertTrue(toml.contains("TUNNEL_PACKET_TIMEOUT_SECONDS = 11.5"))
+        assertTrue(toml, toml.contains("TRAFFIC_WARMUP_ENABLED = false"))
         assertTrue(toml.contains("TRAFFIC_WARMUP_PROBE_COUNT = 2"))
+        assertTrue(toml.contains("AUTO_TUNE_ENABLED = true"))
         assertTrue(toml.contains("LOG_LEVEL = \"INFO\""))
         assertFalse(toml.contains("DOMAINS"))
         assertFalse(toml.contains("DATA_ENCRYPTION_METHOD"))
@@ -83,7 +88,9 @@ class StormDnsConfigRendererTest {
         assertEquals("12345", imported.listenPort)
         assertEquals(false, imported.httpProxyEnabled)
         assertEquals("4", imported.uploadDuplication)
+        assertEquals("11.5", imported.tunnelPacketTimeoutSeconds)
         assertEquals(false, imported.trafficWarmupEnabled)
+        assertEquals(true, imported.autoTuneEnabled)
     }
 
     @Test
@@ -102,6 +109,7 @@ class StormDnsConfigRendererTest {
                 localDnsPort = "10888",
                 mtuTestParallelismResolvers = "50",
                 startupMode = "logs",
+                trafficWarmupEnabled = true,
             ),
         )
 

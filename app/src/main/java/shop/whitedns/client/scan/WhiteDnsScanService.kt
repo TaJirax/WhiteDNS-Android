@@ -158,8 +158,6 @@ class WhiteDnsScanService : Service() {
         val workerStats = Array(workerInputs.size) { WorkerScanStats(total = workerInputs[it].resolverCount) }
         val workerFailures = mutableListOf<String>()
         val stateLock = Any()
-        val initialValidResolverCount = validResolvers.size
-        val initialRejectedResolverCount = rejectedResolvers.size
         val initialEntryCount = (validResolvers + rejectedResolvers).distinct().size
         val initialProcessedCount = maxOf(initialCompletedResolvers, initialEntryCount)
         val pendingResolverCount = workerInputs.sumOf { it.resolverCount }
@@ -172,19 +170,14 @@ class WhiteDnsScanService : Service() {
                 .coerceAtMost(totalResolverCount)
             val validEntries = validResolvers.toList()
             val rejectedEntries = rejectedResolvers.toList()
-            val liveValidCount = maxOf(validEntries.size, initialValidResolverCount + workerStats.sumOf { it.valid })
-            val liveRejectedCount = maxOf(
-                rejectedEntries.size,
-                initialRejectedResolverCount + workerStats.sumOf { it.rejected },
-            )
             return WhiteDnsScanState(
                 sessionId = sessionId,
                 status = status,
                 sourceName = sourceName,
                 totalResolvers = totalResolverCount,
                 completedResolvers = completed,
-                validResolvers = liveValidCount.coerceAtMost(totalResolverCount),
-                rejectedResolvers = liveRejectedCount.coerceAtMost(totalResolverCount),
+                validResolvers = validEntries.size.coerceAtMost(totalResolverCount),
+                rejectedResolvers = rejectedEntries.size.coerceAtMost(totalResolverCount),
                 workerCount = workerInputs.size,
                 startedAtMillis = startedAtMillis,
                 updatedAtMillis = System.currentTimeMillis(),

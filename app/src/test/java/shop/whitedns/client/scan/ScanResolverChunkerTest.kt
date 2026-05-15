@@ -2,6 +2,7 @@ package shop.whitedns.client.scan
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ScanResolverChunkerTest {
@@ -112,5 +113,25 @@ class ScanResolverChunkerTest {
             summary,
         )
         assertEquals("1.1.1.1\n9.9.9.9", outputFile.readText(Charsets.UTF_8))
+    }
+
+    @Test
+    fun defaultResolverAssetContainsValidUniqueResolvers() {
+        val assetFile = listOf(
+            File("src/main/assets/default_resolvers.txt"),
+            File("app/src/main/assets/default_resolvers.txt"),
+        ).first(File::isFile)
+        val rawResolvers = assetFile.readLines(Charsets.UTF_8)
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+
+        val validation = WhiteDnsScannerResultStore.normalizeScanResolverLines(rawResolvers.asSequence())
+
+        assertEquals(emptyList<String>(), validation.invalidEntries)
+        assertEquals(rawResolvers.distinct(), rawResolvers)
+        assertEquals(rawResolvers.size, validation.normalizedResolvers.size)
+        assertTrue(validation.normalizedResolvers.contains("80.191.221.26"))
+        assertTrue(validation.normalizedResolvers.contains("2.188.21.58"))
+        assertTrue(validation.normalizedResolvers.contains("37.75.244.53"))
     }
 }

@@ -13,6 +13,7 @@ fun WhiteDnsSettings.importAdvancedSettingsProfileFromToml(
         selectedAdvancedProfileId = profile.id,
         advancedProfiles = profiles,
     ).applyAdvancedProfile(profile)
+        .copy(autoTuneEnabled = profile.autoTuneEnabled)
 }
 
 private fun parseAdvancedSettingsProfileFromToml(
@@ -77,10 +78,10 @@ private fun parseAdvancedSettingsProfileFromToml(
         settings.copy(balancingStrategy = value.enumIntValue("RESOLVER_BALANCING_STRATEGY", setOf(1, 2, 3, 4)))
     }
     applyIfPresent("UPLOAD_PACKET_DUPLICATION_COUNT") { value ->
-        settings.copy(uploadDuplication = value.intValue("UPLOAD_PACKET_DUPLICATION_COUNT", 1, 8).toString())
+        settings.copy(uploadDuplication = value.intValue("UPLOAD_PACKET_DUPLICATION_COUNT", 1, 30).toString())
     }
     applyIfPresent("DOWNLOAD_PACKET_DUPLICATION_COUNT") { value ->
-        settings.copy(downloadDuplication = value.intValue("DOWNLOAD_PACKET_DUPLICATION_COUNT", 1, 8).toString())
+        settings.copy(downloadDuplication = value.intValue("DOWNLOAD_PACKET_DUPLICATION_COUNT", 1, 30).toString())
     }
     applyIfPresent("UPLOAD_COMPRESSION_TYPE") { value ->
         settings.copy(uploadCompression = value.intValue("UPLOAD_COMPRESSION_TYPE", 0, 3))
@@ -245,6 +246,9 @@ private fun parseAdvancedSettingsProfileFromToml(
     }
     applyIfPresent("TRAFFIC_KEEPALIVE_INTERVAL_SECONDS") { value ->
         settings.copy(trafficKeepaliveIntervalSeconds = value.intValue("TRAFFIC_KEEPALIVE_INTERVAL_SECONDS", 2, 300).toString())
+    }
+    applyIfPresent("AUTO_TUNE_ENABLED") { value ->
+        settings.copy(autoTuneEnabled = value.booleanValue("AUTO_TUNE_ENABLED"))
     }
     applyIfPresent("LOG_LEVEL") { value ->
         settings.copy(logLevel = value.enumStringValue("LOG_LEVEL", setOf("DEBUG", "INFO", "WARN", "ERROR")))

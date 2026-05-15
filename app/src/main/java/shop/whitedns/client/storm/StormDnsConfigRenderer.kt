@@ -50,7 +50,10 @@ object StormDnsConfigRenderer {
         serverProfile: StormDnsServerProfile,
         settings: WhiteDnsSettings,
     ): String {
-        val resolved = settings.copy(startupMode = "resolvers").resolve()
+        val resolved = settings.copy(
+            startupMode = "resolvers",
+            trafficWarmupEnabled = false,
+        ).resolve()
         return buildString {
             appendLine("""DOMAINS = ["${escape(serverProfile.domain)}"]""")
             appendLine("DATA_ENCRYPTION_METHOD = ${serverProfile.encryptionMethod}")
@@ -134,6 +137,7 @@ object StormDnsConfigRenderer {
         appendLine("LOG_SCAN_MAX_DAYS = 14")
         appendLine("LOG_SCAN_MAX_RESOLVERS = 128")
         appendLine("LOG_BASED_MTU_VERIFY = true")
+        appendLine("STATS_REPORT_INTERVAL_SECONDS = 1.0")
         appendLine("PING_WATCHDOG_TIMEOUT_SECONDS = ${resolved.pingWatchdogSeconds}")
         appendLine("LOG_LEVEL = \"${escape(resolved.logLevel)}\"")
         appendLine("LOG_TO_FILE = true")
@@ -191,6 +195,7 @@ object StormDnsConfigRenderer {
         appendLine("TRAFFIC_WARMUP_ENABLED = ${resolved.trafficWarmupEnabled}")
         appendLine("TRAFFIC_WARMUP_PROBE_COUNT = ${resolved.trafficWarmupProbeCount}")
         appendLine("TRAFFIC_KEEPALIVE_INTERVAL_SECONDS = ${resolved.trafficKeepaliveIntervalSeconds}")
+        appendLine("AUTO_TUNE_ENABLED = ${resolved.autoTuneEnabled}")
         appendLine("LOG_LEVEL = \"${escape(resolved.logLevel)}\"")
     }
 
