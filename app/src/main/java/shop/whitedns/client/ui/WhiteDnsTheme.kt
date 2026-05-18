@@ -224,6 +224,12 @@ object WhiteDnsL10n {
     val profileTabConnection: String @Composable get() = LocalWhiteDnsStrings.current.profileTabConnection
     val profileTabResolver: String @Composable get() = LocalWhiteDnsStrings.current.profileTabResolver
     val profileTabSetting: String @Composable get() = LocalWhiteDnsStrings.current.profileTabSetting
+    val settingGuideTitle: String @Composable get() = LocalWhiteDnsStrings.current.settingGuideTitle
+    val settingGuideIntro: String @Composable get() = LocalWhiteDnsStrings.current.settingGuideIntro
+    val settingGuideSource: String @Composable get() = LocalWhiteDnsStrings.current.settingGuideSource
+    val settingGuideEffectLabel: String @Composable get() = LocalWhiteDnsStrings.current.settingGuideEffectLabel
+    val settingGuideSections: List<SettingsGuideSection> @Composable get() = LocalWhiteDnsStrings.current.settingGuideSections
+    val cdSettingGuide: String @Composable get() = LocalWhiteDnsStrings.current.cdSettingGuide
     val menuAppSettings: String @Composable get() = LocalWhiteDnsStrings.current.menuAppSettings
     val menuDonate: String @Composable get() = LocalWhiteDnsStrings.current.menuDonate
     val logsTitle: String @Composable get() = LocalWhiteDnsStrings.current.logsTitle
@@ -414,6 +420,7 @@ object WhiteDnsL10n {
     val settingResolverRetries: String @Composable get() = LocalWhiteDnsStrings.current.settingResolverRetries
     val settingResolverTimeout: String @Composable get() = LocalWhiteDnsStrings.current.settingResolverTimeout
     val settingResolverParallel: String @Composable get() = LocalWhiteDnsStrings.current.settingResolverParallel
+    val settingResolverParallelNote: String @Composable get() = LocalWhiteDnsStrings.current.settingResolverParallelNote
     val settingLogsRetries: String @Composable get() = LocalWhiteDnsStrings.current.settingLogsRetries
     val settingLogsTimeout: String @Composable get() = LocalWhiteDnsStrings.current.settingLogsTimeout
     val settingLogsParallel: String @Composable get() = LocalWhiteDnsStrings.current.settingLogsParallel
@@ -690,6 +697,12 @@ object WhiteDnsL10n {
     val resolverScanResults: String @Composable get() = LocalWhiteDnsStrings.current.resolverScanResults
     val scanResultsSuffix: String @Composable get() = LocalWhiteDnsStrings.current.scanResultsSuffix
     val noResolverEntriesError: String @Composable get() = LocalWhiteDnsStrings.current.noResolverEntriesError
+
+    val profileImportSuccess: String @Composable get() = LocalWhiteDnsStrings.current.profileImportSuccess
+    val profileBtnScanQr: String @Composable get() = LocalWhiteDnsStrings.current.profileBtnScanQr
+    val qrScanNoCode: String @Composable get() = LocalWhiteDnsStrings.current.qrScanNoCode
+    val qrScanCancelled: String @Composable get() = LocalWhiteDnsStrings.current.qrScanCancelled
+
 }
 
 object WhiteDnsPalette {

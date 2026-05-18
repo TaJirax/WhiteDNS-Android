@@ -1909,6 +1909,7 @@ class WhiteDnsViewModel(
         }
         activeProxyListenPort = WhiteDnsRuntimeProxy.ListenPortInt
         activeVpnTrafficInterfaceName = null
+        activeRuntimeSessionId = ""
         resetTrafficAccounting()
         resetSocksStreamTracker()
         resetRuntimeUiThrottles()

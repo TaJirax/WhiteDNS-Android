@@ -240,4 +240,5 @@
     <string name="cd_toggle_row_off">%1$s، غیرفعال، ضربه برای فعال کردن</string>
     <string name="cd_scan_autosave_enabled">ذخیره خودکار اسکن فعال</string>
     <string name="cd_worker_count_slider">اسلایدر تعداد ورکر، در حال حاضر %1$d ورکر</string>
+    <string name="cd_mtu_parallelism_slider">اسلایدر موازی‌سازی MTU ریزالور، در حال حاضر %1$d تست موازی</string>
 </resources>

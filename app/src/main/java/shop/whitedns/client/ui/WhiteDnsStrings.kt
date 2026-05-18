@@ -1,5 +1,16 @@
 package shop.whitedns.client.ui
 
+data class SettingsGuideEntry(
+    val title: String,
+    val body: String,
+    val effect: String,
+)
+
+data class SettingsGuideSection(
+    val title: String,
+    val entries: List<SettingsGuideEntry>,
+)
+
 interface WhiteDnsStrings {
     // Tabs
     val tabProfiles: String
@@ -84,6 +95,14 @@ interface WhiteDnsStrings {
     val profileTabConnection: String
     val profileTabResolver: String
     val profileTabSetting: String
+
+    // Setting profile guide
+    val settingGuideTitle: String
+    val settingGuideIntro: String
+    val settingGuideSource: String
+    val settingGuideEffectLabel: String
+    val settingGuideSections: List<SettingsGuideSection>
+    val cdSettingGuide: String
 
     // Header menu
     val menuAppSettings: String
@@ -267,6 +286,7 @@ interface WhiteDnsStrings {
     val settingResolverRetries: String
     val settingResolverTimeout: String
     val settingResolverParallel: String
+    val settingResolverParallelNote: String
     val settingLogsRetries: String
     val settingLogsTimeout: String
     val settingLogsParallel: String
@@ -556,6 +576,13 @@ interface WhiteDnsStrings {
     val resolverScanResults: String
     val scanResultsSuffix: String
     val noResolverEntriesError: String
+
+    // QR import
+    val profileImportSuccess: String
+    val profileBtnScanQr: String
+    val qrScanNoCode: String
+    val qrScanCancelled: String
+
 }
 
 object EnglishStrings : WhiteDnsStrings {
@@ -632,6 +659,139 @@ object EnglishStrings : WhiteDnsStrings {
     override val profileTabConnection = "Connection"
     override val profileTabResolver = "Resolver"
     override val profileTabSetting = "Setting"
+
+    override val settingGuideTitle = "SETTING PROFILE GUIDE"
+    override val settingGuideIntro = "Setting profiles change how the MasterDNS/StormDNS client behaves after you choose a connection and resolver list. Most values are MasterDNS/StormDNS client_config.toml runtime knobs; Android-only helpers are marked by WhiteDNS behavior."
+    override val settingGuideSource = "Based on MasterDNS/StormDNS client_config.toml and WhiteDNS runtime behavior."
+    override val settingGuideEffectLabel = "Effect"
+    override val cdSettingGuide = "Open setting profile guide"
+    override val settingGuideSections = listOf(
+        SettingsGuideSection(
+            title = "MTU discovery",
+            entries = listOf(
+                SettingsGuideEntry(
+                    title = "Min Upload / Min Download",
+                    body = "Smallest upload and download payload sizes accepted during resolver MTU testing. Upload is your phone to the tunnel server; download is server to your phone.",
+                    effect = "Higher minimums reject weak resolvers faster, but setting them too high can leave no usable resolver on strict networks.",
+                ),
+                SettingsGuideEntry(
+                    title = "Max Upload / Max Download",
+                    body = "Upper limits for the largest payload StormDNS will try in each direction during MTU search.",
+                    effect = "Higher values can improve throughput when DNS paths allow large packets, but scans take longer and may fail more often on filtered resolvers.",
+                ),
+                SettingsGuideEntry(
+                    title = "Resolver Retries / Timeout / Parallelism",
+                    body = "Used during a full startup scan from the resolver list. Retries repeat failed probes, timeout waits for each probe, and parallelism decides how many resolvers are tested at once.",
+                    effect = "More retries or longer timeouts improve accuracy on bad links but delay connection. More parallelism starts faster, while using more CPU, battery, and network burst.",
+                ),
+                SettingsGuideEntry(
+                    title = "Logs Retries / Timeout / Parallel",
+                    body = "Used when StormDNS starts from cached resolver log entries instead of scanning the whole resolver list.",
+                    effect = "Higher values make cached startup safer. Lower values reconnect quicker when you trust the previous working resolvers.",
+                ),
+            ),
+        ),
+        SettingsGuideSection(
+            title = "Runtime workers, queues, and timers",
+            entries = listOf(
+                SettingsGuideEntry(
+                    title = "RX/TX Workers / Process Workers",
+                    body = "Background workers for UDP tunnel reads, writes, and packet processing.",
+                    effect = "More workers can help heavy traffic on fast phones. Too many workers waste battery and CPU; WhiteDNS keeps process workers at least as high as RX/TX workers.",
+                ),
+                SettingsGuideEntry(
+                    title = "Tunnel Packet Timeout / Idle Poll",
+                    body = "Packet timeout limits how long async tunnel work may wait. Idle poll controls how often the dispatcher wakes up when there is nothing to send.",
+                    effect = "Shorter values react faster but can burn CPU or drop slow packets. Longer values are calmer but may feel less responsive.",
+                ),
+                SettingsGuideEntry(
+                    title = "TX Channel / RX Channel / UDP Pool",
+                    body = "Buffer sizes for outgoing and incoming tunnel packets, plus the number of reusable UDP sockets per resolver.",
+                    effect = "Larger values handle bursts better and reduce socket churn, but they use more memory and can hide congestion.",
+                ),
+                SettingsGuideEntry(
+                    title = "Stream Queue / Orphan Queue / DNS Fragments",
+                    body = "Initial storage for stream data, unmatched control packets, and split DNS response fragments.",
+                    effect = "Larger queues tolerate busy or fragmented sessions better. Smaller queues save memory but can drop work under load.",
+                ),
+                SettingsGuideEntry(
+                    title = "SOCKS UDP Timeout / Terminal Retain / Cancelled Retain",
+                    body = "Cleanup timers for SOCKS UDP sessions, finished streams, and setup attempts that were cancelled.",
+                    effect = "Longer retention helps late packets finish cleanly. Shorter retention frees memory sooner but can break delayed cleanup paths.",
+                ),
+                SettingsGuideEntry(
+                    title = "Retry Base / Step / Linear / Max / Busy Retry",
+                    body = "Session initialization retry schedule after setup failure, reset, or a server busy response.",
+                    effect = "Aggressive retries reconnect sooner but create more traffic. Slower retries are gentler on unstable or crowded servers.",
+                ),
+            ),
+        ),
+        SettingsGuideSection(
+            title = "Local proxy",
+            entries = listOf(
+                SettingsGuideEntry(
+                    title = "Listen IP / Listen Port",
+                    body = "Address and port where the local SOCKS5 proxy listens. 127.0.0.1 keeps it local to your phone.",
+                    effect = "Changing the port requires apps to use the new proxy address. Binding broadly, such as 0.0.0.0, can expose the proxy to your network.",
+                ),
+                SettingsGuideEntry(
+                    title = "HTTP Proxy / HTTP Port",
+                    body = "WhiteDNS can expose an HTTP proxy bridge next to the SOCKS5 listener for apps that do not support SOCKS5.",
+                    effect = "Useful for compatibility, but it opens another local listener and should use a port that is not already taken.",
+                ),
+                SettingsGuideEntry(
+                    title = "SOCKS5 Authentication / Username / Password",
+                    body = "Optional username and password for the local SOCKS5 proxy. This protects the local proxy, not the remote StormDNS server.",
+                    effect = "Turn it on if the proxy is reachable beyond the phone. Apps must then be configured with the same username and password.",
+                ),
+            ),
+        ),
+        SettingsGuideSection(
+            title = "Network tuning",
+            entries = listOf(
+                SettingsGuideEntry(
+                    title = "Balancing Strategy",
+                    body = "Resolver selection mode: Random, Round Robin, Least Loss, or Lowest Latency. Loss and latency modes use runtime feedback after traffic starts.",
+                    effect = "Least Loss is usually stable on bad networks. Lowest Latency can feel faster, but may switch toward paths that are quick yet less reliable.",
+                ),
+                SettingsGuideEntry(
+                    title = "Upload Dup / Download Dup",
+                    body = "How many copies StormDNS sends for upload data and download-support packets. Download duplicates are mostly ACK/NACK support packets.",
+                    effect = "Higher upload duplication multiplies real upload usage. Higher download duplication costs little upload and can improve download reliability on lossy links.",
+                ),
+                SettingsGuideEntry(
+                    title = "Upload Compress / Download Compress",
+                    body = "Compression method negotiated for each direction: OFF, ZSTD, LZ4, or ZLIB.",
+                    effect = "Compression can reduce traffic for text-like data, but adds CPU work and may not help already-compressed media or encrypted app traffic.",
+                ),
+                SettingsGuideEntry(
+                    title = "Base Encode Data",
+                    body = "Encodes payload labels into a more DNS-safe form before tunneling.",
+                    effect = "Usually keep it off for efficiency. Turn it on only if a resolver path behaves better with safer labels.",
+                ),
+            ),
+        ),
+        SettingsGuideSection(
+            title = "Reliability and diagnostics",
+            entries = listOf(
+                SettingsGuideEntry(
+                    title = "Ping Watchdog",
+                    body = "If non-ping traffic is active but no server response arrives for this many seconds, StormDNS restarts the session. Zero disables it.",
+                    effect = "Helps recover a silent zombie tunnel. Too short can restart healthy but slow sessions.",
+                ),
+                SettingsGuideEntry(
+                    title = "Traffic Warmup / Warmup Probes / Keepalive",
+                    body = "WhiteDNS can send small test requests after connect and then keep sending occasional probes.",
+                    effect = "Can make VPN/proxy verification and first traffic feel smoother, but uses a small amount of data and battery.",
+                ),
+                SettingsGuideEntry(
+                    title = "Log Level",
+                    body = "Controls how much diagnostic information StormDNS prints: DEBUG, INFO, WARN, or ERROR.",
+                    effect = "DEBUG and INFO help troubleshooting but create noisier logs. WARN or ERROR are quieter for normal use.",
+                ),
+            ),
+        ),
+    )
 
     override val menuAppSettings = "App Settings"
     override val menuDonate = "Donate"
@@ -807,7 +967,8 @@ object EnglishStrings : WhiteDnsStrings {
     override val settingMaxDownload = "Max Download"
     override val settingResolverRetries = "Resolver Retries"
     override val settingResolverTimeout = "Resolver Timeout"
-    override val settingResolverParallel = "Resolver Parallel"
+    override val settingResolverParallel = "Resolver MTU Parallelism"
+    override val settingResolverParallelNote = "More parallel MTU tests can make the first connection faster, but may put pressure on the phone."
     override val settingLogsRetries = "Logs Retries"
     override val settingLogsTimeout = "Logs Timeout"
     override val settingLogsParallel = "Logs Parallel"
@@ -1075,6 +1236,12 @@ object EnglishStrings : WhiteDnsStrings {
     override val resolverScanResults = "Scan Results"
     override val scanResultsSuffix = "Results"
     override val noResolverEntriesError = "No resolver entries found in file"
+
+    override val profileImportSuccess = "Profile imported"
+    override val profileBtnScanQr = "SCAN QR"
+    override val qrScanNoCode = "No WhiteDNS QR profile found"
+    override val qrScanCancelled = "QR scan cancelled"
+
 }
 
 object PersianStrings : WhiteDnsStrings {
@@ -1151,6 +1318,139 @@ object PersianStrings : WhiteDnsStrings {
     override val profileTabConnection = "اتصال"
     override val profileTabResolver = "ریزالور"
     override val profileTabSetting = "تنظیمات"
+
+    override val settingGuideTitle = "راهنمای پروفایل تنظیمات"
+    override val settingGuideIntro = "پروفایل تنظیمات مشخص می‌کند کلاینت MasterDNS/StormDNS بعد از انتخاب اتصال و لیست ریزالورها چطور کار کند. بیشتر گزینه‌ها همان تنظیمات runtime در client_config.toml مربوط به MasterDNS/StormDNS هستند؛ بخش‌های مخصوص اندروید بر اساس رفتار WhiteDNS توضیح داده شده‌اند."
+    override val settingGuideSource = "بر اساس client_config.toml در MasterDNS/StormDNS و رفتار اجرایی WhiteDNS."
+    override val settingGuideEffectLabel = "اثر"
+    override val cdSettingGuide = "باز کردن راهنمای پروفایل تنظیمات"
+    override val settingGuideSections = listOf(
+        SettingsGuideSection(
+            title = "کشف MTU",
+            entries = listOf(
+                SettingsGuideEntry(
+                    title = "حداقل آپلود / حداقل دانلود",
+                    body = "کمترین اندازه payload آپلود و دانلود که در تست MTU ریزالورها قبول می‌شود. آپلود یعنی از گوشی شما به سرور تونل، دانلود یعنی از سرور به گوشی شما.",
+                    effect = "حداقل بالاتر ریزالورهای ضعیف را زودتر حذف می‌کند، اما اگر زیادی بالا باشد ممکن است در شبکه‌های سخت‌گیر هیچ ریزالور قابل استفاده‌ای باقی نماند.",
+                ),
+                SettingsGuideEntry(
+                    title = "حداکثر آپلود / حداکثر دانلود",
+                    body = "بالاترین اندازه‌ای که StormDNS در هر جهت برای پیدا کردن MTU امتحان می‌کند.",
+                    effect = "عدد بالاتر می‌تواند روی مسیرهای DNS آزادتر سرعت بهتری بدهد، ولی اسکن طولانی‌تر می‌شود و روی ریزالورهای محدود احتمال خطا بیشتر است.",
+                ),
+                SettingsGuideEntry(
+                    title = "تلاش مجدد / تایم‌اوت / موازی‌سازی ریزالور",
+                    body = "برای اسکن کامل از لیست ریزالورها استفاده می‌شود. تلاش مجدد پروب ناموفق را تکرار می‌کند، تایم‌اوت مدت انتظار هر پروب است، و موازی‌سازی تعداد ریزالورهایی است که همزمان تست می‌شوند.",
+                    effect = "تلاش مجدد یا تایم‌اوت بیشتر دقت را در لینک بد بالا می‌برد، اما اتصال دیرتر شروع می‌شود. موازی‌سازی بیشتر شروع را سریع‌تر می‌کند ولی CPU، باتری و burst شبکه بیشتری مصرف می‌کند.",
+                ),
+                SettingsGuideEntry(
+                    title = "تلاش مجدد / تایم‌اوت / موازی‌سازی لاگ‌ها",
+                    body = "وقتی StormDNS به‌جای اسکن کامل از ریزالورهای ذخیره‌شده در لاگ شروع می‌کند، این مقادیر استفاده می‌شوند.",
+                    effect = "عدد بالاتر شروع از کش را مطمئن‌تر می‌کند. عدد پایین‌تر وقتی به ریزالورهای قبلی اعتماد دارید اتصال مجدد را سریع‌تر می‌کند.",
+                ),
+            ),
+        ),
+        SettingsGuideSection(
+            title = "ورکرها، صف‌ها و تایمرهای اجرا",
+            entries = listOf(
+                SettingsGuideEntry(
+                    title = "ورکرهای RX/TX / ورکرهای پردازش",
+                    body = "ورکرهای پس‌زمینه برای خواندن و نوشتن UDP تونل و پردازش بسته‌ها.",
+                    effect = "ورکر بیشتر روی گوشی سریع و ترافیک سنگین کمک می‌کند. ورکر زیاد باتری و CPU را هدر می‌دهد؛ WhiteDNS تعداد ورکر پردازش را حداقل برابر RX/TX نگه می‌دارد.",
+                ),
+                SettingsGuideEntry(
+                    title = "تایم‌اوت بسته تونل / نظرسنجی بیکار",
+                    body = "تایم‌اوت بسته مشخص می‌کند کار async تونل چقدر منتظر بماند. نظرسنجی بیکار تعیین می‌کند وقتی چیزی برای ارسال نیست dispatcher هر چند وقت بیدار شود.",
+                    effect = "عدد کوتاه‌تر واکنش را سریع‌تر می‌کند ولی ممکن است CPU بسوزاند یا بسته کند را حذف کند. عدد بلندتر آرام‌تر است ولی حس پاسخ‌گویی را کمتر می‌کند.",
+                ),
+                SettingsGuideEntry(
+                    title = "کانال TX / کانال RX / استخر UDP",
+                    body = "اندازه buffer برای بسته‌های خروجی و ورودی تونل، و تعداد سوکت‌های UDP قابل استفاده دوباره برای هر ریزالور.",
+                    effect = "عدد بزرگ‌تر burst را بهتر تحمل می‌کند و ساخت سوکت را کم می‌کند، اما حافظه بیشتری مصرف می‌کند و ممکن است ازدحام را پنهان کند.",
+                ),
+                SettingsGuideEntry(
+                    title = "صف استریم / صف یتیم / قطعات DNS",
+                    body = "فضای اولیه برای داده استریم، بسته‌های کنترلی بدون جفت، و پاسخ‌های DNS چندتکه.",
+                    effect = "صف بزرگ‌تر برای session شلوغ یا fragment شده بهتر است. صف کوچک‌تر حافظه را کم می‌کند ولی زیر بار ممکن است کارها حذف شوند.",
+                ),
+                SettingsGuideEntry(
+                    title = "تایم‌اوت UDP برای SOCKS / نگهداری پایانه‌ای / نگهداری لغو شده",
+                    body = "تایمرهای پاکسازی برای sessionهای SOCKS UDP، استریم‌های تمام‌شده، و تلاش‌های راه‌اندازی که لغو شده‌اند.",
+                    effect = "نگهداری طولانی‌تر به بسته‌های دیررس فرصت می‌دهد تمیز تمام شوند. نگهداری کوتاه‌تر حافظه را زودتر آزاد می‌کند ولی مسیرهای cleanup کند را خراب می‌کند.",
+                ),
+                SettingsGuideEntry(
+                    title = "پایه / گام / خطی / حداکثر / تلاش مجدد مشغول",
+                    body = "برنامه تلاش مجدد برای شروع session بعد از خطای setup، reset، یا پاسخ SESSION_BUSY از سرور.",
+                    effect = "تلاش مجدد تهاجمی سریع‌تر وصل می‌کند ولی ترافیک بیشتری می‌سازد. تلاش کندتر برای سرور شلوغ یا شبکه ناپایدار ملایم‌تر است.",
+                ),
+            ),
+        ),
+        SettingsGuideSection(
+            title = "پروکسی محلی",
+            entries = listOf(
+                SettingsGuideEntry(
+                    title = "IP شنیداری / پورت شنیداری",
+                    body = "آدرس و پورتی که پروکسی SOCKS5 محلی روی آن گوش می‌دهد. 127.0.0.1 آن را فقط داخل گوشی نگه می‌دارد.",
+                    effect = "با تغییر پورت، برنامه‌ها باید آدرس پروکسی جدید را استفاده کنند. bind گسترده مثل 0.0.0.0 می‌تواند پروکسی را در شبکه در دسترس کند.",
+                ),
+                SettingsGuideEntry(
+                    title = "پروکسی HTTP / پورت HTTP",
+                    body = "WhiteDNS می‌تواند کنار SOCKS5 یک پل HTTP proxy هم باز کند تا برنامه‌هایی که SOCKS5 ندارند کار کنند.",
+                    effect = "برای سازگاری مفید است، اما یک listener محلی دیگر باز می‌کند و باید پورتی بگیرد که قبلا اشغال نشده باشد.",
+                ),
+                SettingsGuideEntry(
+                    title = "احراز هویت SOCKS5 / نام کاربری / رمز عبور",
+                    body = "نام کاربری و رمز عبور اختیاری برای پروکسی SOCKS5 محلی. این فقط پروکسی محلی را محافظت می‌کند، نه سرور StormDNS را.",
+                    effect = "اگر پروکسی از خارج گوشی قابل دسترسی است آن را روشن کنید. برنامه‌ها باید همان نام کاربری و رمز عبور را داشته باشند.",
+                ),
+            ),
+        ),
+        SettingsGuideSection(
+            title = "تنظیم شبکه",
+            entries = listOf(
+                SettingsGuideEntry(
+                    title = "استراتژی توازن",
+                    body = "روش انتخاب ریزالور: تصادفی، نوبتی، کمترین افت، یا کمترین تاخیر. حالت‌های افت و تاخیر بعد از شروع ترافیک از آمار runtime استفاده می‌کنند.",
+                    effect = "کمترین افت معمولا در شبکه بد پایدارتر است. کمترین تاخیر می‌تواند سریع‌تر حس شود، اما شاید مسیرهای سریع‌تر ولی کم‌اعتمادتر را انتخاب کند.",
+                ),
+                SettingsGuideEntry(
+                    title = "تکرار آپلود / تکرار دانلود",
+                    body = "تعداد کپی‌هایی که StormDNS برای داده آپلود و بسته‌های پشتیبان دانلود می‌فرستد. تکرار دانلود بیشتر ACK/NACKهای کوچک است.",
+                    effect = "تکرار آپلود مصرف واقعی آپلود را چندبرابر می‌کند. تکرار دانلود هزینه آپلود کمی دارد و روی لینک packet loss دار دانلود را پایدارتر می‌کند.",
+                ),
+                SettingsGuideEntry(
+                    title = "فشرده‌سازی آپلود / فشرده‌سازی دانلود",
+                    body = "روش فشرده‌سازی هر جهت: خاموش، ZSTD، LZ4 یا ZLIB.",
+                    effect = "برای داده‌های متنی می‌تواند مصرف را کم کند، اما CPU مصرف می‌کند و روی مدیا یا ترافیک از قبل رمزنگاری/فشرده معمولا کمک زیادی نمی‌کند.",
+                ),
+                SettingsGuideEntry(
+                    title = "رمزگذاری پایه داده",
+                    body = "payload labelها را قبل از تونل به شکل امن‌تر برای DNS تبدیل می‌کند.",
+                    effect = "معمولا برای بازدهی بهتر خاموش بماند. فقط وقتی روشن کنید که یک مسیر ریزالور با labelهای امن‌تر بهتر کار می‌کند.",
+                ),
+            ),
+        ),
+        SettingsGuideSection(
+            title = "پایداری و تشخیص",
+            entries = listOf(
+                SettingsGuideEntry(
+                    title = "نظارت Ping",
+                    body = "اگر ترافیک غیر ping فعال باشد ولی در این تعداد ثانیه هیچ پاسخی از سرور نیاید، StormDNS session را ری‌استارت می‌کند. صفر آن را خاموش می‌کند.",
+                    effect = "برای بیرون آمدن از حالت تونل خاموش و بی‌پاسخ مفید است. عدد خیلی کوتاه ممکن است session سالم ولی کند را بی‌دلیل ری‌استارت کند.",
+                ),
+                SettingsGuideEntry(
+                    title = "گرم‌کردن ترافیک / پروب‌ها / Keepalive",
+                    body = "WhiteDNS می‌تواند بعد از اتصال چند درخواست کوچک تستی بفرستد و سپس هر چند وقت یک پروب سبک ارسال کند.",
+                    effect = "ممکن است تایید اتصال و اولین ترافیک را روان‌تر کند، اما مقدار کمی دیتا و باتری مصرف می‌کند.",
+                ),
+                SettingsGuideEntry(
+                    title = "سطح لاگ",
+                    body = "میزان اطلاعات تشخیصی StormDNS را کنترل می‌کند: DEBUG، INFO، WARN یا ERROR.",
+                    effect = "DEBUG و INFO برای عیب‌یابی بهترند ولی لاگ‌ها را شلوغ می‌کنند. WARN یا ERROR برای استفاده عادی آرام‌ترند.",
+                ),
+            ),
+        ),
+    )
 
     override val menuAppSettings = "تنظیمات برنامه"
     override val menuDonate = "حمایت مالی"
@@ -1326,7 +1626,8 @@ object PersianStrings : WhiteDnsStrings {
     override val settingMaxDownload = "حداکثر دانلود"
     override val settingResolverRetries = "تلاش مجدد ریزالور"
     override val settingResolverTimeout = "تایم‌اوت ریزالور"
-    override val settingResolverParallel = "موازی ریزالور"
+    override val settingResolverParallel = "موازی‌سازی MTU ریزالور"
+    override val settingResolverParallelNote = "تست‌های موازی بیشتر می‌تواند اتصال اول را سریع‌تر کند، اما ممکن است به گوشی فشار وارد کند."
     override val settingLogsRetries = "تلاش مجدد لاگ‌ها"
     override val settingLogsTimeout = "تایم‌اوت لاگ‌ها"
     override val settingLogsParallel = "موازی لاگ‌ها"
@@ -1593,4 +1894,10 @@ object PersianStrings : WhiteDnsStrings {
     override val resolverScanResults = "نتایج اسکن"
     override val scanResultsSuffix = "نتایج"
     override val noResolverEntriesError = "هیچ ورودی ریزالوری در فایل یافت نشد"
+
+    override val profileImportSuccess = "پروفایل وارد شد"
+    override val profileBtnScanQr = "اسکن QR"
+    override val qrScanNoCode = "هیچ پروفایل QR برای WhiteDNS پیدا نشد"
+    override val qrScanCancelled = "اسکن QR لغو شد"
+
 }

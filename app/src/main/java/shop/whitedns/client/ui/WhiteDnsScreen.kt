@@ -62,6 +62,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.DataUsage
@@ -98,6 +99,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -126,16 +128,21 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.intl.LocaleList
+import androidx.compose.ui.text.intl.Locale as ComposeLocale
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -197,8 +204,13 @@ import shop.whitedns.client.model.WhiteDnsAutoTunePresets
 import shop.whitedns.client.model.WhiteDnsParallelTest
 import shop.whitedns.client.model.syncSelectedConnectionProfileFields
 import shop.whitedns.client.storm.StormDnsConfigRenderer
+import com.google.zxing.BinaryBitmap
 import com.google.zxing.BarcodeFormat
+import com.google.zxing.DecodeHintType
 import com.google.zxing.EncodeHintType
+import com.google.zxing.MultiFormatReader
+import com.google.zxing.RGBLuminanceSource
+import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import java.io.File
@@ -294,6 +306,9 @@ private enum class WhiteDnsTab(
 
 private const val ScanWorkerMin = 1
 private const val ScanWorkerMax = 32
+private const val MtuParallelismMin = 1
+private const val MtuParallelismMax = 1024
+private const val MtuParallelismDefault = 100
 
 private enum class CompactActionTone {
     Default,
@@ -640,6 +655,14 @@ private fun ConnectTabContent(
                             onSettingsChange = onSettingsChange,
                         )
                     }
+                    Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
+                    MtuParallelismSlider(
+                        parallelism = settings.mtuTestParallelismResolvers.toMtuParallelismSliderValue(),
+                        enabled = parallelTestControlsEnabled,
+                        onParallelismChange = { parallelism ->
+                            onSettingsChange(settings.copy(mtuTestParallelismResolvers = parallelism.toString()))
+                        },
+                    )
                 }
             }
             AnimatedVisibility(
@@ -1274,6 +1297,7 @@ private fun ProfilesTabContent(
     var selectedProfileTab by rememberSaveable { mutableStateOf(ProfileTab.CONNECTION) }
     var connectionCreateRequestId by rememberSaveable { mutableStateOf(0) }
     var resolverCreateRequestId by rememberSaveable { mutableStateOf(0) }
+    var showSettingGuide by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(createRequest) {
         when (createRequest) {
@@ -1322,6 +1346,15 @@ private fun ProfilesTabContent(
                     ProfileTab.RESOLVER -> WhiteDnsL10n.selectorResolverProfiles.uppercase()
                     ProfileTab.SETTING -> WhiteDnsL10n.selectorSettingProfiles.uppercase()
                 },
+                titleAction = if (selectedProfileTab == ProfileTab.SETTING) {
+                    {
+                        SettingProfileGuideButton(
+                            onClick = { showSettingGuide = true },
+                        )
+                    }
+                } else {
+                    null
+                },
             ) {
                 when (selectedProfileTab) {
                     ProfileTab.CONNECTION -> ConnectionProfilesSettings(
@@ -1350,6 +1383,12 @@ private fun ProfilesTabContent(
             FooterLink()
         }
     }
+
+    if (showSettingGuide) {
+        SettingProfileGuideDialog(
+            onDismiss = { showSettingGuide = false },
+        )
+    }
 }
 
 private enum class ProfileTab(val label: String) {
@@ -1371,6 +1410,171 @@ private fun profileTabLabel(tab: ProfileTab): String = when (tab) {
     ProfileTab.CONNECTION -> WhiteDnsL10n.profileTabConnection
     ProfileTab.RESOLVER -> WhiteDnsL10n.profileTabResolver
     ProfileTab.SETTING -> WhiteDnsL10n.profileTabSetting
+}
+
+@Composable
+private fun SettingProfileGuideButton(
+    onClick: () -> Unit,
+) {
+    val haptic = rememberHapticFeedback()
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(WhiteDnsPalette.AccentSurface)
+            .border(1.5.dp, WhiteDnsPalette.Accent.copy(alpha = 0.26f), CircleShape)
+            .clickable {
+                haptic.performLight()
+                onClick()
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.AutoMirrored.Rounded.HelpOutline,
+            contentDescription = WhiteDnsL10n.cdSettingGuide,
+            tint = WhiteDnsPalette.AccentText,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+@Composable
+private fun SettingProfileGuideDialog(
+    onDismiss: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(22.dp))
+                .background(WhiteDnsPalette.Surface)
+                .border(1.5.dp, WhiteDnsPalette.Border, RoundedCornerShape(22.dp))
+                .padding(18.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    modifier = Modifier.weight(1f),
+                    text = WhiteDnsL10n.settingGuideTitle,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 14.sp,
+                        color = WhiteDnsPalette.Ink,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.1.sp,
+                    ),
+                )
+                ProfileIconButton(
+                    icon = Icons.Rounded.Close,
+                    contentDescription = WhiteDnsL10n.btnClose,
+                    emphasized = false,
+                    enabled = true,
+                    onClick = onDismiss,
+                )
+            }
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
+            Text(
+                text = WhiteDnsL10n.settingGuideIntro,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp,
+                    color = WhiteDnsPalette.Description,
+                ),
+            )
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.xs))
+            Text(
+                text = WhiteDnsL10n.settingGuideSource,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 9.sp,
+                    lineHeight = 13.sp,
+                    color = WhiteDnsPalette.Pale,
+                ),
+            )
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                WhiteDnsL10n.settingGuideSections.forEachIndexed { index, section ->
+                    if (index > 0) {
+                        SectionDivider()
+                    }
+                    SettingsGuideSectionView(section = section)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsGuideSectionView(
+    section: SettingsGuideSection,
+) {
+    Text(
+        text = section.title.uppercase(),
+        style = MaterialTheme.typography.bodyMedium.copy(
+            fontSize = 12.sp,
+            color = WhiteDnsPalette.SectionTitle,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.2.sp,
+        ),
+    )
+    Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
+    section.entries.forEachIndexed { index, entry ->
+        if (index > 0) {
+            Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
+        }
+        SettingsGuideEntryView(entry = entry)
+    }
+}
+
+@Composable
+private fun SettingsGuideEntryView(
+    entry: SettingsGuideEntry,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(WhiteDnsPalette.SurfaceAlt)
+            .border(1.5.dp, WhiteDnsPalette.Border, RoundedCornerShape(10.dp))
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+    ) {
+        Text(
+            text = entry.title,
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+                color = WhiteDnsPalette.Ink,
+                fontWeight = FontWeight.Bold,
+            ),
+        )
+        Spacer(modifier = Modifier.height(WhiteDnsSpacing.xs))
+        Text(
+            text = entry.body,
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 10.sp,
+                lineHeight = 15.sp,
+                color = WhiteDnsPalette.Description,
+            ),
+        )
+        Spacer(modifier = Modifier.height(WhiteDnsSpacing.xs))
+        Text(
+            text = "${WhiteDnsL10n.settingGuideEffectLabel}: ${entry.effect}",
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 10.sp,
+                lineHeight = 15.sp,
+                color = WhiteDnsPalette.AccentText,
+                fontWeight = FontWeight.Medium,
+            ),
+        )
+    }
 }
 
 @Composable
@@ -1856,6 +2060,76 @@ private fun ScanWorkerSlider(
             ),
         )
     }
+}
+
+@Composable
+private fun MtuParallelismSlider(
+    parallelism: Int,
+    enabled: Boolean,
+    onParallelismChange: (Int) -> Unit,
+) {
+    val context = LocalContext.current
+    var sliderValue by remember(parallelism) { mutableStateOf(parallelism.toFloat()) }
+    val displayedParallelism = sliderValue.toMtuParallelismSliderValue()
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FieldLabel(WhiteDnsL10n.settingResolverParallel)
+            Text(
+                text = displayedParallelism.toString(),
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    color = WhiteDnsPalette.Ink,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 14.sp,
+                ),
+            )
+        }
+        Slider(
+            value = sliderValue.coerceIn(MtuParallelismMin.toFloat(), MtuParallelismMax.toFloat()),
+            onValueChange = { value ->
+                sliderValue = value.coerceIn(MtuParallelismMin.toFloat(), MtuParallelismMax.toFloat())
+            },
+            onValueChangeFinished = {
+                val committedParallelism = sliderValue.toMtuParallelismSliderValue()
+                if (committedParallelism != parallelism) {
+                    onParallelismChange(committedParallelism)
+                }
+            },
+            enabled = enabled,
+            valueRange = MtuParallelismMin.toFloat()..MtuParallelismMax.toFloat(),
+            steps = 0,
+            modifier = Modifier.semantics {
+                contentDescription = context.getString(R.string.cd_mtu_parallelism_slider, displayedParallelism)
+            },
+            colors = SliderDefaults.colors(
+                thumbColor = WhiteDnsPalette.Accent,
+                activeTrackColor = WhiteDnsPalette.Accent,
+                inactiveTrackColor = WhiteDnsPalette.ControlBorder,
+                disabledThumbColor = WhiteDnsPalette.Disabled,
+                disabledActiveTrackColor = WhiteDnsPalette.ControlBorder,
+                disabledInactiveTrackColor = WhiteDnsPalette.Input,
+            ),
+        )
+        Text(
+            text = WhiteDnsL10n.settingResolverParallelNote,
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontSize = 11.sp,
+                lineHeight = 16.sp,
+                color = WhiteDnsPalette.Muted,
+            ),
+        )
+    }
+}
+
+private fun String.toMtuParallelismSliderValue(): Int {
+    return toIntOrNull()?.coerceIn(MtuParallelismMin, MtuParallelismMax) ?: MtuParallelismDefault
+}
+
+private fun Float.toMtuParallelismSliderValue(): Int {
+    return roundToInt().coerceIn(MtuParallelismMin, MtuParallelismMax)
 }
 
 @Composable
@@ -3240,6 +3514,28 @@ private fun ConnectionProfilesSettings(
     val duplicateProfileCount = settings.duplicateConnectionProfileCount()
     val shareSubjectProfileLabel = WhiteDnsL10n.shareSubjectProfile
     val shareChooserProfileLabel = WhiteDnsL10n.shareChooserProfile
+    val importSuccessLabel = WhiteDnsL10n.profileImportSuccess
+    val importErrorProfileLabel = WhiteDnsL10n.errorImportProfile
+    var importNotice by remember { mutableStateOf<String?>(null) }
+    var importNoticeIsError by remember { mutableStateOf(false) }
+    val qrScanner = rememberQrProfileImportLauncher(
+        onDecoded = { decodedLink ->
+            runCatching {
+                settings.importStormDnsProfileLinks(decodedLink)
+            }.onSuccess { importedSettings ->
+                importNoticeIsError = false
+                importNotice = importSuccessLabel
+                onSettingsChange(importedSettings)
+            }.onFailure { error ->
+                importNoticeIsError = true
+                importNotice = error.message ?: importErrorProfileLabel
+            }
+        },
+        onError = { message ->
+            importNoticeIsError = true
+            importNotice = message
+        },
+    )
     val draggedIndex = draggedProfileId?.let { profileId ->
         customProfiles.indexOfFirst { it.id == profileId }.takeIf { it >= 0 }
     }
@@ -3299,6 +3595,12 @@ private fun ConnectionProfilesSettings(
                 },
             ),
             ProfileTopAction(
+                label = WhiteDnsL10n.profileBtnScanQr,
+                emphasized = false,
+                enabled = canManageProfiles,
+                onClick = qrScanner,
+            ),
+            ProfileTopAction(
                 label = if (serverTestState.isRunning) {
                     WhiteDnsL10n.serverTestRunning
                 } else {
@@ -3328,6 +3630,17 @@ private fun ConnectionProfilesSettings(
             ),
         )
     )
+    importNotice?.let { message ->
+        Spacer(modifier = Modifier.height(WhiteDnsSpacing.sm))
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 10.sp,
+                color = if (importNoticeIsError) WhiteDnsPalette.Error else WhiteDnsPalette.Success,
+                fontWeight = FontWeight.Medium,
+            ),
+        )
+    }
 
     SectionDivider()
     GroupLabel(WhiteDnsL10n.groupCustomConnections)
@@ -4496,6 +4809,19 @@ private fun ConnectionProfileImportDialog(
     var importError by remember { mutableStateOf<String?>(null) }
     val canImport = profileLinks.trim().isNotEmpty()
     val errorImportProfileLabel = WhiteDnsL10n.errorImportProfile
+    val qrScanner = rememberQrProfileImportLauncher(
+        onDecoded = { decodedLink ->
+            profileLinks = decodedLink
+            importError = null
+            onImport(decodedLink)
+                .onFailure { error ->
+                    importError = error.message ?: errorImportProfileLabel
+                }
+        },
+        onError = { message ->
+            importError = message
+        },
+    )
 
     Dialog(onDismissRequest = onDismiss) {
         Column(
@@ -4527,6 +4853,13 @@ private fun ConnectionProfileImportDialog(
                 singleLine = false,
                 minLines = 5,
                 maxLines = 9,
+            )
+            CompactActionButton(
+                modifier = Modifier.fillMaxWidth(),
+                label = WhiteDnsL10n.profileBtnScanQr,
+                emphasized = false,
+                enabled = true,
+                onClick = qrScanner,
             )
             importError?.let { message ->
                 Spacer(modifier = Modifier.height(WhiteDnsSpacing.iconSpacing))
@@ -4612,6 +4945,7 @@ private fun ConnectionProfileExportDialog(
                     singleLine = false,
                     minLines = if (link.contains('\n')) 7 else 5,
                     maxLines = 12,
+                    rawValue = true,
                 )
                 Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
                 Row(
@@ -4850,6 +5184,54 @@ private fun ProfileQrPreview(link: String) {
                 ),
             )
         }
+    }
+}
+
+@Composable
+private fun rememberQrProfileImportLauncher(
+    onDecoded: (String) -> Unit,
+    onError: (String) -> Unit,
+): () -> Unit {
+    val noCodeMessage = WhiteDnsL10n.qrScanNoCode
+    val cancelledMessage = WhiteDnsL10n.qrScanCancelled
+    val launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview(),
+    ) { bitmap ->
+        if (bitmap == null) {
+            onError(cancelledMessage)
+            return@rememberLauncherForActivityResult
+        }
+        decodeQrBitmap(bitmap)
+            .onSuccess(onDecoded)
+            .onFailure { onError(noCodeMessage) }
+    }
+    return remember(launcher, noCodeMessage, cancelledMessage, onDecoded, onError) {
+        {
+            runCatching {
+                launcher.launch(null)
+            }.onFailure {
+                onError(cancelledMessage)
+            }
+        }
+    }
+}
+
+private fun decodeQrBitmap(bitmap: Bitmap): Result<String> {
+    return runCatching {
+        val width = bitmap.width
+        val height = bitmap.height
+        val pixels = IntArray(width * height)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+        val source = RGBLuminanceSource(width, height, pixels)
+        val binaryBitmap = BinaryBitmap(HybridBinarizer(source))
+        val hints = mapOf(
+            DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE),
+            DecodeHintType.CHARACTER_SET to "UTF-8",
+        )
+        MultiFormatReader().decode(binaryBitmap, hints).text
+            .trim()
+            .takeIf(String::isNotBlank)
+            ?: throw IllegalArgumentException("QR code is empty")
     }
 }
 
@@ -5619,17 +6001,12 @@ private fun MtuSettingsGroup(
             ),
         )
     }
-    WhiteDnsTextField(
-        label = WhiteDnsL10n.settingResolverParallel,
-        value = settings.mtuTestParallelismResolvers,
-        onValueChange = {
-            onSettingsChange(settings.copy(mtuTestParallelismResolvers = it.filter(Char::isDigit)))
+    MtuParallelismSlider(
+        parallelism = settings.mtuTestParallelismResolvers.toMtuParallelismSliderValue(),
+        enabled = true,
+        onParallelismChange = { parallelism ->
+            onSettingsChange(settings.copy(mtuTestParallelismResolvers = parallelism.toString()))
         },
-        placeholder = "100",
-        keyboardOptions = KeyboardOptions(
-            keyboardType = KeyboardType.Number,
-            capitalization = KeyboardCapitalization.None,
-        ),
     )
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         WhiteDnsTextField(
@@ -8128,6 +8505,7 @@ private fun ProtocolRow(
 private fun InfoCard(
     title: String,
     compact: Boolean = false,
+    titleAction: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val shape = RoundedCornerShape(if (compact) 12.dp else 14.dp)
@@ -8143,15 +8521,25 @@ private fun InfoCard(
             .border(borderWidth, WhiteDnsPalette.Border, shape)
             .padding(contentPadding),
     ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.bodyMedium.copy(
-                fontSize = if (compact) 12.sp else 13.sp,
-                color = WhiteDnsPalette.SectionTitle,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 1.6.sp,
-            ),
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(WhiteDnsSpacing.sm),
+        ) {
+            Text(
+                modifier = Modifier.weight(1f),
+                text = title,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = if (compact) 12.sp else 13.sp,
+                    color = WhiteDnsPalette.SectionTitle,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.6.sp,
+                ),
+            )
+            titleAction?.invoke()
+        }
         Spacer(modifier = Modifier.height(titleBottomSpacing))
         content()
     }
@@ -9001,6 +9389,7 @@ private fun WhiteDnsTextField(
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     visualTransformation: VisualTransformation = VisualTransformation.None,
     onFocusChange: (Boolean) -> Unit = {},
+    rawValue: Boolean = false,
 ) {
     var focused by remember { mutableStateOf(false) }
     val borderColor = if (focused) WhiteDnsPalette.Accent.copy(alpha = 0.60f) else WhiteDnsPalette.Divider
@@ -9009,43 +9398,60 @@ private fun WhiteDnsTextField(
         color = WhiteDnsPalette.Ink,
         fontSize = 14.sp,
     )
+    val fieldTextStyle = if (rawValue) {
+        textStyle.copy(
+            localeList = LocaleList(ComposeLocale("en-US")),
+            textDirection = TextDirection.Ltr,
+        )
+    } else {
+        textStyle
+    }
 
     Column(modifier = modifier) {
         FieldLabel(label)
-        BasicTextField(
-            value = value,
-            onValueChange = onValueChange,
-            modifier = Modifier
-                .fillMaxWidth()
-                .onFocusChanged {
-                    focused = it.isFocused
-                    onFocusChange(it.isFocused)
-                },
-            singleLine = singleLine,
-            minLines = minLines,
-            maxLines = maxLines,
-            keyboardOptions = keyboardOptions,
-            visualTransformation = visualTransformation,
-            textStyle = textStyle,
-            decorationBox = { innerTextField ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(shape)
-                        .background(WhiteDnsPalette.Input)
-                        .border(2.5.dp, borderColor, shape)
-                        .padding(horizontal = 12.dp, vertical = 11.dp),
-                ) {
-                    if (value.isEmpty()) {
-                        Text(
-                            text = placeholder,
-                            style = textStyle.copy(color = WhiteDnsPalette.Placeholder),
-                        )
+        val textField: @Composable () -> Unit = {
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged {
+                        focused = it.isFocused
+                        onFocusChange(it.isFocused)
+                    },
+                singleLine = singleLine,
+                minLines = minLines,
+                maxLines = maxLines,
+                keyboardOptions = keyboardOptions,
+                visualTransformation = visualTransformation,
+                textStyle = fieldTextStyle,
+                decorationBox = { innerTextField ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(shape)
+                            .background(WhiteDnsPalette.Input)
+                            .border(2.5.dp, borderColor, shape)
+                            .padding(horizontal = 12.dp, vertical = 11.dp),
+                    ) {
+                        if (value.isEmpty()) {
+                            Text(
+                                text = placeholder,
+                                style = fieldTextStyle.copy(color = WhiteDnsPalette.Placeholder),
+                            )
+                        }
+                        innerTextField()
                     }
-                    innerTextField()
-                }
-            },
-        )
+                },
+            )
+        }
+        if (rawValue) {
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                textField()
+            }
+        } else {
+            textField()
+        }
     }
 }
 

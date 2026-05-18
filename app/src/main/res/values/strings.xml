@@ -240,5 +240,5 @@
     <string name="cd_toggle_row_off">%1$s, disabled, tap to enable</string>
     <string name="cd_scan_autosave_enabled">Scan auto-save enabled</string>
     <string name="cd_worker_count_slider">Worker count slider, currently %1$d workers</string>
+    <string name="cd_mtu_parallelism_slider">Resolver MTU parallelism slider, currently %1$d parallel tests</string>
 </resources>
-
