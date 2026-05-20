@@ -57,6 +57,8 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -140,7 +142,9 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -1246,7 +1250,12 @@ private fun ParallelTestConfigRow(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(11.dp))
-            .clickable(enabled = enabled, onClick = onToggle)
+            .toggleable(
+                value = checked,
+                enabled = enabled,
+                role = Role.Checkbox,
+                onValueChange = { onToggle() },
+            )
             .padding(vertical = 7.dp, horizontal = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1254,7 +1263,8 @@ private fun ParallelTestConfigRow(
         Checkbox(
             checked = checked,
             enabled = enabled,
-            onCheckedChange = { onToggle() },
+            onCheckedChange = null,
+            modifier = Modifier.clearAndSetSemantics {},
             colors = CheckboxDefaults.colors(
                 checkedColor = WhiteDnsPalette.Accent,
                 uncheckedColor = WhiteDnsPalette.ControlBorder,
@@ -2232,7 +2242,6 @@ private fun BottomNavigationBar(
     selectedTab: WhiteDnsTab,
     onTabSelected: (WhiteDnsTab) -> Unit,
 ) {
-    val context = LocalContext.current
     val haptic = rememberHapticFeedback()
 
     Column(
@@ -2266,22 +2275,22 @@ private fun BottomNavigationBar(
                         .weight(1f)
                         .clip(RoundedCornerShape(14.dp))
                         .background(background)
-                        .semantics {
-                            contentDescription = context.getString(
-                                R.string.cd_navigate_to_tab, localizedLabel
-                            )
-                        }
-                        .clickable {
-                            haptic.performLight()
-                            onTabSelected(tab)
-                        }
+                        .selectable(
+                            selected = selected,
+                            role = Role.Tab,
+                            onClick = {
+                                haptic.performLight()
+                                onTabSelected(tab)
+                            },
+                        )
+                        .semantics(mergeDescendants = true) {}
                         .padding(vertical = 8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Icon(
                         imageVector = tab.icon,
-                        contentDescription = localizedLabel,
+                        contentDescription = null,
                         tint = color,
                         modifier = Modifier.size(20.dp),
                     )
@@ -2305,7 +2314,6 @@ private fun ProfileTabSwitch(
     selectedTab: ProfileTab,
     onTabSelected: (ProfileTab) -> Unit,
 ) {
-    val context = LocalContext.current
     val haptic = rememberHapticFeedback()
 
     Row(
@@ -2331,17 +2339,15 @@ private fun ProfileTabSwitch(
                             Color.Transparent
                         },
                     )
-                    .semantics {
-                        contentDescription = if (selected) {
-                            context.getString(R.string.cd_profile_tab_selected, localizedProfileLabel)
-                        } else {
-                            context.getString(R.string.cd_profile_tab_unselected, localizedProfileLabel)
-                        }
-                    }
-                    .clickable {
-                        haptic.performLight()
-                        onTabSelected(tab)
-                    }
+                    .selectable(
+                        selected = selected,
+                        role = Role.Tab,
+                        onClick = {
+                            haptic.performLight()
+                            onTabSelected(tab)
+                        },
+                    )
+                    .semantics(mergeDescendants = true) {}
                     .padding(horizontal = 8.dp, vertical = 11.dp),
                 contentAlignment = Alignment.Center,
             ) {
@@ -2445,10 +2451,16 @@ private fun ConnectionModeSegmentedControl(
                         .weight(1f)
                         .clip(RoundedCornerShape(9.dp))
                         .background(background)
-                        .clickable(enabled = enabled && !selected) {
-                            haptic.performLight()
-                            onModeChange(modeValue)
-                        }
+                        .selectable(
+                            selected = selected,
+                            enabled = enabled,
+                            role = Role.RadioButton,
+                            onClick = {
+                                haptic.performLight()
+                                onModeChange(modeValue)
+                            },
+                        )
+                        .semantics(mergeDescendants = true) {}
                         .padding(horizontal = 6.dp, vertical = 10.dp),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -2510,10 +2522,15 @@ private fun ThemeModeSegmentedControl(
                         .weight(1f)
                         .clip(RoundedCornerShape(9.dp))
                         .background(background)
-                        .clickable(enabled = !selected) {
-                            haptic.performLight()
-                            onModeChange(modeValue)
-                        }
+                        .selectable(
+                            selected = selected,
+                            role = Role.RadioButton,
+                            onClick = {
+                                haptic.performLight()
+                                onModeChange(modeValue)
+                            },
+                        )
+                        .semantics(mergeDescendants = true) {}
                         .padding(horizontal = 6.dp, vertical = 9.dp),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -6573,10 +6590,15 @@ private fun LanguageModeSegmentedControl(
                         .weight(1f)
                         .clip(RoundedCornerShape(9.dp))
                         .background(background)
-                        .clickable(enabled = !selected) {
-                            haptic.performLight()
-                            onCodeChange(code)
-                        }
+                        .selectable(
+                            selected = selected,
+                            role = Role.RadioButton,
+                            onClick = {
+                                haptic.performLight()
+                                onCodeChange(code)
+                            },
+                        )
+                        .semantics(mergeDescendants = true) {}
                         .padding(horizontal = 6.dp, vertical = 9.dp),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -7404,7 +7426,8 @@ private fun ConnectButton(
                             haptic.performMedium()
                             onClick()
                         },
-                    ),
+                    )
+                    .semantics(mergeDescendants = true) {},
                 contentAlignment = Alignment.Center,
             ) {
                 Column(
@@ -7417,13 +7440,11 @@ private fun ConnectButton(
                         } else {
                             Icons.Rounded.PowerSettingsNew
                         },
-                        contentDescription = stringResource(
-                            when (status) {
-                                ConnectionStatus.DISCONNECTED -> R.string.cd_connect_button_disconnected
-                                ConnectionStatus.CONNECTING -> R.string.cd_connect_button_connecting
-                                ConnectionStatus.CONNECTED -> R.string.cd_connect_button_connected
-                            }
-                        ),
+                        contentDescription = when (status) {
+                            ConnectionStatus.DISCONNECTED -> WhiteDnsL10n.cdConnectButtonDisconnected
+                            ConnectionStatus.CONNECTING -> WhiteDnsL10n.cdConnectButtonConnecting
+                            ConnectionStatus.CONNECTED -> WhiteDnsL10n.cdConnectButtonConnected
+                        },
                         tint = iconColor,
                         modifier = Modifier.size(if (status == ConnectionStatus.CONNECTED) 30.dp else 34.dp),
                     )
@@ -9334,43 +9355,38 @@ private fun ToggleRow(
     interactiveEnabled: Boolean = true,
     onToggle: () -> Unit,
 ) {
-    val context = LocalContext.current
     val haptic = rememberHapticFeedback()
     val contentAlpha = if (interactiveEnabled) 1f else 0.46f
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .semantics {
-                contentDescription = if (enabled) {
-                    context.getString(R.string.cd_toggle_row_on, label)
-                } else {
-                    context.getString(R.string.cd_toggle_row_off, label)
-                }
-            }
-            .clickable(enabled = interactiveEnabled) {
-                haptic.performLight()
-                onToggle()
-            }
+            .toggleable(
+                value = enabled,
+                enabled = interactiveEnabled,
+                role = Role.Switch,
+                onValueChange = {
+                    haptic.performLight()
+                    onToggle()
+                },
+            )
             .padding(vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    fontSize = 13.sp,
-                    color = WhiteDnsPalette.FieldLabel.copy(alpha = contentAlpha),
-                    fontWeight = FontWeight.Medium,
-                ),
-            )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 13.sp,
+                color = WhiteDnsPalette.FieldLabel.copy(alpha = contentAlpha),
+                fontWeight = FontWeight.Medium,
+            ),
+        )
         Switch(
             checked = enabled,
+            onCheckedChange = null,
             enabled = interactiveEnabled,
-            onCheckedChange = {
-                haptic.performLight()
-                onToggle()
-            },
+            modifier = Modifier.clearAndSetSemantics {},
             colors = SwitchDefaults.colors(
                 checkedThumbColor = WhiteDnsPalette.OnAccent,
                 checkedTrackColor = WhiteDnsPalette.Accent,
