@@ -87,6 +87,7 @@ object RuntimeLaunchRequestStore {
             .put("domain", profile.domain)
             .put("encryptionKey", profile.encryptionKey)
             .put("encryptionMethod", profile.encryptionMethod)
+            .put("serverType", profile.serverType)
     }
 
     private fun decodeServerProfile(json: JSONObject): StormDnsServerProfile {
@@ -96,6 +97,7 @@ object RuntimeLaunchRequestStore {
             domain = json.optString("domain"),
             encryptionKey = json.optString("encryptionKey"),
             encryptionMethod = json.optInt("encryptionMethod", 1),
+            serverType = json.optString("serverType", "stormdns"),
         )
     }
 

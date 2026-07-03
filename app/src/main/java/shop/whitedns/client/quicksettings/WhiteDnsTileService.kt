@@ -150,6 +150,7 @@ class WhiteDnsTileService : TileService() {
             domain = domain,
             encryptionKey = encryptionKey,
             encryptionMethod = connectionProfile.customServerEncryptionMethod.coerceIn(0, 5),
+            serverType = connectionProfile.serverType,
         )
     }
 }

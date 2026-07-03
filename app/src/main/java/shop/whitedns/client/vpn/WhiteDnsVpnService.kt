@@ -32,6 +32,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import shop.whitedns.client.MainActivity
 import shop.whitedns.client.R
+import shop.whitedns.client.model.ConnectionProfile
 import shop.whitedns.client.model.ResolvedWhiteDnsSettings
 import shop.whitedns.client.model.StormDnsServerProfile
 import shop.whitedns.client.model.WhiteDnsOptions
@@ -685,6 +686,7 @@ class WhiteDnsVpnService : VpnService() {
                 domain = domain,
                 encryptionKey = encryptionKey,
                 encryptionMethod = connectionProfile.customServerEncryptionMethod.coerceIn(0, 5),
+                serverType = ConnectionProfile.normalizeServerType(connectionProfile.serverType),
             )
         }
 

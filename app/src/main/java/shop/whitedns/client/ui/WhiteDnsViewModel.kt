@@ -2501,6 +2501,7 @@ class WhiteDnsViewModel(
             domain = domain,
             encryptionKey = encryptionKey,
             encryptionMethod = connectionProfile.customServerEncryptionMethod.coerceIn(0, 5),
+            serverType = ConnectionProfile.normalizeServerType(connectionProfile.serverType),
         )
     }
 

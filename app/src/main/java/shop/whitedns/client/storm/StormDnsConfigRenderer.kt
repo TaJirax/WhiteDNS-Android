@@ -42,8 +42,20 @@ object StormDnsConfigRenderer {
             appendLine("DATA_ENCRYPTION_METHOD = ${serverProfile.encryptionMethod}")
             appendLine("ENCRYPTION_KEY = \"${escape(serverProfile.encryptionKey)}\"")
             appendLine("PROTOCOL_TYPE = \"${escape(resolved.protocolType)}\"")
+            appendServerTypeToml(serverProfile.serverType)
             appendClientSettingsToml(resolved)
         }.trimEnd()
+    }
+
+    // Emits the wire-format and delivery/transport keys gated by the target
+    // server's engine generation. CottenDns servers use the 2-byte session-ID
+    // format and enable TCP/53 auto-fallback; StormDNS/MasterDNS/WhiteDNS servers
+    // use the legacy 1-byte format restricted to UDP for compatibility.
+    private fun StringBuilder.appendServerTypeToml(serverType: String) {
+        val isCottenDns =
+            ConnectionProfile.normalizeServerType(serverType) == ConnectionProfile.ServerTypeCottenDns
+        appendLine("LEGACY_SESSION_ID = ${!isCottenDns}")
+        appendLine("RESOLVER_TRANSPORT = \"${if (isCottenDns) "auto" else "udp"}\"")
     }
 
     fun renderScanClientToml(
@@ -59,6 +71,7 @@ object StormDnsConfigRenderer {
             appendLine("DATA_ENCRYPTION_METHOD = ${serverProfile.encryptionMethod}")
             appendLine("ENCRYPTION_KEY = \"${escape(serverProfile.encryptionKey)}\"")
             appendLine("PROTOCOL_TYPE = \"${escape(resolved.protocolType)}\"")
+            appendServerTypeToml(serverProfile.serverType)
             appendClientSettingsToml(
                 resolved = resolved,
                 listenIp = "127.0.0.1",
@@ -217,6 +230,7 @@ object StormDnsConfigRenderer {
             domain = domain,
             encryptionKey = encryptionKey,
             encryptionMethod = customServerEncryptionMethod.coerceIn(0, 5),
+            serverType = ConnectionProfile.normalizeServerType(serverType),
         )
     }
 }

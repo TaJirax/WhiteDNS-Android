@@ -20,6 +20,7 @@ data class StormDnsServerProfile(
     val domain: String,
     val encryptionKey: String,
     val encryptionMethod: Int,
+    val serverType: String = ConnectionProfile.ServerTypeStormDns,
 )
 
 data class ConnectionProfile(
@@ -29,11 +30,27 @@ data class ConnectionProfile(
     val customServerDomain: String = "",
     val customServerEncryptionKey: String = "",
     val customServerEncryptionMethod: Int = 1,
+    // Engine generation of the target server. "cottendns" uses CottenDns's 2-byte
+    // session-ID wire format and unlocks its delivery/transport features (query-type
+    // rotation, TCP/53 fallback). "stormdns" (default, also covers MasterDNS/WhiteDNS)
+    // uses the legacy 1-byte format with a TXT/UDP-only feature subset for
+    // backward compatibility. Pre-existing saved profiles deserialize to "stormdns".
+    val serverType: String = ServerTypeStormDns,
     val resolverProfileId: String = "",
     val connectionMode: String = "proxy",
 ) : Serializable {
     companion object {
         const val DefaultId = "default"
+        const val ServerTypeCottenDns = "cottendns"
+        const val ServerTypeStormDns = "stormdns"
+
+        fun normalizeServerType(value: String?): String {
+            return if (value?.trim()?.lowercase() == ServerTypeCottenDns) {
+                ServerTypeCottenDns
+            } else {
+                ServerTypeStormDns
+            }
+        }
 
         fun defaultProfile(): ConnectionProfile {
             return ConnectionProfile(
