@@ -828,6 +828,7 @@ class WhiteDnsModelsTest {
         assertEquals("cotten.example.com", importedProfile.customServerDomain)
         assertEquals("secret-key", importedProfile.customServerEncryptionKey)
         assertEquals(3, importedProfile.customServerEncryptionMethod)
+        assertEquals(ConnectionProfile.ServerTypeCottenDns, importedProfile.serverType)
     }
 
     @Test
@@ -901,7 +902,7 @@ class WhiteDnsModelsTest {
         assertTrue(link.startsWith("stormdns://"))
         assertEquals(setOf("name", "server"), exportedProfileJson.keys().asSequence().toSet())
         assertEquals(
-            setOf("domain", "encryption_key", "encryption_method"),
+            setOf("domain", "encryption_key", "encryption_method", "server_type"),
             exportedServerJson.keys().asSequence().toSet(),
         )
         assertEquals("Main Profile", importedProfile.name)
