@@ -186,6 +186,7 @@ private val LocalWhiteDnsPalette = staticCompositionLocalOf<WhiteDnsPaletteColor
 internal val LocalWhiteDnsStrings = staticCompositionLocalOf<WhiteDnsStrings> { EnglishStrings }
 
 object WhiteDnsL10n {
+    val profileFieldServerType: String @Composable get() = LocalWhiteDnsStrings.current.profileFieldServerType
     val tabProfiles: String @Composable get() = LocalWhiteDnsStrings.current.tabProfiles
     val tabConnect: String @Composable get() = LocalWhiteDnsStrings.current.tabConnect
     val tabScan: String @Composable get() = LocalWhiteDnsStrings.current.tabScan
