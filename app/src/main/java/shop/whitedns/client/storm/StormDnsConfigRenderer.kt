@@ -51,11 +51,23 @@ object StormDnsConfigRenderer {
     // server's engine generation. CottenDns servers use the 2-byte session-ID
     // format and enable TCP/53 auto-fallback; StormDNS/MasterDNS/WhiteDNS servers
     // use the legacy 1-byte format restricted to UDP for compatibility.
-    private fun StringBuilder.appendServerTypeToml(serverType: String) {
+    private fun StringBuilder.appendServerTypeToml(
+        serverType: String,
+        includeQueryTypeRotation: Boolean = true,
+    ) {
         val isCottenDns =
             ConnectionProfile.normalizeServerType(serverType) == ConnectionProfile.ServerTypeCottenDns
         appendLine("LEGACY_SESSION_ID = ${!isCottenDns}")
         appendLine("RESOLVER_TRANSPORT = \"${if (isCottenDns) "auto" else "udp"}\"")
+        if (isCottenDns && includeQueryTypeRotation) {
+            // CottenDns servers auto-accept every query type and answer with the
+            // matching record, so rotate across all delivery methods for lower
+            // fingerprint. StormDNS/MasterDNS servers only speak TXT, so leave
+            // QUERY_TYPES unset (engine defaults to TXT) for them. Rotation is
+            // omitted during resolver scanning so a TXT-only resolver is not
+            // rejected before it can be used on the (TXT-inclusive) live tunnel.
+            appendLine("QUERY_TYPES = [\"TXT\", \"CNAME\", \"NULL\", \"HTTPS\"]")
+        }
     }
 
     fun renderScanClientToml(
@@ -71,7 +83,7 @@ object StormDnsConfigRenderer {
             appendLine("DATA_ENCRYPTION_METHOD = ${serverProfile.encryptionMethod}")
             appendLine("ENCRYPTION_KEY = \"${escape(serverProfile.encryptionKey)}\"")
             appendLine("PROTOCOL_TYPE = \"${escape(resolved.protocolType)}\"")
-            appendServerTypeToml(serverProfile.serverType)
+            appendServerTypeToml(serverProfile.serverType, includeQueryTypeRotation = false)
             appendClientSettingsToml(
                 resolved = resolved,
                 listenIp = "127.0.0.1",
