@@ -68,6 +68,7 @@ data class ConnectionProfile(
                 customServerDomain = settings.customServerDomain,
                 customServerEncryptionKey = settings.customServerEncryptionKey,
                 customServerEncryptionMethod = settings.customServerEncryptionMethod,
+                serverType = settings.serverType,
                 resolverProfileId = settings.selectedResolverProfileId,
                 connectionMode = settings.connectionMode,
             )
@@ -252,6 +253,7 @@ data class WhiteDnsSettings(
     val customServerDomain: String = "",
     val customServerEncryptionKey: String = "",
     val customServerEncryptionMethod: Int = 1,
+    val serverType: String = ConnectionProfile.ServerTypeStormDns,
     val connectionMode: String = "proxy",
     val protocolType: String = "SOCKS5",
     val themeMode: String = WhiteDnsThemeMode.System,
@@ -775,6 +777,7 @@ fun WhiteDnsSettings.syncSelectedConnectionProfileFields(): WhiteDnsSettings {
         customServerDomain = selected.customServerDomain,
         customServerEncryptionKey = selected.customServerEncryptionKey,
         customServerEncryptionMethod = selected.customServerEncryptionMethod,
+        serverType = ConnectionProfile.normalizeServerType(selected.serverType),
         connectionMode = selectedConnectionMode,
         themeMode = selectedThemeMode,
         languageCode = selectedLanguageCode,

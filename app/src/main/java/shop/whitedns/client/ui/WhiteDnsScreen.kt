@@ -5298,6 +5298,9 @@ private fun ConnectionProfileDialog(
     var encryptionMethod by remember(profile?.id) {
         mutableStateOf(profile?.customServerEncryptionMethod ?: 1)
     }
+    var serverType by remember(profile?.id) {
+        mutableStateOf(ConnectionProfile.normalizeServerType(profile?.serverType))
+    }
     val canSave = name.isNotBlank() && domain.isNotBlank() && encryptionKey.isNotBlank()
 
     Dialog(onDismissRequest = onDismiss) {
@@ -5343,6 +5346,12 @@ private fun ConnectionProfileDialog(
                 options = localizedEncryptionMethods(),
                 onValueChange = { encryptionMethod = it },
             )
+            WhiteDnsDropdownField(
+                label = WhiteDnsL10n.profileFieldServerType,
+                value = serverType,
+                options = localizedServerTypes(),
+                onValueChange = { serverType = it },
+            )
             Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -5369,6 +5378,7 @@ private fun ConnectionProfileDialog(
                                 customServerDomain = domain.trim().trimEnd('.'),
                                 customServerEncryptionKey = encryptionKey.trim(),
                                 customServerEncryptionMethod = encryptionMethod,
+                                serverType = serverType,
                                 resolverProfileId = profile?.resolverProfileId.orEmpty(),
                                 connectionMode = profile?.connectionMode ?: "proxy",
                             ),
@@ -9526,6 +9536,14 @@ private fun localizedEncryptionMethods(): List<Choice<Int>> = listOf(
     Choice(3, WhiteDnsL10n.encryptionMethodAes128),
     Choice(4, WhiteDnsL10n.encryptionMethodAes192),
     Choice(5, WhiteDnsL10n.encryptionMethodAes256),
+)
+
+// Server engine generations selectable per profile. CottenDns uses the 2-byte
+// session-ID wire format with TCP/53 and non-TXT delivery; StormDNS covers the
+// legacy MasterDNS/StormDNS/WhiteDNS 1-byte format for backward compatibility.
+private fun localizedServerTypes(): List<Choice<String>> = listOf(
+    Choice(ConnectionProfile.ServerTypeStormDns, "StormDNS / MasterDNS"),
+    Choice(ConnectionProfile.ServerTypeCottenDns, "CottenDns"),
 )
 
 @Composable

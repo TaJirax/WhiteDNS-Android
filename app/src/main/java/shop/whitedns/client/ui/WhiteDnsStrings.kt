@@ -460,6 +460,11 @@ interface WhiteDnsStrings {
     val profileFieldDomain: String
     val profileFieldEncryptionKey: String
     val profileFieldEncryptionMethod: String
+
+    // Server engine generation of the profile's target server. Default getter so
+    // language packs inherit an English fallback without each needing an override.
+    val profileFieldServerType: String get() = "Server Type"
+
     val profileDomainPlaceholder: String
     val profileEncryptionKeyPlaceholder: String
     val profileMyStormDnsPlaceholder: String
