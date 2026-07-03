@@ -24,7 +24,7 @@ The Android VPN path also packages `tun2proxy`; see [THIRD_PARTY_NOTICES.md](./T
 - Proxy mode with local SOCKS5 support and optional HTTP proxy bridge.
 - VPN mode using Android `VpnService` and packaged `tun2proxy` native libraries.
 - Built-in and custom server profile support.
-- `stormdns://` profile import and export helpers.
+- `stormdns://` (and interoperable `cottendns://`) profile import, plus `stormdns://` export helpers.
 - Resolver profile management with validation and default resolver assets.
 - Split tunnel options for VPN routing.
 - Runtime connection logs, resolver state, progress, and traffic statistics.

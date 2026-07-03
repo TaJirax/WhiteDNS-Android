@@ -4873,7 +4873,7 @@ private fun ConnectionProfileImportDialog(
                     profileLinks = it
                     importError = null
                 },
-                placeholder = "stormdns://...\nstormdns://...",
+                placeholder = "stormdns://...\ncottendns://...",
                 singleLine = false,
                 minLines = 5,
                 maxLines = 9,

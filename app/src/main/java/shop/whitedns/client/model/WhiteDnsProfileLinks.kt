@@ -4,6 +4,8 @@ import java.util.Base64
 import org.json.JSONObject
 
 private const val StormDnsProfileScheme = "stormdns"
+private const val CottenDnsProfileScheme = "cottendns"
+private val SupportedProfileSchemes = listOf(StormDnsProfileScheme, CottenDnsProfileScheme)
 private const val StormDnsProfileSchema = "whitedns.profile"
 private const val StormDnsProfileVersion = 1
 
@@ -64,7 +66,7 @@ fun WhiteDnsSettings.importStormDnsProfileLinks(
         }
         .toList()
     if (links.isEmpty()) {
-        throw IllegalArgumentException("Enter at least one stormdns:// profile link")
+        throw IllegalArgumentException("Enter at least one stormdns:// or cottendns:// profile link")
     }
 
     var nextSettings = this
@@ -143,11 +145,11 @@ private fun encodeProfilePayload(root: JSONObject): String {
 
 private fun decodeProfilePayload(rawLink: String): JSONObject {
     val link = rawLink.trim()
-    val prefix = "$StormDnsProfileScheme://"
-    if (!link.startsWith(prefix)) {
-        throw IllegalArgumentException("Profile link must start with stormdns://")
-    }
-    val payload = link.removePrefix(prefix).trim()
+    // CottenDns is a StormDNS-protocol fork, so its profile links carry the same
+    // payload and are accepted here alongside stormdns:// for interoperability.
+    val scheme = SupportedProfileSchemes.firstOrNull { link.startsWith("$it://") }
+        ?: throw IllegalArgumentException("Profile link must start with stormdns:// or cottendns://")
+    val payload = link.removePrefix("$scheme://").trim()
     if (payload.isBlank()) {
         throw IllegalArgumentException("Profile link is empty")
     }

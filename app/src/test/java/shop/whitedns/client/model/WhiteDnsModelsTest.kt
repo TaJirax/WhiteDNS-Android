@@ -802,6 +802,60 @@ class WhiteDnsModelsTest {
     }
 
     @Test
+    fun importCottenDnsProfileLinkAcceptsSameStormDnsPayload() {
+        val payload = """
+            {
+              "schema": "whitedns.profile",
+              "version": 1,
+              "profile": {
+                "name": "CottenDns Profile",
+                "server": {
+                  "domain": "cotten.example.com",
+                  "encryption_key": "secret-key",
+                  "encryption_method": 3
+                }
+              }
+            }
+        """.trimIndent()
+        val link = "cottendns://${Base64.getUrlEncoder().withoutPadding().encodeToString(payload.toByteArray())}"
+
+        val importedSettings = WhiteDnsSettings().importStormDnsProfileLink(link, nowMillis = 55L)
+        val importedProfile = importedSettings.selectedConnectionProfile()
+
+        assertEquals("profile-imported-55", importedProfile.id)
+        assertEquals("CottenDns Profile", importedProfile.name)
+        assertEquals("custom", importedProfile.serverMode)
+        assertEquals("cotten.example.com", importedProfile.customServerDomain)
+        assertEquals("secret-key", importedProfile.customServerEncryptionKey)
+        assertEquals(3, importedProfile.customServerEncryptionMethod)
+    }
+
+    @Test
+    fun importProfileLinkRejectsUnknownScheme() {
+        val payload = """
+            {
+              "schema": "whitedns.profile",
+              "version": 1,
+              "profile": {
+                "name": "Bad Profile",
+                "server": {
+                  "domain": "server.example.com",
+                  "encryption_key": "secret-key",
+                  "encryption_method": 2
+                }
+              }
+            }
+        """.trimIndent()
+        val link = "notdns://${Base64.getUrlEncoder().withoutPadding().encodeToString(payload.toByteArray())}"
+
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            WhiteDnsSettings().importStormDnsProfileLink(link)
+        }
+        assertTrue(error.message.orEmpty().contains("stormdns://"))
+        assertTrue(error.message.orEmpty().contains("cottendns://"))
+    }
+
+    @Test
     fun exportAndImportStormDnsProfileLinkUsesOnlyRequiredProfileFields() {
         val resolverProfile = ResolverProfile(
             id = "resolver-main",
