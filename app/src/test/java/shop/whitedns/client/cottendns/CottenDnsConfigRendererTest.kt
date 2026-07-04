@@ -148,7 +148,9 @@ class CottenDnsConfigRendererTest {
 
         assertTrue(toml.contains("LEGACY_SESSION_ID = true"))
         assertTrue(toml.contains("RESOLVER_TRANSPORT = \"udp\""))
-        assertFalse(toml.contains("QUERY_TYPES"))
+        // Compatibility now emits an explicit TXT-only delivery set (safe for
+        // legacy MasterDNS/StormDNS servers) rather than omitting QUERY_TYPES.
+        assertTrue(toml.contains("QUERY_TYPES = [\"TXT\"]"))
     }
     @Test
     fun renderClientTomlAppliesTcpSurvivalPresetToRuntimeKeys() {
@@ -200,8 +202,13 @@ class CottenDnsConfigRendererTest {
         assertTrue(cottenDnsToml.contains("EDNS_UDP_SIZE = 1232"))
         assertTrue(cottenDnsToml.contains("MTU_MAX_LOSS = 0.2"))
         assertTrue(cottenDnsToml.contains("QUERY_TYPES = [\"TXT\", \"CNAME\", \"HTTPS\", \"A\"]"))
-        assertTrue(compatibilityToml.contains("CONFIG_PRESET = \"default\""))
+        // The server-transparent preset shape (QNAME reshaping, EDNS, MTU) now
+        // applies to the compatibility path too — proving QNAME reshaping works
+        // for legacy MasterDNS/StormDNS servers — while the generation-sensitive
+        // delivery/transport are forced to the safe TXT/UDP subset.
+        assertTrue(compatibilityToml.contains("CONFIG_PRESET = \"survival\""))
+        assertTrue(compatibilityToml.contains("QNAME_LABEL_LENGTH = 42"))
         assertTrue(compatibilityToml.contains("RESOLVER_TRANSPORT = \"udp\""))
-        assertFalse(compatibilityToml.contains("QUERY_TYPES"))
+        assertTrue(compatibilityToml.contains("QUERY_TYPES = [\"TXT\"]"))
     }
 }
