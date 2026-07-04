@@ -852,7 +852,33 @@ class WhiteDnsModelsTest {
         val error = assertThrows(IllegalArgumentException::class.java) {
             WhiteDnsSettings().importCottenDnsProfileLink(link)
         }
-        assertTrue(error.message.orEmpty().contains("CottenDns://"))
+        assertTrue(error.message.orEmpty().contains("cottendns://"))
+    }
+
+    @Test
+    fun importProfileLinkAcceptsLegacyStormAndMasterSchemesAsCompatibility() {
+        val payload = """
+            {
+              "schema": "whitedns.profile",
+              "version": 1,
+              "profile": {
+                "name": "Legacy Profile",
+                "server": {
+                  "domain": "legacy.example.com",
+                  "encryption_key": "secret-key",
+                  "encryption_method": 1
+                }
+              }
+            }
+        """.trimIndent()
+        val encoded = Base64.getUrlEncoder().withoutPadding().encodeToString(payload.toByteArray())
+
+        for (scheme in listOf("stormdns", "masterdns")) {
+            val imported = WhiteDnsSettings().importCottenDnsProfileLink("$scheme://$encoded")
+            val profile = imported.selectedConnectionProfile()
+            assertEquals("legacy.example.com", profile.customServerDomain)
+            assertEquals(ConnectionProfile.ServerTypeCompatibility, profile.serverType)
+        }
     }
 
     @Test

@@ -4,7 +4,20 @@ import java.util.Base64
 import org.json.JSONObject
 
 private const val CottenDnsProfileScheme = "CottenDns"
-private val SupportedProfileSchemes = listOf(CottenDnsProfileScheme, "cottendns")
+// Legacy schemes import as Storm/Master DNS (compatibility) profiles.
+private val CompatibilityProfileSchemes = listOf("stormdns", "masterdns")
+private val SupportedProfileSchemes =
+    listOf(CottenDnsProfileScheme, "cottendns") + CompatibilityProfileSchemes
+
+// Server type implied by the link scheme, used when the payload omits server_type.
+private fun schemeServerType(rawLink: String): String {
+    val lower = rawLink.trim().lowercase()
+    return if (CompatibilityProfileSchemes.any { lower.startsWith("$it://") }) {
+        ConnectionProfile.ServerTypeCompatibility
+    } else {
+        ConnectionProfile.ServerTypeCottenDns
+    }
+}
 private const val CottenDnsProfileSchema = "whitedns.profile"
 private const val CottenDnsProfileVersion = 1
 
@@ -68,7 +81,7 @@ fun WhiteDnsSettings.importCottenDnsProfileLinks(
         }
         .toList()
     if (links.isEmpty()) {
-        throw IllegalArgumentException("Enter at least one CottenDns:// profile link")
+        throw IllegalArgumentException("Enter at least one cottendns:// / stormdns:// / masterdns:// profile link")
     }
 
     var nextSettings = this
@@ -118,9 +131,10 @@ fun WhiteDnsSettings.importCottenDnsProfileLink(
     if (encryptionMethod !in 0..5) {
         throw IllegalArgumentException("Server encryption method must be between 0 and 5")
     }
-    // Prefer an explicit server_type in the payload; otherwise use CottenDns mode.
+    // Prefer an explicit server_type in the payload; otherwise infer it from the
+    // link scheme (stormdns:// / masterdns:// -> compatibility, cottendns:// -> native).
     val serverType = ConnectionProfile.normalizeServerType(
-        serverJson.optionalString("server_type") ?: ConnectionProfile.ServerTypeCottenDns,
+        serverJson.optionalString("server_type") ?: schemeServerType(rawLink),
     )
     val importedProfile = ConnectionProfile(
         id = profileId,
@@ -152,9 +166,10 @@ private fun encodeProfilePayload(root: JSONObject): String {
 
 private fun decodeProfilePayload(rawLink: String): JSONObject {
     val link = rawLink.trim()
-    val scheme = SupportedProfileSchemes.firstOrNull { link.startsWith("$it://") }
-        ?: throw IllegalArgumentException("Profile link must start with CottenDns://")
-    val payload = link.removePrefix("$scheme://").trim()
+    val scheme = SupportedProfileSchemes.firstOrNull { link.startsWith("$it://", ignoreCase = true) }
+        ?: throw IllegalArgumentException("Profile link must start with cottendns://, stormdns://, or masterdns://")
+    // Strip "scheme://" by length so mixed-case schemes are handled too.
+    val payload = link.substring(scheme.length + 3).trim()
     if (payload.isBlank()) {
         throw IllegalArgumentException("Profile link is empty")
     }
