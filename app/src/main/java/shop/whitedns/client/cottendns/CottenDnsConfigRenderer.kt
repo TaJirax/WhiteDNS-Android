@@ -42,7 +42,7 @@ object CottenDnsConfigRenderer {
             appendLine("DATA_ENCRYPTION_METHOD = ${serverProfile.encryptionMethod}")
             appendLine("ENCRYPTION_KEY = \"${escape(serverProfile.encryptionKey)}\"")
             appendLine("PROTOCOL_TYPE = \"${escape(resolved.protocolType)}\"")
-            appendServerTypeToml(serverProfile.serverType, resolved.configPreset, resolved.transportMode, resolved.deliveryMode)
+            appendServerTypeToml(serverProfile.serverType, resolved.configPreset, resolved.transportMode, resolved.deliveryMode, resolved.qnameMode)
             appendClientSettingsToml(resolved)
         }.trimEnd()
     }
@@ -60,6 +60,7 @@ object CottenDnsConfigRenderer {
         configPreset: String,
         transportMode: String,
         deliveryMode: String,
+        qnameMode: String,
     ) {
         val isCompatibility =
             ConnectionProfile.normalizeServerType(serverType) == ConnectionProfile.ServerTypeCompatibility
@@ -95,7 +96,14 @@ object CottenDnsConfigRenderer {
         // dots regardless of length). But older MasterDNS variants are not
         // verified here, so Compatibility mode forces the classic 63-char labels
         // to guarantee legacy connectivity; CottenDns keeps preset-driven reshaping.
-        appendLine("QNAME_LABEL_LENGTH = ${if (isCompatibility) 63 else qnameLabelLength(preset)}")
+        val qnameLen = when {
+            isCompatibility -> 63
+            qnameMode == "off" -> 63
+            qnameMode == "moderate" -> 42
+            qnameMode == "aggressive" -> 32
+            else -> qnameLabelLength(preset)
+        }
+        appendLine("QNAME_LABEL_LENGTH = $qnameLen")
         appendLine("ADAPTIVE_DUPLICATION = true")
         appendLine("DUPLICATION_PREFER_DISTINCT_DOMAINS = true")
         appendLine("RESOLVER_RATE_LIMIT_ENABLED = true")
@@ -199,7 +207,7 @@ object CottenDnsConfigRenderer {
             appendLine("DATA_ENCRYPTION_METHOD = ${serverProfile.encryptionMethod}")
             appendLine("ENCRYPTION_KEY = \"${escape(serverProfile.encryptionKey)}\"")
             appendLine("PROTOCOL_TYPE = \"${escape(resolved.protocolType)}\"")
-            appendServerTypeToml(serverProfile.serverType, resolved.configPreset, resolved.transportMode, resolved.deliveryMode)
+            appendServerTypeToml(serverProfile.serverType, resolved.configPreset, resolved.transportMode, resolved.deliveryMode, resolved.qnameMode)
             appendClientSettingsToml(
                 resolved = resolved,
                 listenIp = "127.0.0.1",

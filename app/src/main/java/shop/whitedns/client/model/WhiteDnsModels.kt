@@ -258,6 +258,10 @@ data class WhiteDnsSettings(
     // the safe TXT/UDP subset regardless of these.
     val transportMode: String = "preset",
     val deliveryMode: String = "preset",
+    // QNAME reshaping override. "preset" defers to the preset; "off" keeps the
+    // classic 63-char labels; "moderate"/"aggressive" shorten labels for a lower
+    // fingerprint. Forced off in Storm/Master compatibility mode.
+    val qnameMode: String = "preset",
     val connectionMode: String = "proxy",
     val protocolType: String = "SOCKS5",
     val themeMode: String = WhiteDnsThemeMode.System,
@@ -327,6 +331,7 @@ data class ResolvedWhiteDnsSettings(
     val configPreset: String,
     val transportMode: String,
     val deliveryMode: String,
+    val qnameMode: String,
     val connectionMode: String,
     val protocolType: String,
     val resolverEntries: List<String>,
@@ -645,6 +650,15 @@ object WhiteDnsOptions {
         Choice("txt-cname", "TXT + CNAME"),
         Choice("txt-https", "TXT + HTTPS"),
         Choice("all", "All (TXT / CNAME / NULL / HTTPS)"),
+    )
+
+    // QNAME reshaping: shorter DNS labels lower the fingerprint at some capacity
+    // cost. Ignored in Storm/Master compatibility mode (always 63-char labels).
+    val qnameModes = listOf(
+        Choice("preset", "From preset"),
+        Choice("off", "Off (max capacity, 63)"),
+        Choice("moderate", "Moderate (42)"),
+        Choice("aggressive", "Aggressive (32)"),
     )
 
     val balancingStrategies = listOf(
@@ -1743,6 +1757,10 @@ fun WhiteDnsSettings.resolve(): ResolvedWhiteDnsSettings {
         },
         deliveryMode = when (deliveryMode.trim().lowercase()) {
             "txt", "txt-cname", "txt-https", "all" -> deliveryMode.trim().lowercase()
+            else -> "preset"
+        },
+        qnameMode = when (qnameMode.trim().lowercase()) {
+            "off", "moderate", "aggressive" -> qnameMode.trim().lowercase()
             else -> "preset"
         },
         connectionMode = when (connectionMode) {

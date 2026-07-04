@@ -3524,9 +3524,10 @@ private fun ConnectionProfilesSettings(
     onServerTestClick: (String?) -> Unit,
     onSettingsChange: (WhiteDnsSettings) -> Unit,
 ) {
-    val profiles = settings.normalizedConnectionProfiles()
-    val selectedProfile = settings.selectedConnectionProfile()
-    val customProfiles = profiles.filter { it.serverMode == "custom" }
+    // Derive lists once per settings change instead of on every recomposition.
+    val profiles = remember(settings) { settings.normalizedConnectionProfiles() }
+    val selectedProfile = remember(settings) { settings.selectedConnectionProfile() }
+    val customProfiles = remember(profiles) { profiles.filter { it.serverMode == "custom" } }
     val serverTestScores = remember(serverTestState.results) { buildServerTestScores(serverTestState.results) }
     val serverTestResultsById = remember(serverTestState.results) {
         serverTestState.results.associateBy { it.serverId }
@@ -5991,8 +5992,14 @@ private fun CottenDnsFeaturePresetGroup(
         options = WhiteDnsOptions.deliveryModes,
         onValueChange = { mode -> onSettingsChange(settings.copy(deliveryMode = mode)) },
     )
+    WhiteDnsDropdownField(
+        label = "QNAME reshaping",
+        value = settings.qnameMode,
+        options = WhiteDnsOptions.qnameModes,
+        onValueChange = { mode -> onSettingsChange(settings.copy(qnameMode = mode)) },
+    )
     Text(
-        text = "Transport and delivery override the preset. In Storm / Master DNS mode they are always forced to TXT over UDP for compatibility.",
+        text = "Transport, delivery, and QNAME reshaping override the preset. In Storm / Master DNS mode they are always forced to TXT over UDP with classic 63-char labels for compatibility.",
         style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp, color = WhiteDnsPalette.Muted),
     )
     Column(
