@@ -121,13 +121,13 @@ class CottenDnsConfigRendererTest {
         assertTrue(toml.contains("STARTUP_MODE = \"resolvers\""))
         assertTrue(toml.contains("LEGACY_SESSION_ID = false"))
         assertTrue(toml.contains("RESOLVER_TRANSPORT = \"auto\""))
-        assertTrue(toml.contains("QUERY_TYPES = [\"TXT\", \"CNAME\", \"NULL\", \"HTTPS\"]"))
+        assertTrue(toml.contains("QUERY_TYPES = [\"TXT\"]"))
         assertTrue(toml.contains("DNS_RANDOMIZE_QUERY_ID = true"))
         assertTrue(toml.contains("DNS_EDNS_COOKIE = true"))
         assertTrue(toml.contains("RESOLVER_IGNORE_INJECTED_NXDOMAIN = true"))
         assertTrue(toml.contains("QNAME_LABEL_LENGTH = 63"))
-        assertTrue(toml.contains("MTU_PROBE_SAMPLES = 3"))
-        assertTrue(toml.contains("MTU_MAX_LOSS = 0.75"))
+        assertTrue(toml.contains("MTU_PROBE_SAMPLES = 1"))
+        assertTrue(toml.contains("MTU_MAX_LOSS = 0.0"))
         assertTrue(toml.contains("MTU_ADAPTIVE_GROUPING = true"))
         assertTrue(toml.contains("MTU_GROUP_GAP_RATIO = 0.25"))
     }
@@ -169,7 +169,7 @@ class CottenDnsConfigRendererTest {
         assertTrue(toml.contains("CONFIG_PRESET = \"tcp-survival\""))
         assertTrue(toml.contains("RESOLVER_TRANSPORT = \"tcp\""))
         assertTrue(toml.contains("QUERY_TYPES = [\"TXT\", \"HTTPS\"]"))
-        assertTrue(toml.contains("MTU_PROBE_SAMPLES = 2"))
+        assertTrue(toml.contains("MTU_PROBE_SAMPLES = 1"))
     }
 
     @Test

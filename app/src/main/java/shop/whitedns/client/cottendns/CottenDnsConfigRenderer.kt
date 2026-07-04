@@ -181,34 +181,35 @@ object CottenDnsConfigRenderer {
         return if (configPreset == "survival") 42 else 63
     }
 
-    // CottenDns loss-aware MTU probing (samples > 1): each candidate MTU is probed
-    // several times and accepted on measured loss, which feeds the adaptive
-    // per-group operating point. This is CottenDns's own MTU scan; the legacy
-    // Master/Storm path uses the classic single-probe scan (samples = 1) instead.
+    // CottenDns MTU scan. Its distinct feature vs the legacy Master/Storm scan is
+    // adaptive per-group MTU (MTU_ADAPTIVE_GROUPING = true), not the probe count:
+    // the fast desktop client uses a single-sample probe, so the default does too.
+    // Multi-sample loss-aware probing is heavier (more scan traffic) and is
+    // reserved for the survival preset on very lossy links.
     private fun mtuProbeSamples(configPreset: String): Int {
         return when (configPreset) {
             "survival" -> 5
-            "speed", "tcp-survival" -> 2
-            else -> 3
+            else -> 1
         }
     }
 
     private fun mtuMaxLoss(configPreset: String): String {
-        // Tolerant thresholds: a resolver passes if it succeeds on at least one of
-        // the samples, so lossy-but-usable resolvers are kept (at a lower operating
-        // MTU) rather than rejected on filtered networks. Survival is stricter.
         return when (configPreset) {
             "survival" -> "0.5"
-            else -> "0.75"
+            else -> "0.0"
         }
     }
 
     private fun queryTypeSet(configPreset: String): List<String> {
+        // Default is TXT-only, matching the fast desktop client: on filtered
+        // networks non-TXT records (NULL/HTTPS especially) are often dropped, so
+        // rotating to them causes packet loss and retransmits. Richer rotation is
+        // opt-in via the delivery dropdown or the survival preset.
         return when (configPreset) {
-            "speed", "tcp-survival" -> listOf("TXT", "HTTPS")
+            "speed" -> listOf("TXT", "HTTPS")
             "survival" -> listOf("TXT", "CNAME", "HTTPS", "A")
-            "master-storm" -> listOf("TXT")
-            else -> listOf("TXT", "CNAME", "NULL", "HTTPS")
+            "tcp-survival" -> listOf("TXT", "HTTPS")
+            else -> listOf("TXT")
         }
     }
 
