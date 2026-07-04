@@ -5352,6 +5352,18 @@ private fun ConnectionProfileDialog(
                 options = localizedServerTypes(),
                 onValueChange = { serverType = it },
             )
+            Text(
+                text = if (ConnectionProfile.normalizeServerType(serverType) == ConnectionProfile.ServerTypeCottenDns) {
+                    "CottenDns: 2-byte session IDs, TCP/53 fallback, rotated TXT/CNAME/NULL/HTTPS delivery, adaptive + domain-diverse duplication, and rate limiting."
+                } else {
+                    "StormDNS / MasterDNS / WhiteDNS: legacy 1-byte session IDs over TXT/UDP for compatibility with existing servers."
+                },
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontSize = 10.sp,
+                    color = WhiteDnsPalette.Muted,
+                ),
+                modifier = Modifier.padding(top = 4.dp),
+            )
             Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
             Row(
                 modifier = Modifier.fillMaxWidth(),

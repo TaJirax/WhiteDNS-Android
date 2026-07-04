@@ -59,6 +59,15 @@ object StormDnsConfigRenderer {
             ConnectionProfile.normalizeServerType(serverType) == ConnectionProfile.ServerTypeCottenDns
         appendLine("LEGACY_SESSION_ID = ${!isCottenDns}")
         appendLine("RESOLVER_TRANSPORT = \"${if (isCottenDns) "auto" else "udp"}\"")
+        if (isCottenDns) {
+            // CottenDns reliability suite: adaptive duplication scales duplicate
+            // sends to measured delivery, and domain-diverse duplication spreads
+            // copies across tunnel domains for independent paths. Rate limiting
+            // and adaptive MTU grouping are already on by the engine defaults.
+            appendLine("ADAPTIVE_DUPLICATION = true")
+            appendLine("DUPLICATION_PREFER_DISTINCT_DOMAINS = true")
+            appendLine("RESOLVER_RATE_LIMIT_ENABLED = true")
+        }
         if (isCottenDns && includeQueryTypeRotation) {
             // CottenDns servers auto-accept every query type and answer with the
             // matching record, so rotate across all delivery methods for lower
