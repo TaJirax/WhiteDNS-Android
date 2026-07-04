@@ -844,19 +844,26 @@ fun WhiteDnsSettings.applyCottenDnsConfigPreset(preset: String): WhiteDnsSetting
     }
     val defaults = WhiteDnsSettings()
     return when (normalizedPreset) {
-        // Conservative profile for legacy MasterDNS/StormDNS servers: the renderer
-        // forces TXT delivery + UDP transport for this path; here we favor delivery
-        // reliability (more download duplication, fewer parallel probes) since the
-        // legacy path has no TCP fallback or query-type diversity to lean on.
+        // Master/Storm DNS: use the original app's client preset (the app default
+        // tuning that shipped for MasterDNS/StormDNS servers). The renderer also
+        // omits the CottenDns optimization suite and forces TXT/UDP/63-label wire
+        // for this path, so legacy servers behave exactly as in the original app.
         "master-storm" -> copy(
             configPreset = "master-storm",
-            balancingStrategy = 3,
-            uploadDuplication = "2",
-            downloadDuplication = "6",
-            uploadCompression = 2,
-            downloadCompression = 2,
-            mtuTestTimeoutResolvers = "2.5",
-            mtuTestParallelismResolvers = "64",
+            balancingStrategy = defaults.balancingStrategy,
+            uploadDuplication = defaults.uploadDuplication,
+            downloadDuplication = defaults.downloadDuplication,
+            uploadCompression = defaults.uploadCompression,
+            downloadCompression = defaults.downloadCompression,
+            minUploadMtu = defaults.minUploadMtu,
+            minDownloadMtu = defaults.minDownloadMtu,
+            maxUploadMtu = defaults.maxUploadMtu,
+            maxDownloadMtu = defaults.maxDownloadMtu,
+            mtuTestRetriesResolvers = defaults.mtuTestRetriesResolvers,
+            mtuTestTimeoutResolvers = defaults.mtuTestTimeoutResolvers,
+            mtuTestParallelismResolvers = defaults.mtuTestParallelismResolvers,
+            mtuTestRetriesLogs = defaults.mtuTestRetriesLogs,
+            mtuTestTimeoutLogs = defaults.mtuTestTimeoutLogs,
         )
         "speed" -> copy(
             configPreset = "speed",

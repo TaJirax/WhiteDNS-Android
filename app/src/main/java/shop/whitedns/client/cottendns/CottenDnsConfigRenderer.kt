@@ -104,19 +104,27 @@ object CottenDnsConfigRenderer {
             else -> qnameLabelLength(preset)
         }
         appendLine("QNAME_LABEL_LENGTH = $qnameLen")
-        appendLine("ADAPTIVE_DUPLICATION = true")
-        appendLine("DUPLICATION_PREFER_DISTINCT_DOMAINS = true")
-        appendLine("RESOLVER_RATE_LIMIT_ENABLED = true")
-        appendLine("ADAPTIVE_DUPLICATION_TARGET_DELIVERY = ${adaptiveDuplicationTarget(preset)}")
-        appendLine("DNS_RANDOMIZE_QUERY_ID = true")
-        appendLine("DNS_EDNS_COOKIE = true")
-        appendLine("DNS_QNAME_CASE_RANDOMIZATION = false")
-        appendLine("EDNS_UDP_SIZE = ${ednsUdpSize(preset)}")
-        appendLine("RESOLVER_IGNORE_INJECTED_NXDOMAIN = true")
-        appendLine("MTU_PROBE_SAMPLES = ${mtuProbeSamples(preset)}")
-        appendLine("MTU_MAX_LOSS = ${mtuMaxLoss(preset)}")
-        appendLine("MTU_ADAPTIVE_GROUPING = true")
-        appendLine("MTU_GROUP_GAP_RATIO = 0.25")
+
+        // CottenDns client-side optimization suite. Explicit for CottenDns servers.
+        // Storm/Master (compatibility) intentionally omits it and uses the original
+        // app client preset instead (the base client settings emitted by
+        // appendClientSettingsToml plus the engine's own conservative defaults),
+        // so legacy servers behave exactly as they did in the original app.
+        if (!isCompatibility) {
+            appendLine("ADAPTIVE_DUPLICATION = true")
+            appendLine("DUPLICATION_PREFER_DISTINCT_DOMAINS = true")
+            appendLine("RESOLVER_RATE_LIMIT_ENABLED = true")
+            appendLine("ADAPTIVE_DUPLICATION_TARGET_DELIVERY = ${adaptiveDuplicationTarget(preset)}")
+            appendLine("DNS_RANDOMIZE_QUERY_ID = true")
+            appendLine("DNS_EDNS_COOKIE = true")
+            appendLine("DNS_QNAME_CASE_RANDOMIZATION = false")
+            appendLine("EDNS_UDP_SIZE = ${ednsUdpSize(preset)}")
+            appendLine("RESOLVER_IGNORE_INJECTED_NXDOMAIN = true")
+            appendLine("MTU_PROBE_SAMPLES = ${mtuProbeSamples(preset)}")
+            appendLine("MTU_MAX_LOSS = ${mtuMaxLoss(preset)}")
+            appendLine("MTU_ADAPTIVE_GROUPING = true")
+            appendLine("MTU_GROUP_GAP_RATIO = 0.25")
+        }
     }
 
 
