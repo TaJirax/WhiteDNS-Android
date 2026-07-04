@@ -5364,7 +5364,7 @@ private fun ConnectionProfileDialog(
                 text = if (ConnectionProfile.normalizeServerType(serverType) == ConnectionProfile.ServerTypeCottenDns) {
                     "CottenDns: 2-byte session IDs, TCP/53 fallback, rotated TXT/CNAME/NULL/HTTPS delivery, adaptive + domain-diverse duplication, and rate limiting."
                 } else {
-                    "CottenDns compatibility: legacy 1-byte session IDs over TXT/UDP for older compatible servers."
+                    "Storm / Master DNS: legacy 1-byte session IDs over TXT/UDP for older MasterDNS/StormDNS servers. QNAME reshaping and DNS hardening still apply."
                 },
                 style = MaterialTheme.typography.bodySmall.copy(
                     fontSize = 10.sp,
@@ -6050,6 +6050,11 @@ private fun cottenDnsPresetSummary(configPreset: String): CottenDnsPresetSummary
             transport = "forced DNS-over-TCP/53",
             delivery = "TXT + HTTPS over persistent TCP/53",
             mtu = "MTU-weighted balancing, lower resolver parallelism for TCP fallback",
+        )
+        "master-storm" -> CottenDnsPresetSummary(
+            transport = "UDP/53 only (no TCP; legacy MasterDNS/StormDNS)",
+            delivery = "TXT only (legacy servers answer TXT)",
+            mtu = "least-loss balancing, extra download duplication for reliability",
         )
         else -> CottenDnsPresetSummary(
             transport = "UDP/53 with TCP/53 fallback",
@@ -9658,7 +9663,7 @@ private fun localizedEncryptionMethods(): List<Choice<Int>> = listOf(
 // its legacy wire format for older compatible servers.
 private fun localizedServerTypes(): List<Choice<String>> = listOf(
     Choice(ConnectionProfile.ServerTypeCottenDns, "CottenDns"),
-    Choice(ConnectionProfile.ServerTypeCompatibility, "CottenDns compatibility"),
+    Choice(ConnectionProfile.ServerTypeCompatibility, "Storm / Master DNS"),
 )
 
 @Composable

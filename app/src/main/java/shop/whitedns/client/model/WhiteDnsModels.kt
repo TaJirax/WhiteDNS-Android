@@ -619,6 +619,7 @@ object WhiteDnsOptions {
         Choice("speed", "Speed"),
         Choice("survival", "Survival"),
         Choice("tcp-survival", "TCP Survival"),
+        Choice("master-storm", "Master / Storm DNS (compatible)"),
     )
 
     val balancingStrategies = listOf(
@@ -799,10 +800,25 @@ fun WhiteDnsSettings.applyCottenDnsConfigPreset(preset: String): WhiteDnsSetting
         "speed" -> "speed"
         "survival" -> "survival"
         "tcp", "tcp-survival", "tcp_survival" -> "tcp-survival"
+        "master", "storm", "master-storm", "master_storm" -> "master-storm"
         else -> "default"
     }
     val defaults = WhiteDnsSettings()
     return when (normalizedPreset) {
+        // Conservative profile for legacy MasterDNS/StormDNS servers: the renderer
+        // forces TXT delivery + UDP transport for this path; here we favor delivery
+        // reliability (more download duplication, fewer parallel probes) since the
+        // legacy path has no TCP fallback or query-type diversity to lean on.
+        "master-storm" -> copy(
+            configPreset = "master-storm",
+            balancingStrategy = 3,
+            uploadDuplication = "2",
+            downloadDuplication = "6",
+            uploadCompression = 2,
+            downloadCompression = 2,
+            mtuTestTimeoutResolvers = "2.5",
+            mtuTestParallelismResolvers = "64",
+        )
         "speed" -> copy(
             configPreset = "speed",
             balancingStrategy = 5,
@@ -1693,7 +1709,7 @@ fun WhiteDnsSettings.resolve(): ResolvedWhiteDnsSettings {
 
     return ResolvedWhiteDnsSettings(
         configPreset = when (configPreset) {
-            "default", "speed", "survival", "tcp-survival" -> configPreset
+            "default", "speed", "survival", "tcp-survival", "master-storm" -> configPreset
             else -> "default"
         },
         connectionMode = when (connectionMode) {

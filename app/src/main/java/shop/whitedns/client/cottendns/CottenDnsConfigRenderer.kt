@@ -47,46 +47,53 @@ object CottenDnsConfigRenderer {
         }.trimEnd()
     }
 
-    // Emits CottenDns mode keys. Compatibility mode keeps CottenDns's legacy
-    // wire format available without bundling a second engine.
+    // Emits the wire-format + feature keys. serverType controls only the
+    // session-ID wire width (the sole true incompatibility between CottenDns and
+    // MasterDNS/StormDNS). Everything else is server-transparent (QNAME reshaping,
+    // adaptive duplication, DNS hardening, MTU tuning) and is emitted for BOTH
+    // server types. The two server-generation-sensitive knobs — response delivery
+    // types and TCP/53 — are forced to a safe TXT/UDP subset in Compatibility mode
+    // so old MasterDNS/StormDNS servers never receive a query type or transport
+    // they cannot answer.
     private fun StringBuilder.appendServerTypeToml(
         serverType: String,
         configPreset: String,
     ) {
-        val isCottenDns =
-            ConnectionProfile.normalizeServerType(serverType) == ConnectionProfile.ServerTypeCottenDns
-        val normalizedPreset = if (isCottenDns) normalizeConfigPreset(configPreset) else "default"
-        appendLine("CONFIG_PRESET = \"${escape(normalizedPreset)}\"")
-        appendLine("LEGACY_SESSION_ID = ${!isCottenDns}")
-        appendLine("RESOLVER_TRANSPORT = \"${resolverTransport(isCottenDns, normalizedPreset)}\"")
-        if (isCottenDns) {
-            // CottenDns reliability suite: adaptive duplication scales duplicate
-            // sends to measured delivery, and domain-diverse duplication spreads
-            // copies across tunnel domains for independent paths. Rate limiting
-            // and adaptive MTU grouping are already on by the engine defaults.
-            appendLine("ADAPTIVE_DUPLICATION = true")
-            appendLine("DUPLICATION_PREFER_DISTINCT_DOMAINS = true")
-            appendLine("RESOLVER_RATE_LIMIT_ENABLED = true")
-            appendLine("ADAPTIVE_DUPLICATION_TARGET_DELIVERY = ${adaptiveDuplicationTarget(normalizedPreset)}")
-            appendLine("DNS_RANDOMIZE_QUERY_ID = true")
-            appendLine("DNS_EDNS_COOKIE = true")
-            appendLine("DNS_QNAME_CASE_RANDOMIZATION = false")
-            appendLine("EDNS_UDP_SIZE = ${ednsUdpSize(normalizedPreset)}")
-            appendLine("RESOLVER_IGNORE_INJECTED_NXDOMAIN = true")
-            appendLine("QNAME_LABEL_LENGTH = ${qnameLabelLength(normalizedPreset)}")
-            appendLine("MTU_PROBE_SAMPLES = ${mtuProbeSamples(normalizedPreset)}")
-            appendLine("MTU_MAX_LOSS = ${mtuMaxLoss(normalizedPreset)}")
-            appendLine("MTU_ADAPTIVE_GROUPING = true")
-            appendLine("MTU_GROUP_GAP_RATIO = 0.25")
-        }
-        if (isCottenDns) {
-            // CottenDns servers auto-accept every query type and answer with the
-            // matching record, so rotate across all delivery methods for lower
-            // fingerprint. Resolver scans must use the same set as live runtime:
-            // MTU probing inherits QUERY_TYPES, so scan results reflect the real
-            // delivery path instead of validating TXT-only resolvers.
-            appendLine("QUERY_TYPES = ${queryTypesToml(normalizedPreset)}")
-        }
+        val isCompatibility =
+            ConnectionProfile.normalizeServerType(serverType) == ConnectionProfile.ServerTypeCompatibility
+        val preset = normalizeConfigPreset(configPreset)
+
+        // CONFIG_PRESET only accepts the engine's own presets; the app-level
+        // "master-storm" preset expands to explicit legacy-safe keys over a
+        // default base (explicit keys always win over the preset in the engine).
+        appendLine("CONFIG_PRESET = \"${escape(enginePresetBase(preset))}\"")
+        appendLine("LEGACY_SESSION_ID = $isCompatibility")
+
+        // Server-generation-sensitive knobs. Compatibility forces the safe subset
+        // regardless of preset so a MasterDNS/StormDNS server always works.
+        val transport = if (isCompatibility) "udp" else resolverTransport(preset)
+        val queryTypes = if (isCompatibility) listOf("TXT") else queryTypeSet(preset)
+        appendLine("RESOLVER_TRANSPORT = \"$transport\"")
+        appendLine("QUERY_TYPES = ${queryTypesToml(queryTypes)}")
+
+        // Server-transparent features: identical behavior against either server
+        // generation, so emit for both. QNAME reshaping is reassembled by the
+        // server regardless of label lengths, and DNS query-id/EDNS/NXDOMAIN
+        // hardening applies to the resolver hop, not the tunnel server.
+        appendLine("QNAME_LABEL_LENGTH = ${qnameLabelLength(preset)}")
+        appendLine("ADAPTIVE_DUPLICATION = true")
+        appendLine("DUPLICATION_PREFER_DISTINCT_DOMAINS = true")
+        appendLine("RESOLVER_RATE_LIMIT_ENABLED = true")
+        appendLine("ADAPTIVE_DUPLICATION_TARGET_DELIVERY = ${adaptiveDuplicationTarget(preset)}")
+        appendLine("DNS_RANDOMIZE_QUERY_ID = true")
+        appendLine("DNS_EDNS_COOKIE = true")
+        appendLine("DNS_QNAME_CASE_RANDOMIZATION = false")
+        appendLine("EDNS_UDP_SIZE = ${ednsUdpSize(preset)}")
+        appendLine("RESOLVER_IGNORE_INJECTED_NXDOMAIN = true")
+        appendLine("MTU_PROBE_SAMPLES = ${mtuProbeSamples(preset)}")
+        appendLine("MTU_MAX_LOSS = ${mtuMaxLoss(preset)}")
+        appendLine("MTU_ADAPTIVE_GROUPING = true")
+        appendLine("MTU_GROUP_GAP_RATIO = 0.25")
     }
 
 
@@ -95,15 +102,25 @@ object CottenDnsConfigRenderer {
             "speed" -> "speed"
             "survival" -> "survival"
             "tcp", "tcp-survival", "tcp_survival" -> "tcp-survival"
+            "master", "storm", "master-storm", "master_storm" -> "master-storm"
             else -> "default"
         }
     }
 
-    private fun resolverTransport(isCottenDns: Boolean, configPreset: String): String {
-        if (!isCottenDns) {
-            return "udp"
+    // Maps an app-level preset to the engine's own CONFIG_PRESET vocabulary.
+    private fun enginePresetBase(preset: String): String {
+        return when (preset) {
+            "speed", "survival", "tcp-survival" -> preset
+            else -> "default" // "default" and "master-storm"
         }
-        return if (configPreset == "tcp-survival") "tcp" else "auto"
+    }
+
+    private fun resolverTransport(configPreset: String): String {
+        return when (configPreset) {
+            "tcp-survival" -> "tcp"
+            "master-storm" -> "udp"
+            else -> "auto"
+        }
     }
 
     private fun adaptiveDuplicationTarget(configPreset: String): String {
@@ -130,13 +147,17 @@ object CottenDnsConfigRenderer {
         return if (configPreset == "survival") "0.2" else "0.25"
     }
 
-    private fun queryTypesToml(configPreset: String): String {
-        val queryTypes = when (configPreset) {
+    private fun queryTypeSet(configPreset: String): List<String> {
+        return when (configPreset) {
             "speed", "tcp-survival" -> listOf("TXT", "HTTPS")
             "survival" -> listOf("TXT", "CNAME", "HTTPS", "A")
+            "master-storm" -> listOf("TXT")
             else -> listOf("TXT", "CNAME", "NULL", "HTTPS")
         }
-        return queryTypes.joinToString(prefix = "[", postfix = "]") { "\"$it\"" }
+    }
+
+    private fun queryTypesToml(types: List<String>): String {
+        return types.joinToString(prefix = "[", postfix = "]") { "\"$it\"" }
     }
 
     fun renderScanClientToml(
