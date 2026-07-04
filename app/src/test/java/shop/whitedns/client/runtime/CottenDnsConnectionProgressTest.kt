@@ -41,7 +41,7 @@ class CottenDnsConnectionProgressTest {
 
         requireNotNull(state)
         assertEquals("mtu", state.phase)
-        assertEquals(37, state.percent)
+        assertEquals(34, state.percent)
         assertEquals(21, state.completed)
         assertEquals(62, state.total)
         assertEquals(1, state.valid)
