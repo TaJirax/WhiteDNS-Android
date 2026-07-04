@@ -2994,8 +2994,11 @@ class WhiteDnsViewModel(
         const val VpnStopBeforeCottenDnsStopDelayMillis = 1_500L
         const val SocksStreamTrackingTtlMillis = 120_000L
         const val EmptyTrafficSource = "none"
-        const val BatteryOptimizationRefreshAttempts = 8
-        const val BatteryOptimizationRefreshRetryDelayMillis = 500L
+        // Poll for ~30s after returning from the system dialog: some OEM ROMs
+        // update isIgnoringBatteryOptimizations several seconds after the grant,
+        // which left the banner stuck. Polling stops early once it reads true.
+        const val BatteryOptimizationRefreshAttempts = 40
+        const val BatteryOptimizationRefreshRetryDelayMillis = 750L
         const val VerificationStartDelayMillis = 700L
         const val VerificationProbeAttempts = 2
         const val VerificationProbeRetryDelayMillis = 750L

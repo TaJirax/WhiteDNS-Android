@@ -7682,6 +7682,7 @@ private fun ResolverRuntimeSummary(
                 label = WhiteDnsL10n.resolverValidResolvers,
                 value = resolverState.validResolvers.size.toString(),
                 onClick = { selectedDialog = ResolverRuntimeDialogType.VALID },
+                showValidIcon = true,
             )
         }
         AnimatedVisibility(
@@ -7771,6 +7772,7 @@ private fun ResolverRuntimeValue(
     value: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    showValidIcon: Boolean = false,
 ) {
     val context = LocalContext.current
     Column(
@@ -7784,17 +7786,30 @@ private fun ResolverRuntimeValue(
             .clickable(role = Role.Button, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 9.dp),
     ) {
-        Text(
-            text = label,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.bodyMedium.copy(
-                fontSize = 9.sp,
-                color = WhiteDnsPalette.Muted,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 0.6.sp,
-            ),
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            if (showValidIcon) {
+                Icon(
+                    imageVector = Icons.Rounded.Check,
+                    contentDescription = null,
+                    tint = Color(0xFF34C759),
+                    modifier = Modifier.size(12.dp),
+                )
+            }
+            Text(
+                text = label,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 9.sp,
+                    color = WhiteDnsPalette.Muted,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.6.sp,
+                ),
+            )
+        }
         Spacer(modifier = Modifier.height(WhiteDnsSpacing.xs))
         Text(
             text = value,
