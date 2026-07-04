@@ -280,10 +280,10 @@ data class WhiteDnsSettings(
     val uploadCompression: Int = 2,
     val downloadCompression: Int = 2,
     val baseEncodeData: Boolean = false,
-    val minUploadMtu: String = "40",
-    val minDownloadMtu: String = "300",
-    val maxUploadMtu: String = "140",
-    val maxDownloadMtu: String = "3000",
+    val minUploadMtu: String = "100",
+    val minDownloadMtu: String = "1000",
+    val maxUploadMtu: String = "200",
+    val maxDownloadMtu: String = "4000",
     val mtuTestRetriesResolvers: String = "3",
     val mtuTestTimeoutResolvers: String = "2.5",
     val mtuTestParallelismResolvers: String = "100",
@@ -1746,11 +1746,11 @@ fun WhiteDnsSettings.resolve(): ResolvedWhiteDnsSettings {
         minValue = 0.1,
         maxValue = 60.0,
     )
-    val resolvedMinUploadMtu = boundedInt(minUploadMtu, defaultValue = 40, minValue = 1, maxValue = 65535)
-    val resolvedMinDownloadMtu = boundedInt(minDownloadMtu, defaultValue = 300, minValue = 1, maxValue = 65535)
-    val resolvedMaxUploadMtu = boundedInt(maxUploadMtu, defaultValue = 140, minValue = 1, maxValue = 65535)
+    val resolvedMinUploadMtu = boundedInt(minUploadMtu, defaultValue = 100, minValue = 1, maxValue = 65535)
+    val resolvedMinDownloadMtu = boundedInt(minDownloadMtu, defaultValue = 1000, minValue = 1, maxValue = 65535)
+    val resolvedMaxUploadMtu = boundedInt(maxUploadMtu, defaultValue = 200, minValue = 1, maxValue = 65535)
         .coerceAtLeast(resolvedMinUploadMtu)
-    val resolvedMaxDownloadMtu = boundedInt(maxDownloadMtu, defaultValue = 3000, minValue = 1, maxValue = 65535)
+    val resolvedMaxDownloadMtu = boundedInt(maxDownloadMtu, defaultValue = 4000, minValue = 1, maxValue = 65535)
         .coerceAtLeast(resolvedMinDownloadMtu)
 
     return ResolvedWhiteDnsSettings(

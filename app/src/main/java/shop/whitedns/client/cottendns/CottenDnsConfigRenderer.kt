@@ -111,8 +111,13 @@ object CottenDnsConfigRenderer {
         // appendClientSettingsToml plus the engine's own conservative defaults),
         // so legacy servers behave exactly as they did in the original app.
         if (!isCompatibility) {
-            appendLine("ADAPTIVE_DUPLICATION = true")
-            appendLine("DUPLICATION_PREFER_DISTINCT_DOMAINS = true")
+            // Adaptive/domain-diverse duplication raise query volume under loss,
+            // which can push already-lossy resolvers into timeout-disable on
+            // filtered networks. The proven desktop config keeps both off; expose
+            // them via the survival preset where the extra redundancy is wanted.
+            val aggressiveDuplication = preset == "survival"
+            appendLine("ADAPTIVE_DUPLICATION = $aggressiveDuplication")
+            appendLine("DUPLICATION_PREFER_DISTINCT_DOMAINS = $aggressiveDuplication")
             appendLine("RESOLVER_RATE_LIMIT_ENABLED = true")
             appendLine("ADAPTIVE_DUPLICATION_TARGET_DELIVERY = ${adaptiveDuplicationTarget(preset)}")
             appendLine("DNS_RANDOMIZE_QUERY_ID = true")
@@ -167,15 +172,18 @@ object CottenDnsConfigRenderer {
     }
 
     private fun mtuProbeSamples(configPreset: String): Int {
+        // A single fast probe accepts any resolver that responds once, matching
+        // the proven desktop client. Multi-sample loss-aware probing is stricter
+        // and rejects usable-but-lossy resolvers on filtered networks; reserve it
+        // for the survival profile where reliability is prioritized over yield.
         return when (configPreset) {
-            "speed", "tcp-survival" -> 4
-            "survival" -> 5
-            else -> 6
+            "survival" -> 3
+            else -> 1
         }
     }
 
     private fun mtuMaxLoss(configPreset: String): String {
-        return if (configPreset == "survival") "0.2" else "0.25"
+        return if (configPreset == "survival") "0.25" else "0.0"
     }
 
     private fun queryTypeSet(configPreset: String): List<String> {
@@ -257,6 +265,10 @@ object CottenDnsConfigRenderer {
         appendLine("RESOLVER_BALANCING_STRATEGY = ${resolved.balancingStrategy}")
         appendLine("UPLOAD_PACKET_DUPLICATION_COUNT = ${resolved.uploadDuplication}")
         appendLine("DOWNLOAD_PACKET_DUPLICATION_COUNT = ${resolved.downloadDuplication}")
+        // Setup/control packets are duplicated more than bulk data so stream
+        // establishment survives loss (engine clamps into [data-duplication, 8]).
+        appendLine("UPLOAD_SETUP_PACKET_DUPLICATION_COUNT = 4")
+        appendLine("DOWNLOAD_SETUP_PACKET_DUPLICATION_COUNT = 8")
         appendLine("UPLOAD_COMPRESSION_TYPE = ${resolved.uploadCompression}")
         appendLine("DOWNLOAD_COMPRESSION_TYPE = ${resolved.downloadCompression}")
         appendLine("BASE_ENCODE_DATA = ${resolved.baseEncodeData}")
@@ -315,6 +327,10 @@ object CottenDnsConfigRenderer {
         appendLine("RESOLVER_BALANCING_STRATEGY = ${resolved.balancingStrategy}")
         appendLine("UPLOAD_PACKET_DUPLICATION_COUNT = ${resolved.uploadDuplication}")
         appendLine("DOWNLOAD_PACKET_DUPLICATION_COUNT = ${resolved.downloadDuplication}")
+        // Setup/control packets are duplicated more than bulk data so stream
+        // establishment survives loss (engine clamps into [data-duplication, 8]).
+        appendLine("UPLOAD_SETUP_PACKET_DUPLICATION_COUNT = 4")
+        appendLine("DOWNLOAD_SETUP_PACKET_DUPLICATION_COUNT = 8")
         appendLine("UPLOAD_COMPRESSION_TYPE = ${resolved.uploadCompression}")
         appendLine("DOWNLOAD_COMPRESSION_TYPE = ${resolved.downloadCompression}")
         appendLine("BASE_ENCODE_DATA = ${resolved.baseEncodeData}")

@@ -126,8 +126,8 @@ class CottenDnsConfigRendererTest {
         assertTrue(toml.contains("DNS_EDNS_COOKIE = true"))
         assertTrue(toml.contains("RESOLVER_IGNORE_INJECTED_NXDOMAIN = true"))
         assertTrue(toml.contains("QNAME_LABEL_LENGTH = 63"))
-        assertTrue(toml.contains("MTU_PROBE_SAMPLES = 6"))
-        assertTrue(toml.contains("MTU_MAX_LOSS = 0.25"))
+        assertTrue(toml.contains("MTU_PROBE_SAMPLES = 1"))
+        assertTrue(toml.contains("MTU_MAX_LOSS = 0.0"))
         assertTrue(toml.contains("MTU_ADAPTIVE_GROUPING = true"))
         assertTrue(toml.contains("MTU_GROUP_GAP_RATIO = 0.25"))
     }
@@ -169,7 +169,7 @@ class CottenDnsConfigRendererTest {
         assertTrue(toml.contains("CONFIG_PRESET = \"tcp-survival\""))
         assertTrue(toml.contains("RESOLVER_TRANSPORT = \"tcp\""))
         assertTrue(toml.contains("QUERY_TYPES = [\"TXT\", \"HTTPS\"]"))
-        assertTrue(toml.contains("MTU_PROBE_SAMPLES = 4"))
+        assertTrue(toml.contains("MTU_PROBE_SAMPLES = 1"))
     }
 
     @Test
@@ -200,7 +200,7 @@ class CottenDnsConfigRendererTest {
         assertTrue(cottenDnsToml.contains("CONFIG_PRESET = \"survival\""))
         assertTrue(cottenDnsToml.contains("QNAME_LABEL_LENGTH = 42"))
         assertTrue(cottenDnsToml.contains("EDNS_UDP_SIZE = 1232"))
-        assertTrue(cottenDnsToml.contains("MTU_MAX_LOSS = 0.2"))
+        assertTrue(cottenDnsToml.contains("MTU_MAX_LOSS = 0.25"))
         assertTrue(cottenDnsToml.contains("QUERY_TYPES = [\"TXT\", \"CNAME\", \"HTTPS\", \"A\"]"))
         // The server-transparent preset shape (EDNS, MTU) applies to the
         // compatibility path too, while the generation-sensitive delivery and

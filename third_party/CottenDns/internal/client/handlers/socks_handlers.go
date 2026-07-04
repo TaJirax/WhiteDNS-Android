@@ -34,8 +34,12 @@ func init() {
 		RegisterHandler(pt, handleSocksFailure)
 	}
 
-	// Register SOCKS5 control ACKs (if they skip general ReceiveControlAck)
+	// Register SOCKS5 control ACKs (if they skip general ReceiveControlAck).
+	// CONNECTED_ACK can arrive at the client (e.g. reflected/retransmitted control
+	// on recently-closed streams); route it through the control-ack handler so it
+	// is processed gracefully instead of dropped with a "no handler" warning.
 	RegisterHandler(Enums.PACKET_SOCKS5_SYN_ACK, handleSocksControlAck)
+	RegisterHandler(Enums.PACKET_SOCKS5_CONNECTED_ACK, handleSocksControlAck)
 }
 
 func handleSocksConnected(c ClientContext, packet VpnProto.Packet, addr *net.UDPAddr) error {
