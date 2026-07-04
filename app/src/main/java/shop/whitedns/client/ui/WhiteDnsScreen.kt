@@ -8648,7 +8648,7 @@ private fun ConnectionLogsBlock(
     expanded: Boolean = false,
 ) {
     val logs = uiState.connectionLogs
-    val visibleLogs = if (expanded) logs else logs.take(10)
+    val visibleLogs = logs.take(if (expanded) ExpandedConnectionLogLimit else CollapsedConnectionLogLimit)
     val context = LocalContext.current
     val logsClipboardLabel = WhiteDnsL10n.whiteDnsLogsLabel
     val diagnosticsClipboardLabel = WhiteDnsL10n.whiteDnsDiagnosticsLabel
@@ -8729,6 +8729,9 @@ private fun ConnectionLogsBlock(
         }
     }
 }
+
+private const val CollapsedConnectionLogLimit = 10
+private const val ExpandedConnectionLogLimit = 40
 
 @Composable
 private fun LogActionButton(

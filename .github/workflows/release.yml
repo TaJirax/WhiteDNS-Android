@@ -27,8 +27,16 @@ jobs:
     steps:
       - name: Checkout WhiteDNS
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
+
+      - name: Verify vendored CottenDns engine
+        run: |
+          set -euo pipefail
+          test -f third_party/StormDNS/go.mod
+          test -f third_party/StormDNS/cmd/client/main.go
+          if git ls-files --stage third_party/StormDNS | awk '{print $1}' | grep -qx '160000'; then
+            echo "::error::third_party/StormDNS is still a submodule. Vendor the CottenDns engine source in this repository."
+            exit 1
+          fi
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -57,7 +65,7 @@ jobs:
           go-version-file: third_party/StormDNS/go.mod
           cache-dependency-path: third_party/StormDNS/go.sum
 
-      - name: Build StormDNS native clients
+      - name: Build vendored CottenDns native clients
         run: |
           set -euo pipefail
           make stormdns \

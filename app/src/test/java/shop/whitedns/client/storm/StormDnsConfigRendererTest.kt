@@ -102,6 +102,7 @@ class StormDnsConfigRendererTest {
                 domain = "scan.example.com",
                 encryptionKey = "secret-key",
                 encryptionMethod = 1,
+                serverType = ConnectionProfile.ServerTypeCottenDns,
             ),
             settings = WhiteDnsSettings(
                 listenPort = "10886",
@@ -118,5 +119,27 @@ class StormDnsConfigRendererTest {
         assertTrue(toml.contains("LOCAL_DNS_PORT = 0"))
         assertTrue(toml.contains("MTU_TEST_PARALLELISM_RESOLVERS = 1"))
         assertTrue(toml.contains("STARTUP_MODE = \"resolvers\""))
+        assertTrue(toml.contains("LEGACY_SESSION_ID = false"))
+        assertTrue(toml.contains("RESOLVER_TRANSPORT = \"auto\""))
+        assertTrue(toml.contains("QUERY_TYPES = [\"TXT\", \"CNAME\", \"NULL\", \"HTTPS\"]"))
+    }
+
+    @Test
+    fun renderScanClientTomlKeepsLegacyStormDnsScanTxtOnly() {
+        val toml = StormDnsConfigRenderer.renderScanClientToml(
+            serverProfile = shop.whitedns.client.model.StormDnsServerProfile(
+                id = "server",
+                label = "Server",
+                domain = "legacy.example.com",
+                encryptionKey = "secret-key",
+                encryptionMethod = 1,
+                serverType = ConnectionProfile.ServerTypeStormDns,
+            ),
+            settings = WhiteDnsSettings(),
+        )
+
+        assertTrue(toml.contains("LEGACY_SESSION_ID = true"))
+        assertTrue(toml.contains("RESOLVER_TRANSPORT = \"udp\""))
+        assertFalse(toml.contains("QUERY_TYPES"))
     }
 }

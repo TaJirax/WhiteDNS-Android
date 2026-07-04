@@ -53,7 +53,6 @@ object StormDnsConfigRenderer {
     // use the legacy 1-byte format restricted to UDP for compatibility.
     private fun StringBuilder.appendServerTypeToml(
         serverType: String,
-        includeQueryTypeRotation: Boolean = true,
     ) {
         val isCottenDns =
             ConnectionProfile.normalizeServerType(serverType) == ConnectionProfile.ServerTypeCottenDns
@@ -68,13 +67,12 @@ object StormDnsConfigRenderer {
             appendLine("DUPLICATION_PREFER_DISTINCT_DOMAINS = true")
             appendLine("RESOLVER_RATE_LIMIT_ENABLED = true")
         }
-        if (isCottenDns && includeQueryTypeRotation) {
+        if (isCottenDns) {
             // CottenDns servers auto-accept every query type and answer with the
             // matching record, so rotate across all delivery methods for lower
-            // fingerprint. StormDNS/MasterDNS servers only speak TXT, so leave
-            // QUERY_TYPES unset (engine defaults to TXT) for them. Rotation is
-            // omitted during resolver scanning so a TXT-only resolver is not
-            // rejected before it can be used on the (TXT-inclusive) live tunnel.
+            // fingerprint. Resolver scans must use the same set as live runtime:
+            // MTU probing inherits QUERY_TYPES, so scan results reflect the real
+            // delivery path instead of validating TXT-only resolvers.
             appendLine("QUERY_TYPES = [\"TXT\", \"CNAME\", \"NULL\", \"HTTPS\"]")
         }
     }
@@ -92,7 +90,7 @@ object StormDnsConfigRenderer {
             appendLine("DATA_ENCRYPTION_METHOD = ${serverProfile.encryptionMethod}")
             appendLine("ENCRYPTION_KEY = \"${escape(serverProfile.encryptionKey)}\"")
             appendLine("PROTOCOL_TYPE = \"${escape(resolved.protocolType)}\"")
-            appendServerTypeToml(serverProfile.serverType, includeQueryTypeRotation = false)
+            appendServerTypeToml(serverProfile.serverType)
             appendClientSettingsToml(
                 resolved = resolved,
                 listenIp = "127.0.0.1",

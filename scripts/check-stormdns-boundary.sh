@@ -14,13 +14,13 @@ changed_files="$(
 )"
 
 if [[ -z "${changed_files}" ]]; then
-  echo "No StormDNS upstream changes detected."
+  echo "No vendored CottenDns engine changes detected."
   exit 0
 fi
 
-echo "StormDNS upstream changes detected:" >&2
+echo "Vendored CottenDns engine changes detected:" >&2
 echo "${changed_files}" >&2
 echo >&2
-echo "WhiteDNS treats third_party/StormDNS as a black-box upstream engine." >&2
-echo "Add the 'allow-stormdns-upstream' pull request label only when these changes are intentional upstream maintenance." >&2
+echo "WhiteDNS builds third_party/StormDNS as its vendored CottenDns engine." >&2
+echo "Add the 'allow-cottendns-engine' pull request label only when these changes are intentional engine maintenance." >&2
 exit 1

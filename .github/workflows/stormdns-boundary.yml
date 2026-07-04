@@ -1,4 +1,4 @@
-name: StormDNS Boundary
+name: CottenDns Engine Boundary
 
 on:
   pull_request:
@@ -25,9 +25,9 @@ jobs:
           fetch-depth: 0
           submodules: false
 
-      - name: Check StormDNS upstream boundary
+      - name: Check vendored CottenDns engine boundary
         env:
-          HAS_UPSTREAM_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'allow-stormdns-upstream') }}
+          HAS_UPSTREAM_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'allow-cottendns-engine') }}
         run: |
           set -euo pipefail
           base_ref="${{ github.event.pull_request.base.sha }}"
@@ -38,7 +38,7 @@ jobs:
           fi
 
           if [[ "${HAS_UPSTREAM_LABEL}" == "true" ]]; then
-            echo "StormDNS upstream changes are intentionally labeled."
+            echo "Vendored CottenDns engine changes are intentionally labeled."
             exit 0
           fi
 
