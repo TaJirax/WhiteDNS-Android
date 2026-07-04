@@ -5,14 +5,14 @@ import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
 import shop.whitedns.client.model.ConnectionProfile
-import shop.whitedns.client.model.StormDnsServerProfile
+import shop.whitedns.client.model.CottenDnsServerProfile
 import shop.whitedns.client.model.WhiteDnsSettings
 import shop.whitedns.client.model.runtimeConnectionSettings
 import shop.whitedns.client.model.syncSelectedConnectionProfileFields
 
 data class RuntimeLaunchRequest(
     val id: String,
-    val serverProfile: StormDnsServerProfile,
+    val serverProfile: CottenDnsServerProfile,
     val settings: WhiteDnsSettings,
 )
 
@@ -24,7 +24,7 @@ object RuntimeLaunchRequestStore {
     fun save(
         context: Context,
         requestId: String,
-        serverProfile: StormDnsServerProfile,
+        serverProfile: CottenDnsServerProfile,
         settings: WhiteDnsSettings,
     ): RuntimeLaunchRequest {
         require(requestId.isSafeRequestId()) { "Invalid runtime launch request ID" }
@@ -80,7 +80,7 @@ object RuntimeLaunchRequestStore {
         )
     }
 
-    private fun encodeServerProfile(profile: StormDnsServerProfile): JSONObject {
+    private fun encodeServerProfile(profile: CottenDnsServerProfile): JSONObject {
         return JSONObject()
             .put("id", profile.id)
             .put("label", profile.label)
@@ -90,14 +90,14 @@ object RuntimeLaunchRequestStore {
             .put("serverType", profile.serverType)
     }
 
-    private fun decodeServerProfile(json: JSONObject): StormDnsServerProfile {
-        return StormDnsServerProfile(
+    private fun decodeServerProfile(json: JSONObject): CottenDnsServerProfile {
+        return CottenDnsServerProfile(
             id = json.optString("id"),
             label = json.optString("label"),
             domain = json.optString("domain"),
             encryptionKey = json.optString("encryptionKey"),
             encryptionMethod = json.optInt("encryptionMethod", 1),
-            serverType = json.optString("serverType", "stormdns"),
+            serverType = json.optString("serverType", "CottenDns"),
         )
     }
 

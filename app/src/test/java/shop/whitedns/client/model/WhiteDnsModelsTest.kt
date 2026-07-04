@@ -711,7 +711,7 @@ class WhiteDnsModelsTest {
     }
 
     @Test
-    fun defaultTunnelPacketTimeoutMatchesStormDnsDefault() {
+    fun defaultTunnelPacketTimeoutMatchesCottenDnsDefault() {
         val settings = WhiteDnsSettings()
 
         assertEquals("10.0", settings.tunnelPacketTimeoutSeconds)
@@ -772,7 +772,7 @@ class WhiteDnsModelsTest {
     }
 
     @Test
-    fun importStormDnsProfileLinkAcceptsRequiredPayloadOnly() {
+    fun importCottenDnsProfileLinkAcceptsRequiredPayloadOnly() {
         val payload = """
             {
               "schema": "whitedns.profile",
@@ -787,9 +787,9 @@ class WhiteDnsModelsTest {
               }
             }
         """.trimIndent()
-        val link = "stormdns://${Base64.getUrlEncoder().withoutPadding().encodeToString(payload.toByteArray())}"
+        val link = "CottenDns://${Base64.getUrlEncoder().withoutPadding().encodeToString(payload.toByteArray())}"
 
-        val importedSettings = WhiteDnsSettings().importStormDnsProfileLink(link, nowMillis = 42L)
+        val importedSettings = WhiteDnsSettings().importCottenDnsProfileLink(link, nowMillis = 42L)
         val importedProfile = importedSettings.selectedConnectionProfile()
 
         assertEquals("profile-imported-42", importedProfile.id)
@@ -802,7 +802,7 @@ class WhiteDnsModelsTest {
     }
 
     @Test
-    fun importCottenDnsProfileLinkAcceptsSameStormDnsPayload() {
+    fun importCottenDnsProfileLinkAcceptsSameCottenDnsPayload() {
         val payload = """
             {
               "schema": "whitedns.profile",
@@ -819,7 +819,7 @@ class WhiteDnsModelsTest {
         """.trimIndent()
         val link = "cottendns://${Base64.getUrlEncoder().withoutPadding().encodeToString(payload.toByteArray())}"
 
-        val importedSettings = WhiteDnsSettings().importStormDnsProfileLink(link, nowMillis = 55L)
+        val importedSettings = WhiteDnsSettings().importCottenDnsProfileLink(link, nowMillis = 55L)
         val importedProfile = importedSettings.selectedConnectionProfile()
 
         assertEquals("profile-imported-55", importedProfile.id)
@@ -850,14 +850,14 @@ class WhiteDnsModelsTest {
         val link = "notdns://${Base64.getUrlEncoder().withoutPadding().encodeToString(payload.toByteArray())}"
 
         val error = assertThrows(IllegalArgumentException::class.java) {
-            WhiteDnsSettings().importStormDnsProfileLink(link)
+            WhiteDnsSettings().importCottenDnsProfileLink(link)
         }
-        assertTrue(error.message.orEmpty().contains("stormdns://"))
+        assertTrue(error.message.orEmpty().contains("CottenDns://"))
         assertTrue(error.message.orEmpty().contains("cottendns://"))
     }
 
     @Test
-    fun exportAndImportStormDnsProfileLinkUsesOnlyRequiredProfileFields() {
+    fun exportAndImportCottenDnsProfileLinkUsesOnlyRequiredProfileFields() {
         val resolverProfile = ResolverProfile(
             id = "resolver-main",
             name = "Main Resolvers",
@@ -893,13 +893,13 @@ class WhiteDnsModelsTest {
             logLevel = "INFO",
         )
 
-        val link = settings.exportStormDnsProfileLink(connectionProfile)
-        val exportedProfileJson = JSONObject(decodeStormDnsProfilePayload(link)).getJSONObject("profile")
+        val link = settings.exportCottenDnsProfileLink(connectionProfile)
+        val exportedProfileJson = JSONObject(decodeCottenDnsProfilePayload(link)).getJSONObject("profile")
         val exportedServerJson = exportedProfileJson.getJSONObject("server")
-        val importedSettings = WhiteDnsSettings().importStormDnsProfileLink(link, nowMillis = 100L)
+        val importedSettings = WhiteDnsSettings().importCottenDnsProfileLink(link, nowMillis = 100L)
         val importedProfile = importedSettings.selectedConnectionProfile()
 
-        assertTrue(link.startsWith("stormdns://"))
+        assertTrue(link.startsWith("CottenDns://"))
         assertEquals(setOf("name", "server"), exportedProfileJson.keys().asSequence().toSet())
         assertEquals(
             setOf("domain", "encryption_key", "encryption_method", "server_type"),
@@ -927,7 +927,7 @@ class WhiteDnsModelsTest {
     }
 
     @Test
-    fun exportStormDnsProfileLinkAlwaysWritesRequiredPayloadOnly() {
+    fun exportCottenDnsProfileLinkAlwaysWritesRequiredPayloadOnly() {
         val connectionProfile = ConnectionProfile(
             id = "profile-main",
             name = "Main Profile",
@@ -946,9 +946,9 @@ class WhiteDnsModelsTest {
             logLevel = "INFO",
         )
 
-        val link = settings.exportStormDnsProfileLink(profile = connectionProfile)
-        val profileJson = JSONObject(decodeStormDnsProfilePayload(link)).getJSONObject("profile")
-        val importedSettings = WhiteDnsSettings().importStormDnsProfileLink(link, nowMillis = 300L)
+        val link = settings.exportCottenDnsProfileLink(profile = connectionProfile)
+        val profileJson = JSONObject(decodeCottenDnsProfilePayload(link)).getJSONObject("profile")
+        val importedSettings = WhiteDnsSettings().importCottenDnsProfileLink(link, nowMillis = 300L)
         val importedProfile = importedSettings.selectedConnectionProfile()
 
         assertEquals(setOf("name", "server"), profileJson.keys().asSequence().toSet())
@@ -964,7 +964,7 @@ class WhiteDnsModelsTest {
     }
 
     @Test
-    fun importStormDnsProfileLinkIgnoresResolverPayload() {
+    fun importCottenDnsProfileLinkIgnoresResolverPayload() {
         val existingResolverProfile = ResolverProfile(
             id = "resolver-existing",
             name = "Existing",
@@ -999,9 +999,9 @@ class WhiteDnsModelsTest {
               }
             }
         """.trimIndent()
-        val link = "stormdns://${Base64.getUrlEncoder().withoutPadding().encodeToString(payload.toByteArray())}"
+        val link = "CottenDns://${Base64.getUrlEncoder().withoutPadding().encodeToString(payload.toByteArray())}"
 
-        val importedSettings = existingSettings.importStormDnsProfileLink(link, nowMillis = 200L)
+        val importedSettings = existingSettings.importCottenDnsProfileLink(link, nowMillis = 200L)
         val importedProfile = importedSettings.selectedConnectionProfile()
 
         assertEquals("Imported", importedProfile.name)
@@ -1014,7 +1014,7 @@ class WhiteDnsModelsTest {
     }
 
     @Test
-    fun exportAllStormDnsProfileLinksWritesOneLinkPerCustomProfile() {
+    fun exportAllCottenDnsProfileLinksWritesOneLinkPerCustomProfile() {
         val first = ConnectionProfile(
             id = "profile-first",
             name = "First",
@@ -1035,16 +1035,16 @@ class WhiteDnsModelsTest {
             connectionProfiles = listOf(ConnectionProfile.defaultProfile(), first, second),
         )
 
-        val exportedLinks = settings.exportAllStormDnsProfileLinks().lineSequence().toList()
+        val exportedLinks = settings.exportAllCottenDnsProfileLinks().lineSequence().toList()
 
         assertEquals(2, exportedLinks.size)
-        assertTrue(exportedLinks.all { it.startsWith("stormdns://") })
-        assertEquals("first.example.com", WhiteDnsSettings().importStormDnsProfileLink(exportedLinks[0]).customServerDomain)
-        assertEquals("second.example.com", WhiteDnsSettings().importStormDnsProfileLink(exportedLinks[1]).customServerDomain)
+        assertTrue(exportedLinks.all { it.startsWith("CottenDns://") })
+        assertEquals("first.example.com", WhiteDnsSettings().importCottenDnsProfileLink(exportedLinks[0]).customServerDomain)
+        assertEquals("second.example.com", WhiteDnsSettings().importCottenDnsProfileLink(exportedLinks[1]).customServerDomain)
     }
 
     @Test
-    fun importStormDnsProfileLinksImportsManyLinksLineByLine() {
+    fun importCottenDnsProfileLinksImportsManyLinksLineByLine() {
         fun linkFor(domain: String, key: String): String {
             val payload = """
                 {
@@ -1060,12 +1060,12 @@ class WhiteDnsModelsTest {
                   }
                 }
             """.trimIndent()
-            return "stormdns://${Base64.getUrlEncoder().withoutPadding().encodeToString(payload.toByteArray())}"
+            return "CottenDns://${Base64.getUrlEncoder().withoutPadding().encodeToString(payload.toByteArray())}"
         }
         val firstLink = linkFor("first.example.com", "first-key")
         val secondLink = linkFor("second.example.com", "second-key")
 
-        val importedSettings = WhiteDnsSettings().importStormDnsProfileLinks(
+        val importedSettings = WhiteDnsSettings().importCottenDnsProfileLinks(
             rawLinks = "$firstLink\n\n$secondLink",
             nowMillis = 500L,
         )
@@ -1208,8 +1208,8 @@ class WhiteDnsModelsTest {
         assertEquals(freshState, recovered)
     }
 
-    private fun decodeStormDnsProfilePayload(link: String): String {
-        val payload = link.removePrefix("stormdns://")
+    private fun decodeCottenDnsProfilePayload(link: String): String {
+        val payload = link.removePrefix("CottenDns://")
         val paddedPayload = payload.padEnd(payload.length + ((4 - payload.length % 4) % 4), '=')
         return Base64.getUrlDecoder().decode(paddedPayload).toString(Charsets.UTF_8)
     }

@@ -1,14 +1,14 @@
-package shop.whitedns.client.storm
+package shop.whitedns.client.cottendns
 
 import java.nio.file.Files
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class StormDnsProcessManagerTest {
+class CottenDnsProcessManagerTest {
     @Test
     fun cleanupStaleLaunchFilesDeletesOnlyOldGeneratedFiles() {
-        val runtimeDir = Files.createTempDirectory("stormdns-runtime").toFile()
+        val runtimeDir = Files.createTempDirectory("CottenDns-runtime").toFile()
         val nowMillis = 2_000_000L
         val oldMillis = 1_000_000L
         val freshMillis = nowMillis - 1_000L
@@ -29,7 +29,7 @@ class StormDnsProcessManagerTest {
             setLastModified(oldMillis)
         }
 
-        StormDnsProcessManager.cleanupStaleLaunchFiles(
+        CottenDnsProcessManager.cleanupStaleLaunchFiles(
             runtimeDir = runtimeDir,
             nowMillis = nowMillis,
             maxAgeMillis = 10_000L,

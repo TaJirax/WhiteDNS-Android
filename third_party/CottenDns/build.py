@@ -29,7 +29,7 @@ def resolve_c_compiler(env):
 
 def build(goos, goarch, goarm, component, output_name, require_cgo=False):
     print(f"Building {component} for {goos}/{goarch}...")
-
+    
     env = os.environ.copy()
     env["GOOS"] = goos
     env["GOARCH"] = goarch
@@ -45,10 +45,10 @@ def build(goos, goarch, goarm, component, output_name, require_cgo=False):
                 "cgo toolchain not found (set CC to an Android cross-compiler)."
             )
             return "skipped"
-
+    
     version = get_version()
     ldflags = f"-s -w -X cottendns-go/internal/version.BuildVersion={version}"
-
+    
     cmd = [
         "go", "build",
         "-trimpath",
@@ -56,7 +56,7 @@ def build(goos, goarch, goarm, component, output_name, require_cgo=False):
         "-o", output_name,
         f"./cmd/{component}"
     ]
-
+    
     try:
         subprocess.run(cmd, env=env, check=True)
         print(f"Successfully built: {output_name}")
@@ -69,7 +69,7 @@ def main():
     dist_dir = Path("dist")
     if not dist_dir.exists():
         dist_dir.mkdir()
-
+        
     targets = [
         {"os": "linux", "arch": "amd64", "ext": "", "platform": "Linux"},
         {"os": "windows", "arch": "amd64", "ext": ".exe", "platform": "Windows"},
@@ -79,7 +79,7 @@ def main():
 
     failed = []
     skipped = []
-
+    
     for t in targets:
         for component in ["client", "server"]:
             output_name = f"dist/CottenDns_{component.capitalize()}_{t['platform']}_{t['arch']}{t['ext']}"
@@ -99,7 +99,7 @@ def main():
     if failed:
         print("Build failed for:", ", ".join(failed))
         exit(1)
-
+            
     print("Copying config files...")
     shutil.copy("client_config.toml.simple", dist_dir / "client_config.toml")
     shutil.copy("server_config.toml.simple", dist_dir / "server_config.toml")
@@ -120,7 +120,7 @@ def main():
     engineering_notes = Path("docs") / "ENGINEERING_CHANGES.md"
     if engineering_notes.exists():
         shutil.copy(engineering_notes, dist_dir / "ENGINEERING_CHANGES.md")
-
+        
     if skipped:
         print("Skipped targets:", ", ".join(skipped))
 

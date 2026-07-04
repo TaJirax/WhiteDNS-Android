@@ -10,7 +10,7 @@ import android.service.quicksettings.TileService
 import androidx.core.app.NotificationManagerCompat
 import java.util.UUID
 import shop.whitedns.client.MainActivity
-import shop.whitedns.client.model.StormDnsServerProfile
+import shop.whitedns.client.model.CottenDnsServerProfile
 import shop.whitedns.client.model.WhiteDnsSettings
 import shop.whitedns.client.model.WhiteDnsSettingsStore
 import shop.whitedns.client.model.resolve
@@ -135,7 +135,7 @@ class WhiteDnsTileService : TileService() {
         startActivityAndCollapse(intent)
     }
 
-    private fun selectServerProfile(settings: WhiteDnsSettings): StormDnsServerProfile? {
+    private fun selectServerProfile(settings: WhiteDnsSettings): CottenDnsServerProfile? {
         val connectionProfile = settings.selectedConnectionProfile()
         val domain = connectionProfile.customServerDomain
             .trim()
@@ -144,9 +144,9 @@ class WhiteDnsTileService : TileService() {
         if (domain.isBlank() || encryptionKey.isBlank()) {
             return null
         }
-        return StormDnsServerProfile(
+        return CottenDnsServerProfile(
             id = "custom",
-            label = "Custom StormDNS Server",
+            label = "Custom CottenDns Server",
             domain = domain,
             encryptionKey = encryptionKey,
             encryptionMethod = connectionProfile.customServerEncryptionMethod.coerceIn(0, 5),

@@ -3,7 +3,7 @@ package shop.whitedns.client.runtime
 import kotlin.math.roundToInt
 import shop.whitedns.client.model.ConnectionProgressState
 
-fun parseStormDnsConnectionProgressLine(line: String): ConnectionProgressState? {
+fun parseCottenDnsConnectionProgressLine(line: String): ConnectionProgressState? {
     val cleanLine = line
         .replace(AnsiEscapeRegex, "")
         .trim()

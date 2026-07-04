@@ -14,13 +14,13 @@ data class Choice<T>(
     val label: String,
 )
 
-data class StormDnsServerProfile(
+data class CottenDnsServerProfile(
     val id: String,
     val label: String,
     val domain: String,
     val encryptionKey: String,
     val encryptionMethod: Int,
-    val serverType: String = ConnectionProfile.ServerTypeStormDns,
+    val serverType: String = ConnectionProfile.ServerTypeCottenDns,
 )
 
 data class ConnectionProfile(
@@ -30,25 +30,21 @@ data class ConnectionProfile(
     val customServerDomain: String = "",
     val customServerEncryptionKey: String = "",
     val customServerEncryptionMethod: Int = 1,
-    // Engine generation of the target server. "cottendns" uses CottenDns's 2-byte
-    // session-ID wire format and unlocks its delivery/transport features (query-type
-    // rotation, TCP/53 fallback). "stormdns" (default, also covers MasterDNS/WhiteDNS)
-    // uses the legacy 1-byte format with a TXT/UDP-only feature subset for
-    // backward compatibility. Pre-existing saved profiles deserialize to "stormdns".
-    val serverType: String = ServerTypeStormDns,
+    // CottenDns is the only bundled engine. The compatibility server type keeps
+    // CottenDns's legacy wire mode available for older compatible servers.
+    val serverType: String = ServerTypeCottenDns,
     val resolverProfileId: String = "",
     val connectionMode: String = "proxy",
 ) : Serializable {
     companion object {
         const val DefaultId = "default"
         const val ServerTypeCottenDns = "cottendns"
-        const val ServerTypeStormDns = "stormdns"
+        const val ServerTypeCompatibility = "compatibility"
 
         fun normalizeServerType(value: String?): String {
-            return if (value?.trim()?.lowercase() == ServerTypeCottenDns) {
-                ServerTypeCottenDns
-            } else {
-                ServerTypeStormDns
+            return when (value?.trim()?.lowercase()) {
+                ServerTypeCompatibility -> ServerTypeCompatibility
+                else -> ServerTypeCottenDns
             }
         }
 
@@ -253,7 +249,7 @@ data class WhiteDnsSettings(
     val customServerDomain: String = "",
     val customServerEncryptionKey: String = "",
     val customServerEncryptionMethod: Int = 1,
-    val serverType: String = ConnectionProfile.ServerTypeStormDns,
+    val serverType: String = ConnectionProfile.ServerTypeCottenDns,
     val connectionMode: String = "proxy",
     val protocolType: String = "SOCKS5",
     val themeMode: String = WhiteDnsThemeMode.System,
@@ -556,7 +552,7 @@ data class WhiteDnsScanState(
 data class WhiteDnsUiState(
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
     val settings: WhiteDnsSettings = WhiteDnsSettings(),
-    val serverPool: List<StormDnsServerProfile> = emptyList(),
+    val serverPool: List<CottenDnsServerProfile> = emptyList(),
     val networkIpAddress: String = "127.0.0.1",
     val batteryOptimizationIgnored: Boolean = true,
     val notificationsEnabled: Boolean = true,

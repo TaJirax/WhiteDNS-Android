@@ -33,7 +33,7 @@ jobs:
           base_ref="${{ github.event.pull_request.base.sha }}"
           head_ref="${{ github.event.pull_request.head.sha }}"
 
-          if scripts/check-stormdns-boundary.sh "${base_ref}" "${head_ref}"; then
+          if scripts/check-CottenDns-boundary.sh "${base_ref}" "${head_ref}"; then
             exit 0
           fi
 

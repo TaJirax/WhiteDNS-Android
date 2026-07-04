@@ -1,7 +1,7 @@
-package shop.whitedns.client.storm
+package shop.whitedns.client.cottendns
 
-import shop.whitedns.client.model.StormDnsServerProfile
+import shop.whitedns.client.model.CottenDnsServerProfile
 
-object StormDnsBuiltInPool {
-    val profiles: List<StormDnsServerProfile> = emptyList()
+object CottenDnsBuiltInPool {
+    val profiles: List<CottenDnsServerProfile> = emptyList()
 }

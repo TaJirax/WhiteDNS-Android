@@ -4,10 +4,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-class StormDnsTrafficStatsTest {
+class CottenDnsTrafficStatsTest {
     @Test
-    fun parseStormDnsTrafficStatsLineReadsDirectionsAndUnits() {
-        val stats = parseStormDnsTrafficStatsLine(
+    fun parseCottenDnsTrafficStatsLineReadsDirectionsAndUnits() {
+        val stats = parseCottenDnsTrafficStatsLine(
             "INFO \uD83D\uDCCA ↑ 1.50 KB/s (Total: 3.00 KB) | ↓ 2.00 MB/s (Total: 4.50 MB)",
         )
 
@@ -19,14 +19,14 @@ class StormDnsTrafficStatsTest {
     }
 
     @Test
-    fun parseStormDnsTrafficStatsLineIgnoresNonTrafficLogs() {
-        assertNull(parseStormDnsTrafficStatsLine("StormDNS client started"))
+    fun parseCottenDnsTrafficStatsLineIgnoresNonTrafficLogs() {
+        assertNull(parseCottenDnsTrafficStatsLine("CottenDns client started"))
     }
 
     @Test
-    fun parseStormDnsTrafficStatsLineHandlesTimestampedAnsiOutput() {
-        val stats = parseStormDnsTrafficStatsLine(
-            "2026/05/15 13:10:11 StormDNS \u001B[32mINFO\u001B[0m " +
+    fun parseCottenDnsTrafficStatsLineHandlesTimestampedAnsiOutput() {
+        val stats = parseCottenDnsTrafficStatsLine(
+            "2026/05/15 13:10:11 CottenDns \u001B[32mINFO\u001B[0m " +
                 "\uD83D\uDCCA \u001B[36m↑\u001B[0m \u001B[33m256 B/s\u001B[0m " +
                 "(Total: \u001B[33m512 B\u001B[0m) | \u001B[36m↓\u001B[0m " +
                 "\u001B[33m1.00 KB/s\u001B[0m (Total: \u001B[33m2.00 KB\u001B[0m)",
@@ -41,10 +41,10 @@ class StormDnsTrafficStatsTest {
 
     @Test
     fun trafficAccountingKeepsSessionTotalsAcrossRawCounterResets() {
-        val accounting = StormDnsTrafficAccounting()
+        val accounting = CottenDnsTrafficAccounting()
 
         val first = accounting.record(
-            StormDnsTrafficStats(
+            CottenDnsTrafficStats(
                 downloadBytes = 1_000L,
                 uploadBytes = 500L,
                 downloadSpeedBytesPerSecond = 100L,
@@ -55,7 +55,7 @@ class StormDnsTrafficStatsTest {
         assertEquals(500L, first.uploadBytes)
 
         val second = accounting.record(
-            StormDnsTrafficStats(
+            CottenDnsTrafficStats(
                 downloadBytes = 1_300L,
                 uploadBytes = 700L,
                 downloadSpeedBytesPerSecond = 120L,
@@ -66,7 +66,7 @@ class StormDnsTrafficStatsTest {
         assertEquals(700L, second.uploadBytes)
 
         val afterRestart = accounting.record(
-            StormDnsTrafficStats(
+            CottenDnsTrafficStats(
                 downloadBytes = 200L,
                 uploadBytes = 50L,
                 downloadSpeedBytesPerSecond = 80L,
@@ -79,7 +79,7 @@ class StormDnsTrafficStatsTest {
         assertEquals(20L, afterRestart.uploadSpeedBytesPerSecond)
 
         val duplicateRestartSample = accounting.record(
-            StormDnsTrafficStats(
+            CottenDnsTrafficStats(
                 downloadBytes = 200L,
                 uploadBytes = 50L,
                 downloadSpeedBytesPerSecond = 0L,
@@ -92,9 +92,9 @@ class StormDnsTrafficStatsTest {
 
     @Test
     fun trafficAccountingCanResetSession() {
-        val accounting = StormDnsTrafficAccounting()
+        val accounting = CottenDnsTrafficAccounting()
         accounting.record(
-            StormDnsTrafficStats(
+            CottenDnsTrafficStats(
                 downloadBytes = 1_000L,
                 uploadBytes = 500L,
                 downloadSpeedBytesPerSecond = 100L,
@@ -105,7 +105,7 @@ class StormDnsTrafficStatsTest {
         accounting.reset()
 
         val next = accounting.record(
-            StormDnsTrafficStats(
+            CottenDnsTrafficStats(
                 downloadBytes = 25L,
                 uploadBytes = 10L,
                 downloadSpeedBytesPerSecond = 5L,

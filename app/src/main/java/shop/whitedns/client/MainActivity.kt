@@ -194,8 +194,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private companion object {
-        // CottenDns shares the StormDNS profile-link payload, so both schemes import.
-        val ProfileLinkSchemes = setOf("stormdns", "cottendns")
+        // CottenDns shares the CottenDns profile-link payload, so both schemes import.
+        val ProfileLinkSchemes = setOf("CottenDns", "cottendns")
         const val ExtraProfileImportHandled = "shop.whitedns.client.extra.PROFILE_IMPORT_HANDLED"
     }
 }

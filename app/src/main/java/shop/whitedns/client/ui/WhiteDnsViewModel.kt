@@ -49,7 +49,7 @@ import shop.whitedns.client.model.ResolverRuntimeState
 import shop.whitedns.client.model.ServerTestResult
 import shop.whitedns.client.model.ServerTestState
 import shop.whitedns.client.model.ServerTestStatus
-import shop.whitedns.client.model.StormDnsServerProfile
+import shop.whitedns.client.model.CottenDnsServerProfile
 import shop.whitedns.client.model.WhiteDnsScanDefaults
 import shop.whitedns.client.model.WhiteDnsScanState
 import shop.whitedns.client.model.WhiteDnsScanStatus
@@ -61,7 +61,7 @@ import shop.whitedns.client.model.WhiteDnsAutoTunePresets
 import shop.whitedns.client.model.WhiteDnsParallelTest
 import shop.whitedns.client.model.applyAdvancedProfile
 import shop.whitedns.client.model.applyAutoTunePreset
-import shop.whitedns.client.model.importStormDnsProfileLink
+import shop.whitedns.client.model.importCottenDnsProfileLink
 import shop.whitedns.client.model.normalizedAdvancedProfiles
 import shop.whitedns.client.model.normalizedConnectionProfiles
 import shop.whitedns.client.model.normalizedResolverProfiles
@@ -73,23 +73,23 @@ import shop.whitedns.client.model.validateResolverText
 import shop.whitedns.client.proxy.WhiteDnsProxyEvent
 import shop.whitedns.client.proxy.WhiteDnsProxyEvents
 import shop.whitedns.client.proxy.WhiteDnsProxyService
-import shop.whitedns.client.runtime.StormDnsTrafficAccounting
+import shop.whitedns.client.runtime.CottenDnsTrafficAccounting
 import shop.whitedns.client.runtime.WhiteDnsRuntimeState
 import shop.whitedns.client.runtime.WhiteDnsRuntimeStateStore
 import shop.whitedns.client.runtime.WhiteDnsTrafficWarmup
 import shop.whitedns.client.runtime.RuntimeLaunchRequestStore
 import shop.whitedns.client.runtime.formatTrafficSpeed
-import shop.whitedns.client.runtime.parseStormDnsConnectionProgressLine
-import shop.whitedns.client.runtime.parseStormDnsResolverStateLine
-import shop.whitedns.client.runtime.parseStormDnsTrafficStatsLine
+import shop.whitedns.client.runtime.parseCottenDnsConnectionProgressLine
+import shop.whitedns.client.runtime.parseCottenDnsResolverStateLine
+import shop.whitedns.client.runtime.parseCottenDnsTrafficStatsLine
 import shop.whitedns.client.scan.WhiteDnsScanLaunchRequest
 import shop.whitedns.client.scan.WhiteDnsScanRequestStore
 import shop.whitedns.client.scan.WhiteDnsScanService
 import shop.whitedns.client.scan.WhiteDnsScanSettingsStore
 import shop.whitedns.client.scan.WhiteDnsScanStateStore
 import shop.whitedns.client.scan.WhiteDnsScannerResultStore
-import shop.whitedns.client.storm.StormDnsBuiltInPool
-import shop.whitedns.client.storm.StormDnsProcessManager
+import shop.whitedns.client.cottendns.CottenDnsBuiltInPool
+import shop.whitedns.client.cottendns.CottenDnsProcessManager
 import shop.whitedns.client.vpn.WhiteDnsVpnService
 import shop.whitedns.client.vpn.WhiteDnsVpnEvent
 import shop.whitedns.client.vpn.WhiteDnsVpnEvents
@@ -112,7 +112,7 @@ class WhiteDnsViewModel(
     var uiState by mutableStateOf(
         WhiteDnsUiState(
             settings = initialSettings,
-            serverPool = StormDnsBuiltInPool.profiles,
+            serverPool = CottenDnsBuiltInPool.profiles,
             networkIpAddress = findDeviceNetworkIpAddress(),
             batteryOptimizationIgnored = isIgnoringBatteryOptimizations(appContext),
             notificationsEnabled = areNotificationsEnabled(appContext),
@@ -134,19 +134,19 @@ class WhiteDnsViewModel(
     private var scanLaunchJob: Job? = null
     private var scanStateRefreshJob: Job? = null
     private var lastScannerResultProfileText = ""
-    private var activeServerProfile: StormDnsServerProfile? = null
+    private var activeServerProfile: CottenDnsServerProfile? = null
     private var activeRuntimeSessionId: String = ""
     private var activeProxyListenPort: Int = WhiteDnsRuntimeProxy.ListenPortInt
     private var trafficBaseline = TrafficSnapshot.empty()
     private var lastTrafficSnapshot = TrafficSnapshot.empty()
     private var activeVpnTrafficInterfaceName: String? = null
-    private val stormDnsTrafficAccounting = StormDnsTrafficAccounting()
+    private val CottenDnsTrafficAccounting = CottenDnsTrafficAccounting()
     private val autoTuneTrialManagersLock = Any()
-    private var autoTuneTrialManagers: List<StormDnsProcessManager> = emptyList()
+    private var autoTuneTrialManagers: List<CottenDnsProcessManager> = emptyList()
     private var lastAutoTuneWinnerConfigId = ""
     private var serverTestJob: Job? = null
     private val serverTestManagersLock = Any()
-    private var serverTestManagers: List<StormDnsProcessManager> = emptyList()
+    private var serverTestManagers: List<CottenDnsProcessManager> = emptyList()
     private var lastProgressUiUpdateMillis = 0L
     private var lastResolverUiUpdateMillis = 0L
     private val socksStreamTrackerLock = Any()
@@ -249,7 +249,7 @@ class WhiteDnsViewModel(
     fun importProfileLink(rawLink: String) {
         runCatching {
             uiState.settings
-                .importStormDnsProfileLink(rawLink)
+                .importCottenDnsProfileLink(rawLink)
                 .syncSelectedConnectionProfileFields()
         }.onSuccess { importedSettings ->
             settingsStore.save(importedSettings)
@@ -336,7 +336,7 @@ class WhiteDnsViewModel(
             connectionVerification = ConnectionVerificationState(),
             autoTuneTrialResults = emptyList(),
             serverTestState = ServerTestState(),
-            connectionLogs = listOf("Starting StormDNS"),
+            connectionLogs = listOf("Starting CottenDns"),
         )
         activeVpnTrafficInterfaceName = null
         resetTrafficAccounting()
@@ -369,9 +369,9 @@ class WhiteDnsViewModel(
             if (serverProfile == null) {
                 appendLog(
                     if (connectionProfile.serverMode == "custom") {
-                        "Custom StormDNS domain and encryption key are required"
+                        "Custom CottenDns domain and encryption key are required"
                     } else {
-                        "No StormDNS server profile configured"
+                        "No CottenDns server profile configured"
                     },
                 )
                 activeRuntimeSessionId = ""
@@ -443,7 +443,7 @@ class WhiteDnsViewModel(
     private suspend fun launchRuntime(
         sessionId: String,
         connectionProfile: ConnectionProfile,
-        serverProfile: StormDnsServerProfile,
+        serverProfile: CottenDnsServerProfile,
         runtimeSettings: WhiteDnsSettings,
     ): Boolean {
         val result = withContext(Dispatchers.IO) {
@@ -457,9 +457,9 @@ class WhiteDnsViewModel(
                 }
                 appendLog(
                     if (connectionProfile.serverMode == "custom") {
-                        "Using custom StormDNS server"
+                        "Using custom CottenDns server"
                     } else {
-                        "Using configured StormDNS server"
+                        "Using configured CottenDns server"
                     },
                 )
                 appendLog("Connection mode: $modeLabel")
@@ -494,7 +494,7 @@ class WhiteDnsViewModel(
         sessionId: String,
         baseSettings: WhiteDnsSettings,
         connectionProfile: ConnectionProfile,
-        serverProfile: StormDnsServerProfile,
+        serverProfile: CottenDnsServerProfile,
     ): Boolean {
         return runParallelProxyTestConnection(
             sessionId = sessionId,
@@ -508,7 +508,7 @@ class WhiteDnsViewModel(
         sessionId: String,
         baseSettings: WhiteDnsSettings,
         connectionProfile: ConnectionProfile,
-        serverProfile: StormDnsServerProfile,
+        serverProfile: CottenDnsServerProfile,
     ): Boolean = coroutineScope {
         val finalConnectionMode = baseSettings.runtimeConnectionSettings().resolve().connectionMode
         val finalModeLabel = if (finalConnectionMode == WhiteDnsRuntimeStateStore.ModeVpn) {
@@ -561,7 +561,7 @@ class WhiteDnsViewModel(
             )
         }
         val trialManagers = trialPlans.associate { plan ->
-            plan.config.id to StormDnsProcessManager(appContext)
+            plan.config.id to CottenDnsProcessManager(appContext)
         }
 
         setAutoTuneTrialManagers(trialManagers.values.toList())
@@ -745,8 +745,8 @@ class WhiteDnsViewModel(
 
     private suspend fun runParallelAutoTuneResolverDiscoveryTrial(
         plan: AutoTuneTrialPlan,
-        manager: StormDnsProcessManager,
-        serverProfile: StormDnsServerProfile,
+        manager: CottenDnsProcessManager,
+        serverProfile: CottenDnsServerProfile,
     ): AutoTuneResolverDiscoveryResult {
         val fullResolverCount = plan.settings.resolve().resolverEntries.size
         val port = withContext(Dispatchers.IO) {
@@ -811,8 +811,8 @@ class WhiteDnsViewModel(
 
     private suspend fun runParallelAutoTunePlanGroup(
         plans: List<AutoTuneTrialPlan>,
-        trialManagers: Map<String, StormDnsProcessManager>,
-        serverProfile: StormDnsServerProfile,
+        trialManagers: Map<String, CottenDnsProcessManager>,
+        serverProfile: CottenDnsServerProfile,
         groupLabel: String,
     ): List<AutoTuneResult> = coroutineScope {
         val batches = plans.chunked(AutoTuneMaxConcurrentTrials)
@@ -912,8 +912,8 @@ class WhiteDnsViewModel(
 
     private suspend fun startParallelAutoTuneTrial(
         plan: AutoTuneTrialPlan,
-        manager: StormDnsProcessManager,
-        serverProfile: StormDnsServerProfile,
+        manager: CottenDnsProcessManager,
+        serverProfile: CottenDnsServerProfile,
         resolverCollector: AutoTuneResolverCollector? = null,
     ): AutoTuneTrialStartup {
         val startupFailure = AtomicReference<String?>(null)
@@ -923,7 +923,7 @@ class WhiteDnsViewModel(
             }
             manager.start(serverProfile, plan.settings) { line ->
                 resolverCollector?.observe(line)
-                detectStormDnsStartupFailure(line)?.let { failure ->
+                detectCottenDnsStartupFailure(line)?.let { failure ->
                     startupFailure.compareAndSet(null, failure)
                 }
             }
@@ -1133,7 +1133,7 @@ class WhiteDnsViewModel(
     }
 
     private suspend fun waitForAutoTuneTrialReady(
-        manager: StormDnsProcessManager,
+        manager: CottenDnsProcessManager,
         listenPort: Int,
         startupFailure: AtomicReference<String?>,
     ): Boolean {
@@ -1234,7 +1234,7 @@ class WhiteDnsViewModel(
         return ports.toList()
     }
 
-    private fun setAutoTuneTrialManagers(managers: List<StormDnsProcessManager>) {
+    private fun setAutoTuneTrialManagers(managers: List<CottenDnsProcessManager>) {
         synchronized(autoTuneTrialManagersLock) {
             autoTuneTrialManagers = managers
         }
@@ -1253,7 +1253,7 @@ class WhiteDnsViewModel(
         }
     }
 
-    private fun detectStormDnsStartupFailure(line: String): String? {
+    private fun detectCottenDnsStartupFailure(line: String): String? {
         val normalized = line.lowercase()
         return when {
             "no valid connections found after mtu testing" in normalized ||
@@ -1334,7 +1334,7 @@ class WhiteDnsViewModel(
                 )
             }
             val managers = plans.associate { plan ->
-                plan.serverProfile.id to StormDnsProcessManager(appContext)
+                plan.serverProfile.id to CottenDnsProcessManager(appContext)
             }
             setServerTestManagers(managers.values.toList())
             val startedMessage = "Server Test: testing ${plans.size} servers with ${resolverEntries.size} connected resolvers"
@@ -1397,7 +1397,7 @@ class WhiteDnsViewModel(
 
     private suspend fun startServerTestPlan(
         plan: ServerTestPlan,
-        manager: StormDnsProcessManager,
+        manager: CottenDnsProcessManager,
     ): ServerTestStartup {
         val startupFailure = AtomicReference<String?>(null)
         return try {
@@ -1410,7 +1410,7 @@ class WhiteDnsViewModel(
                 )
             }
             manager.start(plan.serverProfile, plan.settings) { line ->
-                detectStormDnsStartupFailure(line)?.let { failure ->
+                detectCottenDnsStartupFailure(line)?.let { failure ->
                     startupFailure.compareAndSet(null, failure)
                 }
             }
@@ -1540,7 +1540,7 @@ class WhiteDnsViewModel(
     private fun buildServerTestProfiles(
         settings: WhiteDnsSettings,
         serverProfileId: String?,
-    ): List<StormDnsServerProfile> {
+    ): List<CottenDnsServerProfile> {
         val profiles = settings.normalizedConnectionProfiles()
             .let { connectionProfiles ->
                 if (serverProfileId == null) {
@@ -1559,7 +1559,7 @@ class WhiteDnsViewModel(
         }
     }
 
-    private fun setServerTestManagers(managers: List<StormDnsProcessManager>) {
+    private fun setServerTestManagers(managers: List<CottenDnsProcessManager>) {
         synchronized(serverTestManagersLock) {
             serverTestManagers = managers
         }
@@ -1589,7 +1589,7 @@ class WhiteDnsViewModel(
             stopServerTestManagers()
             stopAllRuntimeServices()
             if (uiState.settings.resolve().connectionMode == "vpn") {
-                delay(VpnStopBeforeStormDnsStopDelayMillis)
+                delay(VpnStopBeforeCottenDnsStopDelayMillis)
             }
         }
         activeProxyListenPort = WhiteDnsRuntimeProxy.ListenPortInt
@@ -1766,7 +1766,7 @@ class WhiteDnsViewModel(
             val serverProfile = selectServerProfile(settings)
             if (serverProfile == null) {
                 val profileName = settings.selectedConnectionProfile().name.ifBlank { "selected scan profile" }
-                setScanFailure(sessionId, "$profileName requires a StormDNS domain and encryption key")
+                setScanFailure(sessionId, "$profileName requires a CottenDns domain and encryption key")
                 return@launch
             }
             val workerCount = uiState.scanWorkerCount.toIntOrNull()
@@ -1897,7 +1897,7 @@ class WhiteDnsViewModel(
             val processed = (validEntries + rejectedEntries).toSet()
             val sessionId = UUID.randomUUID().toString()
             val resolverFile = File(
-                File(File(appContext.noBackupFilesDir, "stormdns/scan"), sessionId).apply { mkdirs() },
+                File(File(appContext.noBackupFilesDir, "CottenDns/scan"), sessionId).apply { mkdirs() },
                 "resume.resolvers",
             )
             val remainingResolverCount = withContext(Dispatchers.IO) {
@@ -2031,11 +2031,11 @@ class WhiteDnsViewModel(
         if (isStaleRuntimeEvent(sessionId)) {
             return
         }
-        val trafficStats = parseStormDnsTrafficStatsLine(message)
-        val progressState = parseStormDnsConnectionProgressLine(message)
-        val resolverState = parseStormDnsResolverStateLine(message)
+        val trafficStats = parseCottenDnsTrafficStatsLine(message)
+        val progressState = parseCottenDnsConnectionProgressLine(message)
+        val resolverState = parseCottenDnsResolverStateLine(message)
         if (trafficStats != null) {
-            stormDnsTrafficAccounting.record(trafficStats)
+            CottenDnsTrafficAccounting.record(trafficStats)
         }
         trackSocksStreamLogLine(message)
         val isTelemetry = trafficStats != null ||
@@ -2338,7 +2338,7 @@ class WhiteDnsViewModel(
     }
 
     private fun importScanResolverFile(uri: Uri, sessionId: String): ImportedScanResolverFile {
-        val scanDir = File(File(appContext.noBackupFilesDir, "stormdns/scan"), sessionId).apply {
+        val scanDir = File(File(appContext.noBackupFilesDir, "CottenDns/scan"), sessionId).apply {
             mkdirs()
         }
         val resolverFile = File(scanDir, "input.resolvers")
@@ -2365,7 +2365,7 @@ class WhiteDnsViewModel(
     }
 
     private fun importDefaultScanResolverFile(sessionId: String): ImportedScanResolverFile {
-        val scanDir = File(File(appContext.noBackupFilesDir, "stormdns/scan"), sessionId).apply {
+        val scanDir = File(File(appContext.noBackupFilesDir, "CottenDns/scan"), sessionId).apply {
             mkdirs()
         }
         val resolverFile = File(scanDir, "default.resolvers")
@@ -2483,11 +2483,11 @@ class WhiteDnsViewModel(
             ?: normalizedSettings.selectedConnectionProfile().id
     }
 
-    private fun selectServerProfile(settings: WhiteDnsSettings): StormDnsServerProfile? {
+    private fun selectServerProfile(settings: WhiteDnsSettings): CottenDnsServerProfile? {
         return serverProfileFromConnectionProfile(settings.selectedConnectionProfile())
     }
 
-    private fun serverProfileFromConnectionProfile(connectionProfile: ConnectionProfile): StormDnsServerProfile? {
+    private fun serverProfileFromConnectionProfile(connectionProfile: ConnectionProfile): CottenDnsServerProfile? {
         val domain = connectionProfile.customServerDomain
             .trim()
             .trimEnd('.')
@@ -2495,7 +2495,7 @@ class WhiteDnsViewModel(
         if (domain.isBlank() || encryptionKey.isBlank()) {
             return null
         }
-        return StormDnsServerProfile(
+        return CottenDnsServerProfile(
             id = connectionProfile.id.ifBlank { domain },
             label = connectionProfile.name.ifBlank { domain },
             domain = domain,
@@ -2594,7 +2594,7 @@ class WhiteDnsViewModel(
             countActiveProxyClients(listenPort),
             countTrackedSocksStreams(),
         )
-        stormDnsTrafficAccounting.latest()?.let { stats ->
+        CottenDnsTrafficAccounting.latest()?.let { stats ->
             val peakSpeed = maxOf(
                 uiState.connectionStats.peakSpeedBytesPerSecond,
                 stats.downloadSpeedBytesPerSecond + stats.uploadSpeedBytesPerSecond,
@@ -2867,7 +2867,7 @@ class WhiteDnsViewModel(
     }
 
     private fun resetTrafficAccounting() {
-        stormDnsTrafficAccounting.reset()
+        CottenDnsTrafficAccounting.reset()
     }
 
     private fun pruneTrackedSocksStreamsLocked(now: Long) {
@@ -2944,7 +2944,7 @@ class WhiteDnsViewModel(
         const val RuntimeProgressUiUpdateIntervalMillis = 250L
         const val RuntimeResolverUiUpdateIntervalMillis = 500L
         const val EstablishedTcpState = "01"
-        const val VpnStopBeforeStormDnsStopDelayMillis = 1_500L
+        const val VpnStopBeforeCottenDnsStopDelayMillis = 1_500L
         const val SocksStreamTrackingTtlMillis = 120_000L
         const val EmptyTrafficSource = "none"
         const val BatteryOptimizationRefreshAttempts = 8
@@ -2996,7 +2996,7 @@ class WhiteDnsViewModel(
 
     private data class AutoTuneTrialStartup(
         val plan: AutoTuneTrialPlan,
-        val manager: StormDnsProcessManager,
+        val manager: CottenDnsProcessManager,
         val ready: Boolean,
         val result: AutoTuneResult,
     )
@@ -3022,7 +3022,7 @@ class WhiteDnsViewModel(
         private val validResolvers = linkedSetOf<String>()
 
         fun observe(line: String) {
-            val state = parseStormDnsResolverStateLine(line) ?: return
+            val state = parseCottenDnsResolverStateLine(line) ?: return
             synchronized(lock) {
                 activeResolvers += state.activeResolvers
                 standbyResolvers += state.standbyResolvers
@@ -3044,14 +3044,14 @@ class WhiteDnsViewModel(
     }
 
     private data class ServerTestPlan(
-        val serverProfile: StormDnsServerProfile,
+        val serverProfile: CottenDnsServerProfile,
         val settings: WhiteDnsSettings,
         val result: ServerTestResult,
     )
 
     private data class ServerTestStartup(
         val plan: ServerTestPlan,
-        val manager: StormDnsProcessManager,
+        val manager: CottenDnsProcessManager,
         val ready: Boolean,
     )
 

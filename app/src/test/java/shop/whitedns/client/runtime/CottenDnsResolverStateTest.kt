@@ -4,10 +4,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-class StormDnsResolverStateTest {
+class CottenDnsResolverStateTest {
     @Test
-    fun parseStormDnsResolverStateLineParsesResolverLists() {
-        val state = parseStormDnsResolverStateLine(
+    fun parseCottenDnsResolverStateLineParsesResolverLists() {
+        val state = parseCottenDnsResolverStateLine(
             "2026 WD_RESOLVERS active=1.1.1.1:53 standby=8.8.8.8:53,9.9.9.9:53 valid=1.1.1.1:53,8.8.8.8:53,9.9.9.9:53",
         )
 
@@ -21,8 +21,8 @@ class StormDnsResolverStateTest {
     }
 
     @Test
-    fun parseStormDnsResolverStateLineHandlesEmptyLists() {
-        val state = parseStormDnsResolverStateLine("WD_RESOLVERS active=- standby=- valid=-")
+    fun parseCottenDnsResolverStateLineHandlesEmptyLists() {
+        val state = parseCottenDnsResolverStateLine("WD_RESOLVERS active=- standby=- valid=-")
 
         requireNotNull(state)
         assertEquals(emptyList<String>(), state.activeResolvers)
@@ -31,7 +31,7 @@ class StormDnsResolverStateTest {
     }
 
     @Test
-    fun parseStormDnsResolverStateLineIgnoresOtherLines() {
-        assertNull(parseStormDnsResolverStateLine("not resolver state"))
+    fun parseCottenDnsResolverStateLineIgnoresOtherLines() {
+        assertNull(parseCottenDnsResolverStateLine("not resolver state"))
     }
 }

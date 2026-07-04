@@ -34,7 +34,7 @@ import shop.whitedns.client.MainActivity
 import shop.whitedns.client.R
 import shop.whitedns.client.model.ConnectionProfile
 import shop.whitedns.client.model.ResolvedWhiteDnsSettings
-import shop.whitedns.client.model.StormDnsServerProfile
+import shop.whitedns.client.model.CottenDnsServerProfile
 import shop.whitedns.client.model.WhiteDnsOptions
 import shop.whitedns.client.model.WhiteDnsSettings
 import shop.whitedns.client.model.WhiteDnsSettingsStore
@@ -46,8 +46,8 @@ import shop.whitedns.client.runtime.RuntimeLaunchRequestStore
 import shop.whitedns.client.runtime.WhiteDnsRuntimeStateStore
 import shop.whitedns.client.runtime.WhiteDnsTrafficWarmup
 import shop.whitedns.client.runtime.formatTrafficNotificationText
-import shop.whitedns.client.runtime.parseStormDnsTrafficStatsLine
-import shop.whitedns.client.storm.StormDnsProcessManager
+import shop.whitedns.client.runtime.parseCottenDnsTrafficStatsLine
+import shop.whitedns.client.cottendns.CottenDnsProcessManager
 
 class WhiteDnsVpnService : VpnService() {
 
@@ -61,8 +61,8 @@ class WhiteDnsVpnService : VpnService() {
     @Volatile
     private var stopping = false
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val stormDnsProcessManager by lazy {
-        StormDnsProcessManager(applicationContext)
+    private val CottenDnsProcessManager by lazy {
+        CottenDnsProcessManager(applicationContext)
     }
     private val tun2SocksProcessManager by lazy {
         Tun2SocksProcessManager(applicationContext)
@@ -83,7 +83,7 @@ class WhiteDnsVpnService : VpnService() {
             }
             else -> {
                 try {
-                    enterForeground("Preparing StormDNS")
+                    enterForeground("Preparing CottenDns")
                     startVpn(intent)
                     START_REDELIVER_INTENT
                 } catch (error: Exception) {
@@ -222,9 +222,9 @@ class WhiteDnsVpnService : VpnService() {
                     sessionId = sessionId,
                     message = "Starting full-device VPN",
                 )
-                logInfo("Using custom StormDNS server")
+                logInfo("Using custom CottenDns server")
                 logInfo("Starting internal SOCKS bridge")
-                startStormDnsAndVpn(sessionId, serverProfile, settings, resolvedSettings)
+                startCottenDnsAndVpn(sessionId, serverProfile, settings, resolvedSettings)
             } catch (error: CancellationException) {
                 stopVpn()
                 throw error
@@ -234,16 +234,16 @@ class WhiteDnsVpnService : VpnService() {
         }
     }
 
-    private suspend fun startStormDnsAndVpn(
+    private suspend fun startCottenDnsAndVpn(
         sessionId: String,
-        serverProfile: StormDnsServerProfile,
+        serverProfile: CottenDnsServerProfile,
         settings: WhiteDnsSettings,
         resolvedSettings: ResolvedWhiteDnsSettings,
     ) {
         val startupFailure = AtomicReference<String?>(null)
-        stormDnsProcessManager.start(serverProfile, settings) { line ->
+        CottenDnsProcessManager.start(serverProfile, settings) { line ->
             logInfo(line)
-            detectStormDnsStartupFailure(line)?.let { failure ->
+            detectCottenDnsStartupFailure(line)?.let { failure ->
                 startupFailure.compareAndSet(null, failure)
             }
         }
@@ -253,7 +253,7 @@ class WhiteDnsVpnService : VpnService() {
         )
         logInfo("SOCKS proxy is ready")
         startVpnRouting(sessionId, settings, resolvedSettings)
-        monitorStormDnsProcess()
+        monitorCottenDnsProcess()
     }
 
     private suspend fun waitForProxyPort(
@@ -262,12 +262,12 @@ class WhiteDnsVpnService : VpnService() {
     ) {
         while (true) {
             startupFailure()?.let { failure ->
-                throw IllegalStateException("StormDNS startup failed: $failure")
+                throw IllegalStateException("CottenDns startup failed: $failure")
             }
-            if (!stormDnsProcessManager.isRunning()) {
-                val exitCode = stormDnsProcessManager.exitCodeOrNull()
+            if (!CottenDnsProcessManager.isRunning()) {
+                val exitCode = CottenDnsProcessManager.exitCodeOrNull()
                 throw IllegalStateException(
-                    "StormDNS process exited before SOCKS was ready${exitCode?.let { " (exit code $it)" }.orEmpty()}",
+                    "CottenDns process exited before SOCKS was ready${exitCode?.let { " (exit code $it)" }.orEmpty()}",
                 )
             }
             if (canConnectToLocalPort(listenPort)) {
@@ -296,7 +296,7 @@ class WhiteDnsVpnService : VpnService() {
         }.getOrDefault(false)
     }
 
-    private fun detectStormDnsStartupFailure(line: String): String? {
+    private fun detectCottenDnsStartupFailure(line: String): String? {
         val normalized = line.lowercase()
         return when {
             "no valid connections found after mtu testing" in normalized ||
@@ -307,12 +307,12 @@ class WhiteDnsVpnService : VpnService() {
         }
     }
 
-    private suspend fun monitorStormDnsProcess() {
+    private suspend fun monitorCottenDnsProcess() {
         while (true) {
-            if (!stormDnsProcessManager.isRunning()) {
-                val exitCode = stormDnsProcessManager.exitCodeOrNull()
+            if (!CottenDnsProcessManager.isRunning()) {
+                val exitCode = CottenDnsProcessManager.exitCodeOrNull()
                 throw IllegalStateException(
-                    "StormDNS process exited while VPN was active${exitCode?.let { " (exit code $it)" }.orEmpty()}",
+                    "CottenDns process exited while VPN was active${exitCode?.let { " (exit code $it)" }.orEmpty()}",
                 )
             }
             delay(1_000)
@@ -418,9 +418,9 @@ class WhiteDnsVpnService : VpnService() {
             Log.w(Tag, "Failed to close VPN interface", error)
         }
         runCatching {
-            stormDnsProcessManager.stop()
+            CottenDnsProcessManager.stop()
         }.onFailure { error ->
-            Log.w(Tag, "Failed to stop StormDNS", error)
+            Log.w(Tag, "Failed to stop CottenDns", error)
         }
         WhiteDnsRuntimeStateStore.markStopped(
             context = applicationContext,
@@ -564,7 +564,7 @@ class WhiteDnsVpnService : VpnService() {
         if (!runtimeReady) {
             return
         }
-        val stats = parseStormDnsTrafficStatsLine(message) ?: return
+        val stats = parseCottenDnsTrafficStatsLine(message) ?: return
         val now = System.currentTimeMillis()
         if (now - lastTrafficNotificationUpdateMillis < TrafficNotificationUpdateIntervalMillis) {
             return
@@ -652,13 +652,13 @@ class WhiteDnsVpnService : VpnService() {
         fun start(
             context: Context,
             sessionId: String,
-            serverProfile: StormDnsServerProfile? = null,
+            serverProfile: CottenDnsServerProfile? = null,
             settings: WhiteDnsSettings? = null,
         ) {
             val launchSettings = settings ?: WhiteDnsSettingsStore(context).load()
             val launchServerProfile = serverProfile
                 ?: selectServerProfile(launchSettings)
-                ?: throw IllegalStateException("No StormDNS server profile configured")
+                ?: throw IllegalStateException("No CottenDns server profile configured")
             RuntimeLaunchRequestStore.save(
                 context = context,
                 requestId = sessionId,
@@ -671,7 +671,7 @@ class WhiteDnsVpnService : VpnService() {
             ContextCompat.startForegroundService(context, intent)
         }
 
-        private fun selectServerProfile(settings: WhiteDnsSettings): StormDnsServerProfile? {
+        private fun selectServerProfile(settings: WhiteDnsSettings): CottenDnsServerProfile? {
             val connectionProfile = settings.selectedConnectionProfile()
             val domain = connectionProfile.customServerDomain
                 .trim()
@@ -680,9 +680,9 @@ class WhiteDnsVpnService : VpnService() {
             if (domain.isBlank() || encryptionKey.isBlank()) {
                 return null
             }
-            return StormDnsServerProfile(
+            return CottenDnsServerProfile(
                 id = "custom",
-                label = "Custom StormDNS Server",
+                label = "Custom CottenDns Server",
                 domain = domain,
                 encryptionKey = encryptionKey,
                 encryptionMethod = connectionProfile.customServerEncryptionMethod.coerceIn(0, 5),

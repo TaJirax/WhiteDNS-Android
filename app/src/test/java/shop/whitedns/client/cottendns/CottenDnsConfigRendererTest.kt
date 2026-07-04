@@ -1,4 +1,4 @@
-package shop.whitedns.client.storm
+package shop.whitedns.client.cottendns
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -9,7 +9,7 @@ import shop.whitedns.client.model.ResolverProfile
 import shop.whitedns.client.model.WhiteDnsSettings
 import shop.whitedns.client.model.importAdvancedSettingsProfileFromToml
 
-class StormDnsConfigRendererTest {
+class CottenDnsConfigRendererTest {
     @Test
     fun renderClientTomlFromConnectionProfileIncludesCompleteServerInfo() {
         val resolverProfile = ResolverProfile(
@@ -35,7 +35,7 @@ class StormDnsConfigRendererTest {
             logLevel = "INFO",
         )
 
-        val toml = StormDnsConfigRenderer.renderClientToml(
+        val toml = CottenDnsConfigRenderer.renderClientToml(
             connectionProfile = connectionProfile,
             settings = settings,
         )
@@ -66,7 +66,7 @@ class StormDnsConfigRendererTest {
             logLevel = "INFO",
         )
 
-        val toml = StormDnsConfigRenderer.renderAdvancedSettingsToml(settings)
+        val toml = CottenDnsConfigRenderer.renderAdvancedSettingsToml(settings)
 
         assertTrue(toml.contains("LISTEN_IP = \"0.0.0.0\""))
         assertTrue(toml.contains("LISTEN_PORT = 12345"))
@@ -95,8 +95,8 @@ class StormDnsConfigRendererTest {
 
     @Test
     fun renderScanClientTomlDisablesLocalListenersAndUsesSingleProbeWorker() {
-        val toml = StormDnsConfigRenderer.renderScanClientToml(
-            serverProfile = shop.whitedns.client.model.StormDnsServerProfile(
+        val toml = CottenDnsConfigRenderer.renderScanClientToml(
+            serverProfile = shop.whitedns.client.model.CottenDnsServerProfile(
                 id = "server",
                 label = "Server",
                 domain = "scan.example.com",
@@ -125,15 +125,15 @@ class StormDnsConfigRendererTest {
     }
 
     @Test
-    fun renderScanClientTomlKeepsLegacyStormDnsScanTxtOnly() {
-        val toml = StormDnsConfigRenderer.renderScanClientToml(
-            serverProfile = shop.whitedns.client.model.StormDnsServerProfile(
+    fun renderScanClientTomlKeepsCottenDnsCompatibilityScanTxtOnly() {
+        val toml = CottenDnsConfigRenderer.renderScanClientToml(
+            serverProfile = shop.whitedns.client.model.CottenDnsServerProfile(
                 id = "server",
                 label = "Server",
                 domain = "legacy.example.com",
                 encryptionKey = "secret-key",
                 encryptionMethod = 1,
-                serverType = ConnectionProfile.ServerTypeStormDns,
+                serverType = ConnectionProfile.ServerTypeCompatibility,
             ),
             settings = WhiteDnsSettings(),
         )

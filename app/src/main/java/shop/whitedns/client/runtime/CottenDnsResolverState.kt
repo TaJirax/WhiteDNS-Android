@@ -2,11 +2,11 @@ package shop.whitedns.client.runtime
 
 import shop.whitedns.client.model.ResolverRuntimeState
 
-fun parseStormDnsResolverStateLine(line: String): ResolverRuntimeState? {
+fun parseCottenDnsResolverStateLine(line: String): ResolverRuntimeState? {
     val cleanLine = line
         .replace(AnsiEscapeRegex, "")
         .trim()
-    val match = StormDnsResolverStateRegex.find(cleanLine) ?: return null
+    val match = CottenDnsResolverStateRegex.find(cleanLine) ?: return null
     return ResolverRuntimeState(
         activeResolvers = parseResolverRuntimeList(match.groupValues[1]),
         standbyResolvers = parseResolverRuntimeList(match.groupValues[2]),
@@ -26,7 +26,7 @@ private fun parseResolverRuntimeList(raw: String): List<String> {
         .toList()
 }
 
-private val StormDnsResolverStateRegex = Regex(
+private val CottenDnsResolverStateRegex = Regex(
     """WD_RESOLVERS\s+active=([^\s]+)\s+standby=([^\s]+)\s+valid=([^\s]+)""",
 )
 

@@ -1,6 +1,6 @@
 name: CI Build
 
-# Builds the vendored CottenDns native client from third_party/StormDNS, runs
+# Builds the vendored CottenDns native client from third_party/CottenDns, runs
 # unit tests, and produces an installable debug APK on every push and pull
 # request so changes can be built and tested from CI without a local Android
 # toolchain.
@@ -18,7 +18,7 @@ permissions:
 env:
   ANDROID_API: "26"
   GRADLE_ANDROID_NDK_VERSION: "26.3.11579264"
-  STORMDNS_ANDROID_NDK_VERSION: "29.0.14206865"
+  CottenDns_ANDROID_NDK_VERSION: "29.0.14206865"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -36,10 +36,10 @@ jobs:
       - name: Verify vendored CottenDns engine
         run: |
           set -euo pipefail
-          test -f third_party/StormDNS/go.mod
-          test -f third_party/StormDNS/cmd/client/main.go
-          if git ls-files --stage third_party/StormDNS | awk '{print $1}' | grep -qx '160000'; then
-            echo "::error::third_party/StormDNS is still a submodule. Vendor the CottenDns engine source in this repository."
+          test -f third_party/CottenDns/go.mod
+          test -f third_party/CottenDns/cmd/client/main.go
+          if git ls-files --stage third_party/CottenDns | awk '{print $1}' | grep -qx '160000'; then
+            echo "::error::third_party/CottenDns is still a submodule. Vendor the CottenDns engine source in this repository."
             exit 1
           fi
 
@@ -62,20 +62,20 @@ jobs:
             "platforms;android-36" \
             "build-tools;36.0.0" \
             "ndk;${GRADLE_ANDROID_NDK_VERSION}" \
-            "ndk;${STORMDNS_ANDROID_NDK_VERSION}"
+            "ndk;${CottenDns_ANDROID_NDK_VERSION}"
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: third_party/StormDNS/go.mod
-          cache-dependency-path: third_party/StormDNS/go.sum
+          go-version-file: third_party/CottenDns/go.mod
+          cache-dependency-path: third_party/CottenDns/go.sum
 
       - name: Build vendored CottenDns native clients
         run: |
           set -euo pipefail
-          make stormdns \
+          make CottenDns \
             NDK_HOST=linux-x86_64 \
-            NDK_ROOT="${ANDROID_HOME}/ndk/${STORMDNS_ANDROID_NDK_VERSION}"
+            NDK_ROOT="${ANDROID_HOME}/ndk/${CottenDns_ANDROID_NDK_VERSION}"
 
       - name: Run unit tests
         run: ./gradlew --no-daemon testDebugUnitTest

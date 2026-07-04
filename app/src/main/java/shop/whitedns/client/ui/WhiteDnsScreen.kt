@@ -181,9 +181,9 @@ import shop.whitedns.client.model.deleteAdvancedProfile
 import shop.whitedns.client.model.deleteResolverProfile
 import shop.whitedns.client.model.duplicateConnectionProfileCount
 import shop.whitedns.client.model.exportAllResolverProfilesText
-import shop.whitedns.client.model.exportAllStormDnsProfileLinks
-import shop.whitedns.client.model.exportStormDnsProfileLink
-import shop.whitedns.client.model.importStormDnsProfileLinks
+import shop.whitedns.client.model.exportAllCottenDnsProfileLinks
+import shop.whitedns.client.model.exportCottenDnsProfileLink
+import shop.whitedns.client.model.importCottenDnsProfileLinks
 import shop.whitedns.client.model.importAdvancedSettingsProfileFromToml
 import shop.whitedns.client.model.matchesAdvancedProfile
 import shop.whitedns.client.model.moveConnectionProfileToIndex
@@ -208,7 +208,7 @@ import shop.whitedns.client.model.validateResolverText
 import shop.whitedns.client.model.WhiteDnsAutoTunePresets
 import shop.whitedns.client.model.WhiteDnsParallelTest
 import shop.whitedns.client.model.syncSelectedConnectionProfileFields
-import shop.whitedns.client.storm.StormDnsConfigRenderer
+import shop.whitedns.client.cottendns.CottenDnsConfigRenderer
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.DecodeHintType
@@ -903,7 +903,7 @@ private fun ConnectTabContent(
                 showQr = false,
                 linkResult = remember(settings, selectedConnectionProfile, showConnectionTomlDialog) {
                     runCatching {
-                        StormDnsConfigRenderer.renderClientToml(
+                        CottenDnsConfigRenderer.renderClientToml(
                             connectionProfile = selectedConnectionProfile,
                             settings = settings,
                         )
@@ -3546,7 +3546,7 @@ private fun ConnectionProfilesSettings(
     val qrScanner = rememberQrProfileImportLauncher(
         onDecoded = { decodedLink ->
             runCatching {
-                settings.importStormDnsProfileLinks(decodedLink)
+                settings.importCottenDnsProfileLinks(decodedLink)
             }.onSuccess { importedSettings ->
                 importNoticeIsError = false
                 importNotice = importSuccessLabel
@@ -3795,7 +3795,7 @@ private fun ConnectionProfilesSettings(
             onDismiss = { showImportDialog = false },
             onImport = { links ->
                 runCatching {
-                    settings.importStormDnsProfileLinks(links)
+                    settings.importCottenDnsProfileLinks(links)
                 }.onSuccess { importedSettings ->
                     onSettingsChange(importedSettings)
                     showImportDialog = false
@@ -3809,7 +3809,7 @@ private fun ConnectionProfilesSettings(
             title = WhiteDnsL10n.profileDialogExportConnection,
             fieldLabel = WhiteDnsL10n.profileFieldProfileLinkSingle,
             linkResult = remember(settings, profile) {
-                runCatching { settings.exportStormDnsProfileLink(profile) }
+                runCatching { settings.exportCottenDnsProfileLink(profile) }
             },
             onDismiss = { exportProfile = null },
             onShare = { link ->
@@ -3823,7 +3823,7 @@ private fun ConnectionProfilesSettings(
             title = WhiteDnsL10n.profileDialogExportAllConnections,
             fieldLabel = WhiteDnsL10n.profileFieldProfileLinksLabel,
             linkResult = remember(settings, showExportAllDialog) {
-                runCatching { settings.exportAllStormDnsProfileLinks() }
+                runCatching { settings.exportAllCottenDnsProfileLinks() }
             },
             onDismiss = { showExportAllDialog = false },
             onShare = { links ->
@@ -4337,7 +4337,7 @@ private fun SettingProfilesSettings(
             showQr = false,
             linkResult = remember(settings, profile) {
                 runCatching {
-                    StormDnsConfigRenderer.renderAdvancedSettingsToml(settings.applyAdvancedProfile(profile))
+                    CottenDnsConfigRenderer.renderAdvancedSettingsToml(settings.applyAdvancedProfile(profile))
                 }
             },
             onDismiss = { exportProfile = null },
@@ -4874,7 +4874,7 @@ private fun ConnectionProfileImportDialog(
                     profileLinks = it
                     importError = null
                 },
-                placeholder = "stormdns://...\ncottendns://...",
+                placeholder = "cottendns://...\ncottendns://...",
                 singleLine = false,
                 minLines = 5,
                 maxLines = 9,
@@ -4932,7 +4932,7 @@ private fun ConnectionProfileExportDialog(
     linkResult: Result<String>,
     onDismiss: () -> Unit,
     onShare: (String) -> Unit,
-    placeholder: String = "stormdns://...",
+    placeholder: String = "cottendns://...",
     showQr: Boolean = true,
 ) {
     val context = LocalContext.current
@@ -5326,7 +5326,7 @@ private fun ConnectionProfileDialog(
                 label = WhiteDnsL10n.profileFieldName,
                 value = name,
                 onValueChange = { name = it },
-                placeholder = WhiteDnsL10n.profileMyStormDnsPlaceholder,
+                placeholder = WhiteDnsL10n.profileMyCottenDnsPlaceholder,
             )
             WhiteDnsTextField(
                 label = WhiteDnsL10n.profileFieldDomain,
@@ -5356,7 +5356,7 @@ private fun ConnectionProfileDialog(
                 text = if (ConnectionProfile.normalizeServerType(serverType) == ConnectionProfile.ServerTypeCottenDns) {
                     "CottenDns: 2-byte session IDs, TCP/53 fallback, rotated TXT/CNAME/NULL/HTTPS delivery, adaptive + domain-diverse duplication, and rate limiting."
                 } else {
-                    "StormDNS / MasterDNS / WhiteDNS: legacy 1-byte session IDs over TXT/UDP for compatibility with existing servers."
+                    "CottenDns compatibility: legacy 1-byte session IDs over TXT/UDP for older compatible servers."
                 },
                 style = MaterialTheme.typography.bodySmall.copy(
                     fontSize = 10.sp,
@@ -9553,12 +9553,11 @@ private fun localizedEncryptionMethods(): List<Choice<Int>> = listOf(
     Choice(5, WhiteDnsL10n.encryptionMethodAes256),
 )
 
-// Server engine generations selectable per profile. CottenDns uses the 2-byte
-// session-ID wire format with TCP/53 and non-TXT delivery; StormDNS covers the
-// legacy MasterDNS/StormDNS/WhiteDNS 1-byte format for backward compatibility.
+// CottenDns is the only bundled engine. Compatibility mode asks CottenDns to use
+// its legacy wire format for older compatible servers.
 private fun localizedServerTypes(): List<Choice<String>> = listOf(
-    Choice(ConnectionProfile.ServerTypeStormDns, "StormDNS / MasterDNS"),
     Choice(ConnectionProfile.ServerTypeCottenDns, "CottenDns"),
+    Choice(ConnectionProfile.ServerTypeCompatibility, "CottenDns compatibility"),
 )
 
 @Composable

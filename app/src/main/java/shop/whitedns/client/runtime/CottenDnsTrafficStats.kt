@@ -3,18 +3,18 @@ package shop.whitedns.client.runtime
 import java.util.Locale
 import kotlin.math.roundToLong
 
-data class StormDnsTrafficStats(
+data class CottenDnsTrafficStats(
     val downloadBytes: Long,
     val uploadBytes: Long,
     val downloadSpeedBytesPerSecond: Long,
     val uploadSpeedBytesPerSecond: Long,
 )
 
-class StormDnsTrafficAccounting {
-    private var lastRawStats: StormDnsTrafficStats? = null
+class CottenDnsTrafficAccounting {
+    private var lastRawStats: CottenDnsTrafficStats? = null
     private var accumulatedDownloadBytes: Long = 0L
     private var accumulatedUploadBytes: Long = 0L
-    private var latestStats: StormDnsTrafficStats? = null
+    private var latestStats: CottenDnsTrafficStats? = null
 
     @Synchronized
     fun reset() {
@@ -25,7 +25,7 @@ class StormDnsTrafficAccounting {
     }
 
     @Synchronized
-    fun record(rawStats: StormDnsTrafficStats): StormDnsTrafficStats {
+    fun record(rawStats: CottenDnsTrafficStats): CottenDnsTrafficStats {
         val previous = lastRawStats
         accumulatedDownloadBytes += rawStats.downloadBytes.deltaSince(previous?.downloadBytes)
         accumulatedUploadBytes += rawStats.uploadBytes.deltaSince(previous?.uploadBytes)
@@ -37,7 +37,7 @@ class StormDnsTrafficAccounting {
     }
 
     @Synchronized
-    fun latest(): StormDnsTrafficStats? = latestStats
+    fun latest(): CottenDnsTrafficStats? = latestStats
 
     private fun Long.deltaSince(previous: Long?): Long {
         if (previous == null) {
@@ -51,11 +51,11 @@ class StormDnsTrafficAccounting {
     }
 }
 
-fun parseStormDnsTrafficStatsLine(line: String): StormDnsTrafficStats? {
+fun parseCottenDnsTrafficStatsLine(line: String): CottenDnsTrafficStats? {
     val cleanLine = line
         .replace(AnsiEscapeRegex, "")
         .trim()
-    val match = StormDnsTrafficStatsRegex.find(cleanLine) ?: return null
+    val match = CottenDnsTrafficStatsRegex.find(cleanLine) ?: return null
     val uploadSpeed = parseDataAmount(
         value = match.groupValues[1],
         unit = match.groupValues[2],
@@ -73,7 +73,7 @@ fun parseStormDnsTrafficStatsLine(line: String): StormDnsTrafficStats? {
         unit = match.groupValues[8],
     ) ?: return null
 
-    return StormDnsTrafficStats(
+    return CottenDnsTrafficStats(
         downloadBytes = downloadTotal,
         uploadBytes = uploadTotal,
         downloadSpeedBytesPerSecond = downloadSpeed,
@@ -93,7 +93,7 @@ fun formatTrafficSpeed(bytesPerSecond: Long): String {
     return String.format(Locale.US, pattern, value, units[unitIndex])
 }
 
-fun formatTrafficNotificationText(stats: StormDnsTrafficStats): String {
+fun formatTrafficNotificationText(stats: CottenDnsTrafficStats): String {
     return "Down ${formatTrafficSpeed(stats.downloadSpeedBytesPerSecond)} | Up ${formatTrafficSpeed(stats.uploadSpeedBytesPerSecond)}"
 }
 
@@ -114,6 +114,6 @@ private fun parseDataAmount(
 }
 
 private val AnsiEscapeRegex = Regex("\\u001B\\[[;\\d]*m")
-private val StormDnsTrafficStatsRegex = Regex(
+private val CottenDnsTrafficStatsRegex = Regex(
     """([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?B)/s\s*\(Total:\s*([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?B)\)\s*\|\s*[^0-9]*([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?B)/s\s*\(Total:\s*([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?B)\)""",
 )

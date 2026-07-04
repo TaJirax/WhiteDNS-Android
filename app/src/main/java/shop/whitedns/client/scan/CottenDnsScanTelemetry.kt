@@ -1,16 +1,16 @@
 package shop.whitedns.client.scan
 
-sealed class StormDnsScanTelemetry {
-    data class Valid(val resolver: String) : StormDnsScanTelemetry()
-    data class Rejected(val resolver: String) : StormDnsScanTelemetry()
+sealed class CottenDnsScanTelemetry {
+    data class Valid(val resolver: String) : CottenDnsScanTelemetry()
+    data class Rejected(val resolver: String) : CottenDnsScanTelemetry()
     data class Complete(
         val total: Int,
         val valid: Int,
         val rejected: Int,
-    ) : StormDnsScanTelemetry()
+    ) : CottenDnsScanTelemetry()
 }
 
-fun parseStormDnsScanLine(line: String): StormDnsScanTelemetry? {
+fun parseCottenDnsScanLine(line: String): CottenDnsScanTelemetry? {
     val cleanLine = line
         .replace(AnsiEscapeRegex, "")
         .trim()
@@ -24,11 +24,11 @@ fun parseStormDnsScanLine(line: String): StormDnsScanTelemetry? {
     return when (fields["event"]) {
         "valid" -> fields["resolver"]
             ?.takeIf(String::isNotBlank)
-            ?.let(StormDnsScanTelemetry::Valid)
+            ?.let(CottenDnsScanTelemetry::Valid)
         "rejected" -> fields["resolver"]
             ?.takeIf(String::isNotBlank)
-            ?.let(StormDnsScanTelemetry::Rejected)
-        "complete" -> StormDnsScanTelemetry.Complete(
+            ?.let(CottenDnsScanTelemetry::Rejected)
+        "complete" -> CottenDnsScanTelemetry.Complete(
             total = fields["total"].toIntOrZero(),
             valid = fields["valid"].toIntOrZero(),
             rejected = fields["rejected"].toIntOrZero(),

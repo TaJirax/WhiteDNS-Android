@@ -10,7 +10,7 @@ if ! git rev-parse --verify "${base_ref}" >/dev/null 2>&1; then
 fi
 
 changed_files="$(
-  git diff --name-only "${base_ref}...${head_ref}" -- 'third_party/StormDNS' || true
+  git diff --name-only "${base_ref}...${head_ref}" -- 'third_party/CottenDns' || true
 )"
 
 if [[ -z "${changed_files}" ]]; then
@@ -21,6 +21,6 @@ fi
 echo "Vendored CottenDns engine changes detected:" >&2
 echo "${changed_files}" >&2
 echo >&2
-echo "WhiteDNS builds third_party/StormDNS as its vendored CottenDns engine." >&2
+echo "WhiteDNS builds third_party/CottenDns as its vendored CottenDns engine." >&2
 echo "Add the 'allow-cottendns-engine' pull request label only when these changes are intentional engine maintenance." >&2
 exit 1

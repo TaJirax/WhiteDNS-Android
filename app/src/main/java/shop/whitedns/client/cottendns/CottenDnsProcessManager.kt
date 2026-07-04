@@ -1,4 +1,4 @@
-package shop.whitedns.client.storm
+package shop.whitedns.client.cottendns
 
 import android.content.Context
 import java.io.File
@@ -6,31 +6,31 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 import java.util.UUID
 import kotlin.concurrent.thread
-import shop.whitedns.client.model.StormDnsServerProfile
+import shop.whitedns.client.model.CottenDnsServerProfile
 import shop.whitedns.client.model.WhiteDnsSettings
 
-data class StormDnsLaunchSpec(
+data class CottenDnsLaunchSpec(
     val binaryFile: File,
     val workingDirectory: File,
     val configFile: File,
     val resolversFile: File,
 )
 
-class StormDnsProcessManager(
+class CottenDnsProcessManager(
     private val context: Context,
-    private val binaryInstaller: StormDnsBinaryInstaller = StormDnsBinaryInstaller(context),
+    private val binaryInstaller: CottenDnsBinaryInstaller = CottenDnsBinaryInstaller(context),
 ) {
 
     private val processLock = Any()
     private var process: Process? = null
-    private var currentLaunchSpec: StormDnsLaunchSpec? = null
+    private var currentLaunchSpec: CottenDnsLaunchSpec? = null
     private var outputDrainThread: Thread? = null
 
     fun prepareLaunch(
-        serverProfile: StormDnsServerProfile,
+        serverProfile: CottenDnsServerProfile,
         settings: WhiteDnsSettings,
-    ): StormDnsLaunchSpec {
-        val runtimeDir = File(context.noBackupFilesDir, "stormdns/runtime").apply {
+    ): CottenDnsLaunchSpec {
+        val runtimeDir = File(context.noBackupFilesDir, "CottenDns/runtime").apply {
             mkdirs()
         }
         cleanupStaleLaunchFiles(runtimeDir)
@@ -40,14 +40,14 @@ class StormDnsProcessManager(
         val resolversFile = File(runtimeDir, ".wd-$launchId.resolvers")
 
         configFile.writeText(
-            StormDnsConfigRenderer.renderClientToml(
+            CottenDnsConfigRenderer.renderClientToml(
                 serverProfile = serverProfile,
                 settings = settings,
             ),
         )
-        resolversFile.writeText(StormDnsConfigRenderer.renderResolvers(settings))
+        resolversFile.writeText(CottenDnsConfigRenderer.renderResolvers(settings))
 
-        return StormDnsLaunchSpec(
+        return CottenDnsLaunchSpec(
             binaryFile = binaryFile,
             workingDirectory = runtimeDir,
             configFile = configFile,
@@ -56,10 +56,10 @@ class StormDnsProcessManager(
     }
 
     fun start(
-        serverProfile: StormDnsServerProfile,
+        serverProfile: CottenDnsServerProfile,
         settings: WhiteDnsSettings,
         onOutput: (String) -> Unit = {},
-    ): StormDnsLaunchSpec {
+    ): CottenDnsLaunchSpec {
         stop()
         val launchSpec = prepareLaunch(serverProfile, settings)
         onOutput("Runtime prepared")
@@ -81,7 +81,7 @@ class StormDnsProcessManager(
                 outputDrainThread = drainThread
             }
             drainThread.start()
-            onOutput("StormDNS process started")
+            onOutput("CottenDns process started")
         } catch (error: IOException) {
             cleanupLaunchFiles(launchSpec)
             throw error
@@ -132,7 +132,7 @@ class StormDnsProcessManager(
         }
     }
 
-    private fun cleanupLaunchFiles(launchSpec: StormDnsLaunchSpec) {
+    private fun cleanupLaunchFiles(launchSpec: CottenDnsLaunchSpec) {
         runCatching { launchSpec.configFile.delete() }
         runCatching { launchSpec.resolversFile.delete() }
     }
@@ -173,7 +173,7 @@ class StormDnsProcessManager(
         onOutput: (String) -> Unit,
     ): Thread {
         return thread(
-            name = "stormdns-output",
+            name = "CottenDns-output",
             isDaemon = true,
             start = false,
         ) {

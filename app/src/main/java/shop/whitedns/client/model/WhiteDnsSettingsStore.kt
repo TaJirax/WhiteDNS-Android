@@ -338,7 +338,7 @@ class WhiteDnsSettingsStore(
                     customServerEncryptionKey = item.optString("customServerEncryptionKey"),
                     customServerEncryptionMethod = item.optInt("customServerEncryptionMethod", 1),
                     serverType = ConnectionProfile.normalizeServerType(
-                        item.optString("serverType", ConnectionProfile.ServerTypeStormDns),
+                        item.optString("serverType", ConnectionProfile.ServerTypeCottenDns),
                     ),
                     resolverProfileId = item.optString("resolverProfileId"),
                     connectionMode = item.optString("connectionMode", "proxy"),

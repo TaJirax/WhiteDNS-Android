@@ -4,10 +4,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-class StormDnsConnectionProgressTest {
+class CottenDnsConnectionProgressTest {
     @Test
-    fun parseStormDnsConnectionProgressLineParsesMtuProgress() {
-        val state = parseStormDnsConnectionProgressLine(
+    fun parseCottenDnsConnectionProgressLineParsesMtuProgress() {
+        val state = parseCottenDnsConnectionProgressLine(
             "2026 WD_PROGRESS phase=mtu percent=45 completed=27 total=54 valid=20 rejected=7",
         )
 
@@ -22,8 +22,8 @@ class StormDnsConnectionProgressTest {
     }
 
     @Test
-    fun parseStormDnsConnectionProgressLineInfersMtuPercentWhenMissing() {
-        val state = parseStormDnsConnectionProgressLine(
+    fun parseCottenDnsConnectionProgressLineInfersMtuPercentWhenMissing() {
+        val state = parseCottenDnsConnectionProgressLine(
             "WD_PROGRESS phase=mtu completed=27 total=54 valid=20 rejected=7",
         )
 
@@ -32,7 +32,7 @@ class StormDnsConnectionProgressTest {
     }
 
     @Test
-    fun parseStormDnsConnectionProgressLineIgnoresOtherLines() {
-        assertNull(parseStormDnsConnectionProgressLine("not progress"))
+    fun parseCottenDnsConnectionProgressLineIgnoresOtherLines() {
+        assertNull(parseCottenDnsConnectionProgressLine("not progress"))
     }
 }

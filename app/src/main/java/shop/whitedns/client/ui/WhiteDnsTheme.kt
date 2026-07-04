@@ -598,7 +598,7 @@ object WhiteDnsL10n {
     val profileFieldEncryptionMethod: String @Composable get() = LocalWhiteDnsStrings.current.profileFieldEncryptionMethod
     val profileDomainPlaceholder: String @Composable get() = LocalWhiteDnsStrings.current.profileDomainPlaceholder
     val profileEncryptionKeyPlaceholder: String @Composable get() = LocalWhiteDnsStrings.current.profileEncryptionKeyPlaceholder
-    val profileMyStormDnsPlaceholder: String @Composable get() = LocalWhiteDnsStrings.current.profileMyStormDnsPlaceholder
+    val profileMyCottenDnsPlaceholder: String @Composable get() = LocalWhiteDnsStrings.current.profileMyCottenDnsPlaceholder
     val profileDomainFallback: String @Composable get() = LocalWhiteDnsStrings.current.profileDomainFallback
     val profileStatusActive: String @Composable get() = LocalWhiteDnsStrings.current.profileStatusActive
     val profileStatusSelected: String @Composable get() = LocalWhiteDnsStrings.current.profileStatusSelected

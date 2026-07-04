@@ -1,14 +1,14 @@
-package shop.whitedns.client.storm
+package shop.whitedns.client.cottendns
 
 import shop.whitedns.client.model.ConnectionProfile
 import shop.whitedns.client.model.ResolvedWhiteDnsSettings
-import shop.whitedns.client.model.StormDnsServerProfile
+import shop.whitedns.client.model.CottenDnsServerProfile
 import shop.whitedns.client.model.WhiteDnsSettings
 import shop.whitedns.client.model.normalizedResolverProfiles
 import shop.whitedns.client.model.resolve
 import shop.whitedns.client.model.runtimeConnectionSettings
 
-object StormDnsConfigRenderer {
+object CottenDnsConfigRenderer {
 
     fun renderClientToml(
         connectionProfile: ConnectionProfile,
@@ -26,13 +26,13 @@ object StormDnsConfigRenderer {
             },
         ).runtimeConnectionSettings()
         return renderClientToml(
-            serverProfile = connectionProfile.toStormDnsServerProfile(),
+            serverProfile = connectionProfile.toCottenDnsServerProfile(),
             settings = exportSettings,
         )
     }
 
     fun renderClientToml(
-        serverProfile: StormDnsServerProfile,
+        serverProfile: CottenDnsServerProfile,
         settings: WhiteDnsSettings,
     ): String {
         val resolved = settings.resolve()
@@ -47,10 +47,8 @@ object StormDnsConfigRenderer {
         }.trimEnd()
     }
 
-    // Emits the wire-format and delivery/transport keys gated by the target
-    // server's engine generation. CottenDns servers use the 2-byte session-ID
-    // format and enable TCP/53 auto-fallback; StormDNS/MasterDNS/WhiteDNS servers
-    // use the legacy 1-byte format restricted to UDP for compatibility.
+    // Emits CottenDns mode keys. Compatibility mode keeps CottenDns's legacy
+    // wire format available without bundling a second engine.
     private fun StringBuilder.appendServerTypeToml(
         serverType: String,
     ) {
@@ -78,7 +76,7 @@ object StormDnsConfigRenderer {
     }
 
     fun renderScanClientToml(
-        serverProfile: StormDnsServerProfile,
+        serverProfile: CottenDnsServerProfile,
         settings: WhiteDnsSettings,
     ): String {
         val resolved = settings.copy(
@@ -237,15 +235,15 @@ object StormDnsConfigRenderer {
             .replace("\"", "\\\"")
     }
 
-    private fun ConnectionProfile.toStormDnsServerProfile(): StormDnsServerProfile {
+    private fun ConnectionProfile.toCottenDnsServerProfile(): CottenDnsServerProfile {
         val domain = customServerDomain.trim().trimEnd('.')
         val encryptionKey = customServerEncryptionKey.trim()
         if (domain.isBlank() || encryptionKey.isBlank()) {
             throw IllegalArgumentException("Custom server domain and encryption key are required to export TOML")
         }
-        return StormDnsServerProfile(
+        return CottenDnsServerProfile(
             id = id.ifBlank { "custom" },
-            label = name.ifBlank { "Custom StormDNS Server" },
+            label = name.ifBlank { "Custom CottenDns Server" },
             domain = domain,
             encryptionKey = encryptionKey,
             encryptionMethod = customServerEncryptionMethod.coerceIn(0, 5),
