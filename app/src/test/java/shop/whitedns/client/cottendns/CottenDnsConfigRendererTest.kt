@@ -122,6 +122,14 @@ class CottenDnsConfigRendererTest {
         assertTrue(toml.contains("LEGACY_SESSION_ID = false"))
         assertTrue(toml.contains("RESOLVER_TRANSPORT = \"auto\""))
         assertTrue(toml.contains("QUERY_TYPES = [\"TXT\", \"CNAME\", \"NULL\", \"HTTPS\"]"))
+        assertTrue(toml.contains("DNS_RANDOMIZE_QUERY_ID = true"))
+        assertTrue(toml.contains("DNS_EDNS_COOKIE = true"))
+        assertTrue(toml.contains("RESOLVER_IGNORE_INJECTED_NXDOMAIN = true"))
+        assertTrue(toml.contains("QNAME_LABEL_LENGTH = 63"))
+        assertTrue(toml.contains("MTU_PROBE_SAMPLES = 6"))
+        assertTrue(toml.contains("MTU_MAX_LOSS = 0.25"))
+        assertTrue(toml.contains("MTU_ADAPTIVE_GROUPING = true"))
+        assertTrue(toml.contains("MTU_GROUP_GAP_RATIO = 0.25"))
     }
 
     @Test
@@ -141,5 +149,59 @@ class CottenDnsConfigRendererTest {
         assertTrue(toml.contains("LEGACY_SESSION_ID = true"))
         assertTrue(toml.contains("RESOLVER_TRANSPORT = \"udp\""))
         assertFalse(toml.contains("QUERY_TYPES"))
+    }
+    @Test
+    fun renderClientTomlAppliesTcpSurvivalPresetToRuntimeKeys() {
+        val toml = CottenDnsConfigRenderer.renderClientToml(
+            serverProfile = shop.whitedns.client.model.CottenDnsServerProfile(
+                id = "server",
+                label = "Server",
+                domain = "tcp.example.com",
+                encryptionKey = "secret-key",
+                encryptionMethod = 1,
+                serverType = ConnectionProfile.ServerTypeCottenDns,
+            ),
+            settings = WhiteDnsSettings(configPreset = "tcp-survival"),
+        )
+
+        assertTrue(toml.contains("CONFIG_PRESET = \"tcp-survival\""))
+        assertTrue(toml.contains("RESOLVER_TRANSPORT = \"tcp\""))
+        assertTrue(toml.contains("QUERY_TYPES = [\"TXT\", \"HTTPS\"]"))
+        assertTrue(toml.contains("MTU_PROBE_SAMPLES = 4"))
+    }
+
+    @Test
+    fun renderClientTomlAppliesSurvivalPresetShapeWithoutChangingCompatibilityMode() {
+        val cottenDnsToml = CottenDnsConfigRenderer.renderClientToml(
+            serverProfile = shop.whitedns.client.model.CottenDnsServerProfile(
+                id = "server",
+                label = "Server",
+                domain = "survival.example.com",
+                encryptionKey = "secret-key",
+                encryptionMethod = 1,
+                serverType = ConnectionProfile.ServerTypeCottenDns,
+            ),
+            settings = WhiteDnsSettings(configPreset = "survival"),
+        )
+        val compatibilityToml = CottenDnsConfigRenderer.renderClientToml(
+            serverProfile = shop.whitedns.client.model.CottenDnsServerProfile(
+                id = "server",
+                label = "Server",
+                domain = "legacy.example.com",
+                encryptionKey = "secret-key",
+                encryptionMethod = 1,
+                serverType = ConnectionProfile.ServerTypeCompatibility,
+            ),
+            settings = WhiteDnsSettings(configPreset = "survival"),
+        )
+
+        assertTrue(cottenDnsToml.contains("CONFIG_PRESET = \"survival\""))
+        assertTrue(cottenDnsToml.contains("QNAME_LABEL_LENGTH = 42"))
+        assertTrue(cottenDnsToml.contains("EDNS_UDP_SIZE = 1232"))
+        assertTrue(cottenDnsToml.contains("MTU_MAX_LOSS = 0.2"))
+        assertTrue(cottenDnsToml.contains("QUERY_TYPES = [\"TXT\", \"CNAME\", \"HTTPS\", \"A\"]"))
+        assertTrue(compatibilityToml.contains("CONFIG_PRESET = \"default\""))
+        assertTrue(compatibilityToml.contains("RESOLVER_TRANSPORT = \"udp\""))
+        assertFalse(compatibilityToml.contains("QUERY_TYPES"))
     }
 }

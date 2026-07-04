@@ -174,6 +174,7 @@ import shop.whitedns.client.model.WhiteDnsSettings
 import shop.whitedns.client.model.WhiteDnsUiState
 import shop.whitedns.client.model.applyAdvancedProfile
 import shop.whitedns.client.model.applyAutoTunePreset
+import shop.whitedns.client.model.applyCottenDnsConfigPreset
 import shop.whitedns.client.model.applyResolverProfileToSelectedConnection
 import shop.whitedns.client.model.deleteConnectionProfile
 import shop.whitedns.client.model.deleteDuplicateConnectionProfiles
@@ -2803,6 +2804,13 @@ private fun AdvancedSettingsFields(
     showProxySettings: Boolean,
     onSettingsChange: (WhiteDnsSettings) -> Unit,
 ) {
+    GroupLabel("CottenDns")
+    CottenDnsFeaturePresetGroup(
+        settings = settings,
+        onSettingsChange = onSettingsChange,
+    )
+
+    SectionDivider()
     GroupLabel(WhiteDnsL10n.groupMtu)
     MtuSettingsGroup(
         settings = settings,
@@ -4874,7 +4882,7 @@ private fun ConnectionProfileImportDialog(
                     profileLinks = it
                     importError = null
                 },
-                placeholder = "cottendns://...\ncottendns://...",
+                placeholder = "CottenDns://...\nCottenDns://...",
                 singleLine = false,
                 minLines = 5,
                 maxLines = 9,
@@ -4932,7 +4940,7 @@ private fun ConnectionProfileExportDialog(
     linkResult: Result<String>,
     onDismiss: () -> Unit,
     onShare: (String) -> Unit,
-    placeholder: String = "cottendns://...",
+    placeholder: String = "CottenDns://...",
     showQr: Boolean = true,
 ) {
     val context = LocalContext.current
@@ -5959,6 +5967,97 @@ private fun CompactActionButton(
     }
 }
 
+@Composable
+private fun CottenDnsFeaturePresetGroup(
+    settings: WhiteDnsSettings,
+    onSettingsChange: (WhiteDnsSettings) -> Unit,
+) {
+    val presetSummary = cottenDnsPresetSummary(settings.configPreset)
+    WhiteDnsDropdownField(
+        label = "CottenDns Preset",
+        value = settings.configPreset,
+        options = WhiteDnsOptions.configPresets,
+        onValueChange = { preset -> onSettingsChange(settings.applyCottenDnsConfigPreset(preset)) },
+    )
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(WhiteDnsPalette.SurfaceAlt)
+            .border(1.5.dp, WhiteDnsPalette.Border, RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        CottenDnsFeatureLine("Transport", presetSummary.transport)
+        CottenDnsFeatureLine("Delivery", presetSummary.delivery)
+        CottenDnsFeatureLine("MTU", presetSummary.mtu)
+        CottenDnsFeatureLine("Hardening", "query-id randomization, EDNS cookie, injected NXDOMAIN ignore")
+    }
+}
+
+@Composable
+private fun CottenDnsFeatureLine(
+    label: String,
+    value: String,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.width(74.dp),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 10.sp,
+                color = WhiteDnsPalette.Muted,
+                fontWeight = FontWeight.Medium,
+            ),
+        )
+        Text(
+            text = value,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 10.sp,
+                lineHeight = 14.sp,
+                color = WhiteDnsPalette.Description,
+            ),
+        )
+    }
+}
+
+private data class CottenDnsPresetSummary(
+    val transport: String,
+    val delivery: String,
+    val mtu: String,
+)
+
+private fun cottenDnsPresetSummary(configPreset: String): CottenDnsPresetSummary {
+    return when (configPreset) {
+        "speed" -> CottenDnsPresetSummary(
+            transport = "UDP/53 with TCP/53 fallback",
+            delivery = "TXT + HTTPS rotation",
+            mtu = "MTU-weighted balancing, 4 probe samples, 25% max loss",
+        )
+        "survival" -> CottenDnsPresetSummary(
+            transport = "UDP/53 with TCP/53 fallback",
+            delivery = "TXT + CNAME + HTTPS + A rotation",
+            mtu = "least-loss balancing, smaller QNAME/EDNS shape, stricter 20% max loss",
+        )
+        "tcp-survival" -> CottenDnsPresetSummary(
+            transport = "forced DNS-over-TCP/53",
+            delivery = "TXT + HTTPS over persistent TCP/53",
+            mtu = "MTU-weighted balancing, lower resolver parallelism for TCP fallback",
+        )
+        else -> CottenDnsPresetSummary(
+            transport = "UDP/53 with TCP/53 fallback",
+            delivery = "TXT + CNAME + NULL + HTTPS rotation",
+            mtu = "MTU-weighted balancing, adaptive grouping, 6 probe samples",
+        )
+    }
+}
 @Composable
 private fun MtuSettingsGroup(
     settings: WhiteDnsSettings,
@@ -8648,7 +8747,8 @@ private fun ConnectionLogsBlock(
     expanded: Boolean = false,
 ) {
     val logs = uiState.connectionLogs
-    val visibleLogs = logs.take(if (expanded) ExpandedConnectionLogLimit else CollapsedConnectionLogLimit)
+    val logLimit = if (expanded) ExpandedConnectionLogLimit else CollapsedConnectionLogLimit
+    val visibleLogs = remember(logs, logLimit) { logs.take(logLimit) }
     val context = LocalContext.current
     val logsClipboardLabel = WhiteDnsL10n.whiteDnsLogsLabel
     val diagnosticsClipboardLabel = WhiteDnsL10n.whiteDnsDiagnosticsLabel
@@ -8730,8 +8830,8 @@ private fun ConnectionLogsBlock(
     }
 }
 
-private const val CollapsedConnectionLogLimit = 10
-private const val ExpandedConnectionLogLimit = 40
+private const val CollapsedConnectionLogLimit = 8
+private const val ExpandedConnectionLogLimit = 24
 
 @Composable
 private fun LogActionButton(
@@ -9526,6 +9626,7 @@ private fun localizedBalancingStrategies(): List<Choice<Int>> = listOf(
     Choice(2, WhiteDnsL10n.balancingStrategyRoundRobin),
     Choice(3, WhiteDnsL10n.balancingStrategyLeastLoss),
     Choice(4, WhiteDnsL10n.balancingStrategyLowestLatency),
+    Choice(5, "MTU Weighted"),
 )
 
 @Composable

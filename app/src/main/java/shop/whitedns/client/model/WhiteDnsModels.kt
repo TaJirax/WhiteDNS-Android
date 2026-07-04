@@ -96,6 +96,7 @@ data class ResolverProfile(
 data class AdvancedSettingsProfile(
     val id: String,
     val name: String,
+    val configPreset: String,
     val listenIp: String,
     val listenPort: String,
     val httpProxyEnabled: Boolean,
@@ -170,6 +171,7 @@ data class AdvancedSettingsProfile(
             return AdvancedSettingsProfile(
                 id = id,
                 name = name,
+                configPreset = settings.configPreset,
                 listenIp = settings.listenIp,
                 listenPort = settings.listenPort,
                 httpProxyEnabled = settings.httpProxyEnabled,
@@ -250,6 +252,7 @@ data class WhiteDnsSettings(
     val customServerEncryptionKey: String = "",
     val customServerEncryptionMethod: Int = 1,
     val serverType: String = ConnectionProfile.ServerTypeCottenDns,
+    val configPreset: String = "default",
     val connectionMode: String = "proxy",
     val protocolType: String = "SOCKS5",
     val themeMode: String = WhiteDnsThemeMode.System,
@@ -262,7 +265,7 @@ data class WhiteDnsSettings(
     val socks5Authentication: Boolean = false,
     val socksUsername: String = "master_dns_vpn",
     val socksPassword: String = "master_dns_vpn",
-    val balancingStrategy: Int = 3,
+    val balancingStrategy: Int = 5,
     val uploadDuplication: String = "3",
     val downloadDuplication: String = "7",
     val uploadCompression: Int = 2,
@@ -316,6 +319,7 @@ data class WhiteDnsSettings(
 ) : Serializable
 
 data class ResolvedWhiteDnsSettings(
+    val configPreset: String,
     val connectionMode: String,
     val protocolType: String,
     val resolverEntries: List<String>,
@@ -610,11 +614,19 @@ object WhiteDnsOptions {
         Choice(5, "AES-256-GCM"),
     )
 
+    val configPresets = listOf(
+        Choice("default", "Default"),
+        Choice("speed", "Speed"),
+        Choice("survival", "Survival"),
+        Choice("tcp-survival", "TCP Survival"),
+    )
+
     val balancingStrategies = listOf(
         Choice(1, "Random"),
         Choice(2, "Round Robin"),
         Choice(3, "Least Loss"),
         Choice(4, "Lowest Latency"),
+        Choice(5, "MTU Weighted"),
     )
 
     val compressionTypes = listOf(
@@ -782,6 +794,72 @@ fun WhiteDnsSettings.syncSelectedConnectionProfileFields(): WhiteDnsSettings {
     )
 }
 
+fun WhiteDnsSettings.applyCottenDnsConfigPreset(preset: String): WhiteDnsSettings {
+    val normalizedPreset = when (preset.trim().lowercase()) {
+        "speed" -> "speed"
+        "survival" -> "survival"
+        "tcp", "tcp-survival", "tcp_survival" -> "tcp-survival"
+        else -> "default"
+    }
+    val defaults = WhiteDnsSettings()
+    return when (normalizedPreset) {
+        "speed" -> copy(
+            configPreset = "speed",
+            balancingStrategy = 5,
+            uploadDuplication = "1",
+            downloadDuplication = "3",
+            uploadCompression = 2,
+            downloadCompression = 2,
+            mtuTestRetriesResolvers = "2",
+            mtuTestTimeoutResolvers = "1.5",
+            mtuTestParallelismResolvers = "100",
+            mtuTestRetriesLogs = "3",
+            mtuTestTimeoutLogs = "1.5",
+        )
+        "survival" -> copy(
+            configPreset = "survival",
+            balancingStrategy = 3,
+            uploadDuplication = "2",
+            downloadDuplication = "6",
+            uploadCompression = 2,
+            downloadCompression = 2,
+            minUploadMtu = "80",
+            maxUploadMtu = "180",
+            minDownloadMtu = "700",
+            maxDownloadMtu = "2500",
+            mtuTestTimeoutResolvers = "2.5",
+            mtuTestParallelismResolvers = "64",
+        )
+        "tcp-survival" -> copy(
+            configPreset = "tcp-survival",
+            balancingStrategy = 5,
+            uploadDuplication = "1",
+            downloadDuplication = "2",
+            uploadCompression = 2,
+            downloadCompression = 2,
+            mtuTestTimeoutResolvers = "3.0",
+            mtuTestParallelismResolvers = "32",
+        )
+        else -> copy(
+            configPreset = "default",
+            balancingStrategy = defaults.balancingStrategy,
+            uploadDuplication = defaults.uploadDuplication,
+            downloadDuplication = defaults.downloadDuplication,
+            uploadCompression = defaults.uploadCompression,
+            downloadCompression = defaults.downloadCompression,
+            minUploadMtu = defaults.minUploadMtu,
+            minDownloadMtu = defaults.minDownloadMtu,
+            maxUploadMtu = defaults.maxUploadMtu,
+            maxDownloadMtu = defaults.maxDownloadMtu,
+            mtuTestRetriesResolvers = defaults.mtuTestRetriesResolvers,
+            mtuTestTimeoutResolvers = defaults.mtuTestTimeoutResolvers,
+            mtuTestParallelismResolvers = defaults.mtuTestParallelismResolvers,
+            mtuTestRetriesLogs = defaults.mtuTestRetriesLogs,
+            mtuTestTimeoutLogs = defaults.mtuTestTimeoutLogs,
+        )
+    }.syncSelectedConnectionProfileFields()
+}
+
 fun WhiteDnsSettings.runtimeConnectionSettings(): WhiteDnsSettings {
     val settings = syncSelectedConnectionProfileFields()
     return if (settings.connectionMode == "vpn") {
@@ -807,6 +885,7 @@ fun WhiteDnsSettings.runtimeConnectionSettings(): WhiteDnsSettings {
 fun WhiteDnsSettings.applyAdvancedProfile(profile: AdvancedSettingsProfile): WhiteDnsSettings {
     return copy(
         selectedAdvancedProfileId = profile.id,
+        configPreset = profile.configPreset,
         listenIp = profile.listenIp,
         listenPort = profile.listenPort,
         httpProxyEnabled = profile.httpProxyEnabled,
@@ -1288,6 +1367,7 @@ fun WhiteDnsSettings.resetAdvancedSettings(): WhiteDnsSettings {
     val defaults = WhiteDnsSettings()
     return copy(
         selectedAdvancedProfileId = AdvancedSettingsProfile.DefaultId,
+        configPreset = defaults.configPreset,
         listenIp = defaults.listenIp,
         listenPort = defaults.listenPort,
         httpProxyEnabled = defaults.httpProxyEnabled,
@@ -1612,6 +1692,10 @@ fun WhiteDnsSettings.resolve(): ResolvedWhiteDnsSettings {
         .coerceAtLeast(resolvedMinDownloadMtu)
 
     return ResolvedWhiteDnsSettings(
+        configPreset = when (configPreset) {
+            "default", "speed", "survival", "tcp-survival" -> configPreset
+            else -> "default"
+        },
         connectionMode = when (connectionMode) {
             "proxy", "vpn" -> connectionMode
             else -> "proxy"
@@ -1625,7 +1709,7 @@ fun WhiteDnsSettings.resolve(): ResolvedWhiteDnsSettings {
         socks5Authentication = socks5Authentication,
         socksUsername = socksUsername.take(255),
         socksPassword = socksPassword.take(255),
-        balancingStrategy = listOf(1, 2, 3, 4).firstOrNull { it == balancingStrategy } ?: 3,
+        balancingStrategy = listOf(1, 2, 3, 4, 5).firstOrNull { it == balancingStrategy } ?: 5,
         uploadDuplication = boundedInt(uploadDuplication, defaultValue = 3, minValue = 1, maxValue = 30),
         downloadDuplication = boundedInt(downloadDuplication, defaultValue = 7, minValue = 1, maxValue = 30),
         uploadCompression = uploadCompression.coerceIn(0, 3),

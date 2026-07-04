@@ -817,7 +817,7 @@ class WhiteDnsModelsTest {
               }
             }
         """.trimIndent()
-        val link = "cottendns://${Base64.getUrlEncoder().withoutPadding().encodeToString(payload.toByteArray())}"
+        val link = "CottenDns://${Base64.getUrlEncoder().withoutPadding().encodeToString(payload.toByteArray())}"
 
         val importedSettings = WhiteDnsSettings().importCottenDnsProfileLink(link, nowMillis = 55L)
         val importedProfile = importedSettings.selectedConnectionProfile()
@@ -853,7 +853,6 @@ class WhiteDnsModelsTest {
             WhiteDnsSettings().importCottenDnsProfileLink(link)
         }
         assertTrue(error.message.orEmpty().contains("CottenDns://"))
-        assertTrue(error.message.orEmpty().contains("cottendns://"))
     }
 
     @Test
@@ -914,7 +913,7 @@ class WhiteDnsModelsTest {
         assertEquals(emptyList<String>(), importedSettings.resolve().resolverEntries)
         assertEquals("10886", importedSettings.listenPort)
         assertEquals(true, importedSettings.httpProxyEnabled)
-        assertEquals(3, importedSettings.balancingStrategy)
+        assertEquals(5, importedSettings.balancingStrategy)
         assertEquals("3", importedSettings.uploadDuplication)
         assertEquals("7", importedSettings.downloadDuplication)
         assertEquals("4", importedSettings.rxTxWorkers)

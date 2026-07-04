@@ -86,6 +86,7 @@ class WhiteDnsSettingsStore(
             ) ?: defaults.selectedAdvancedProfileId,
             advancedProfiles = advancedProfiles,
             serverMode = legacyServerMode,
+            configPreset = preferences.getString(KeyConfigPreset, defaults.configPreset) ?: defaults.configPreset,
             customServerDomain = legacyCustomServerDomain,
             customServerEncryptionKey = legacyCustomServerEncryptionKey,
             customServerEncryptionMethod = legacyCustomServerEncryptionMethod,
@@ -238,6 +239,7 @@ class WhiteDnsSettingsStore(
             .putString(KeySelectedAdvancedProfileId, normalizedSettings.selectedAdvancedProfileId)
             .putString(KeyAdvancedProfiles, encodeAdvancedProfiles(normalizedSettings.advancedProfiles))
             .putString(KeyServerMode, normalizedSettings.serverMode)
+            .putString(KeyConfigPreset, normalizedSettings.configPreset)
             .putString(KeyCustomServerDomain, normalizedSettings.customServerDomain)
             .putString(KeyCustomServerEncryptionKey, normalizedSettings.customServerEncryptionKey)
             .putInt(KeyCustomServerEncryptionMethod, normalizedSettings.customServerEncryptionMethod)
@@ -436,6 +438,7 @@ class WhiteDnsSettingsStore(
                 AdvancedSettingsProfile(
                     id = item.optString("id"),
                     name = item.optString("name", "Advanced Settings"),
+                    configPreset = item.optString("configPreset", defaultProfile.configPreset),
                     listenIp = item.optString("listenIp", defaultProfile.listenIp),
                     listenPort = item.optString("listenPort", defaultProfile.listenPort),
                     httpProxyEnabled = item.optBoolean("httpProxyEnabled", defaultProfile.httpProxyEnabled),
@@ -584,6 +587,7 @@ class WhiteDnsSettingsStore(
                     JSONObject()
                         .put("id", profile.id)
                         .put("name", profile.name)
+                        .put("configPreset", profile.configPreset)
                         .put("listenIp", profile.listenIp)
                         .put("listenPort", profile.listenPort)
                         .put("httpProxyEnabled", profile.httpProxyEnabled)
@@ -721,6 +725,7 @@ class WhiteDnsSettingsStore(
         const val KeySelectedAdvancedProfileId = "selected_advanced_profile_id"
         const val KeyAdvancedProfiles = "advanced_profiles"
         const val KeyServerMode = "server_mode"
+        const val KeyConfigPreset = "config_preset"
         const val KeyCustomServerDomain = "custom_server_domain"
         const val KeyCustomServerEncryptionKey = "custom_server_encryption_key"
         const val KeyCustomServerEncryptionMethod = "custom_server_encryption_method"

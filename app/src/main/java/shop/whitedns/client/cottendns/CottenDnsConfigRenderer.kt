@@ -42,7 +42,7 @@ object CottenDnsConfigRenderer {
             appendLine("DATA_ENCRYPTION_METHOD = ${serverProfile.encryptionMethod}")
             appendLine("ENCRYPTION_KEY = \"${escape(serverProfile.encryptionKey)}\"")
             appendLine("PROTOCOL_TYPE = \"${escape(resolved.protocolType)}\"")
-            appendServerTypeToml(serverProfile.serverType)
+            appendServerTypeToml(serverProfile.serverType, resolved.configPreset)
             appendClientSettingsToml(resolved)
         }.trimEnd()
     }
@@ -51,11 +51,14 @@ object CottenDnsConfigRenderer {
     // wire format available without bundling a second engine.
     private fun StringBuilder.appendServerTypeToml(
         serverType: String,
+        configPreset: String,
     ) {
         val isCottenDns =
             ConnectionProfile.normalizeServerType(serverType) == ConnectionProfile.ServerTypeCottenDns
+        val normalizedPreset = if (isCottenDns) normalizeConfigPreset(configPreset) else "default"
+        appendLine("CONFIG_PRESET = \"${escape(normalizedPreset)}\"")
         appendLine("LEGACY_SESSION_ID = ${!isCottenDns}")
-        appendLine("RESOLVER_TRANSPORT = \"${if (isCottenDns) "auto" else "udp"}\"")
+        appendLine("RESOLVER_TRANSPORT = \"${resolverTransport(isCottenDns, normalizedPreset)}\"")
         if (isCottenDns) {
             // CottenDns reliability suite: adaptive duplication scales duplicate
             // sends to measured delivery, and domain-diverse duplication spreads
@@ -64,6 +67,17 @@ object CottenDnsConfigRenderer {
             appendLine("ADAPTIVE_DUPLICATION = true")
             appendLine("DUPLICATION_PREFER_DISTINCT_DOMAINS = true")
             appendLine("RESOLVER_RATE_LIMIT_ENABLED = true")
+            appendLine("ADAPTIVE_DUPLICATION_TARGET_DELIVERY = ${adaptiveDuplicationTarget(normalizedPreset)}")
+            appendLine("DNS_RANDOMIZE_QUERY_ID = true")
+            appendLine("DNS_EDNS_COOKIE = true")
+            appendLine("DNS_QNAME_CASE_RANDOMIZATION = false")
+            appendLine("EDNS_UDP_SIZE = ${ednsUdpSize(normalizedPreset)}")
+            appendLine("RESOLVER_IGNORE_INJECTED_NXDOMAIN = true")
+            appendLine("QNAME_LABEL_LENGTH = ${qnameLabelLength(normalizedPreset)}")
+            appendLine("MTU_PROBE_SAMPLES = ${mtuProbeSamples(normalizedPreset)}")
+            appendLine("MTU_MAX_LOSS = ${mtuMaxLoss(normalizedPreset)}")
+            appendLine("MTU_ADAPTIVE_GROUPING = true")
+            appendLine("MTU_GROUP_GAP_RATIO = 0.25")
         }
         if (isCottenDns) {
             // CottenDns servers auto-accept every query type and answer with the
@@ -71,8 +85,58 @@ object CottenDnsConfigRenderer {
             // fingerprint. Resolver scans must use the same set as live runtime:
             // MTU probing inherits QUERY_TYPES, so scan results reflect the real
             // delivery path instead of validating TXT-only resolvers.
-            appendLine("QUERY_TYPES = [\"TXT\", \"CNAME\", \"NULL\", \"HTTPS\"]")
+            appendLine("QUERY_TYPES = ${queryTypesToml(normalizedPreset)}")
         }
+    }
+
+
+    private fun normalizeConfigPreset(configPreset: String): String {
+        return when (configPreset.trim().lowercase()) {
+            "speed" -> "speed"
+            "survival" -> "survival"
+            "tcp", "tcp-survival", "tcp_survival" -> "tcp-survival"
+            else -> "default"
+        }
+    }
+
+    private fun resolverTransport(isCottenDns: Boolean, configPreset: String): String {
+        if (!isCottenDns) {
+            return "udp"
+        }
+        return if (configPreset == "tcp-survival") "tcp" else "auto"
+    }
+
+    private fun adaptiveDuplicationTarget(configPreset: String): String {
+        return if (configPreset == "survival") "0.97" else "0.95"
+    }
+
+    private fun ednsUdpSize(configPreset: String): Int {
+        return if (configPreset == "survival") 1232 else 4096
+    }
+
+    private fun qnameLabelLength(configPreset: String): Int {
+        return if (configPreset == "survival") 42 else 63
+    }
+
+    private fun mtuProbeSamples(configPreset: String): Int {
+        return when (configPreset) {
+            "speed", "tcp-survival" -> 4
+            "survival" -> 5
+            else -> 6
+        }
+    }
+
+    private fun mtuMaxLoss(configPreset: String): String {
+        return if (configPreset == "survival") "0.2" else "0.25"
+    }
+
+    private fun queryTypesToml(configPreset: String): String {
+        val queryTypes = when (configPreset) {
+            "speed", "tcp-survival" -> listOf("TXT", "HTTPS")
+            "survival" -> listOf("TXT", "CNAME", "HTTPS", "A")
+            else -> listOf("TXT", "CNAME", "NULL", "HTTPS")
+        }
+        return queryTypes.joinToString(prefix = "[", postfix = "]") { "\"$it\"" }
     }
 
     fun renderScanClientToml(
@@ -88,7 +152,7 @@ object CottenDnsConfigRenderer {
             appendLine("DATA_ENCRYPTION_METHOD = ${serverProfile.encryptionMethod}")
             appendLine("ENCRYPTION_KEY = \"${escape(serverProfile.encryptionKey)}\"")
             appendLine("PROTOCOL_TYPE = \"${escape(resolved.protocolType)}\"")
-            appendServerTypeToml(serverProfile.serverType)
+            appendServerTypeToml(serverProfile.serverType, resolved.configPreset)
             appendClientSettingsToml(
                 resolved = resolved,
                 listenIp = "127.0.0.1",
@@ -175,6 +239,7 @@ object CottenDnsConfigRenderer {
     }
 
     private fun StringBuilder.appendAdvancedSettingsToml(resolved: ResolvedWhiteDnsSettings) {
+        appendLine("CONFIG_PRESET = \"${escape(resolved.configPreset)}\"")
         appendLine("LISTEN_IP = \"${escape(resolved.listenIp)}\"")
         appendLine("LISTEN_PORT = ${resolved.listenPort}")
         appendLine("HTTP_PROXY_ENABLED = ${resolved.httpProxyEnabled}")

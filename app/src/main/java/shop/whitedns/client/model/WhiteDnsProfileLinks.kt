@@ -3,8 +3,8 @@ package shop.whitedns.client.model
 import java.util.Base64
 import org.json.JSONObject
 
-private const val CottenDnsProfileScheme = "cottendns"
-private val SupportedProfileSchemes = listOf(CottenDnsProfileScheme)
+private const val CottenDnsProfileScheme = "CottenDns"
+private val SupportedProfileSchemes = listOf(CottenDnsProfileScheme, "cottendns")
 private const val CottenDnsProfileSchema = "whitedns.profile"
 private const val CottenDnsProfileVersion = 1
 
@@ -68,7 +68,7 @@ fun WhiteDnsSettings.importCottenDnsProfileLinks(
         }
         .toList()
     if (links.isEmpty()) {
-        throw IllegalArgumentException("Enter at least one cottendns:// profile link")
+        throw IllegalArgumentException("Enter at least one CottenDns:// profile link")
     }
 
     var nextSettings = this
@@ -153,7 +153,7 @@ private fun encodeProfilePayload(root: JSONObject): String {
 private fun decodeProfilePayload(rawLink: String): JSONObject {
     val link = rawLink.trim()
     val scheme = SupportedProfileSchemes.firstOrNull { link.startsWith("$it://") }
-        ?: throw IllegalArgumentException("Profile link must start with cottendns://")
+        ?: throw IllegalArgumentException("Profile link must start with CottenDns://")
     val payload = link.removePrefix("$scheme://").trim()
     if (payload.isBlank()) {
         throw IllegalArgumentException("Profile link is empty")
