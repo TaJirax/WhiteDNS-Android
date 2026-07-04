@@ -8,7 +8,14 @@ data class CottenDnsTrafficStats(
     val uploadBytes: Long,
     val downloadSpeedBytesPerSecond: Long,
     val uploadSpeedBytesPerSecond: Long,
-)
+) {
+    fun hasTraffic(): Boolean {
+        return downloadBytes > 0L ||
+            uploadBytes > 0L ||
+            downloadSpeedBytesPerSecond > 0L ||
+            uploadSpeedBytesPerSecond > 0L
+    }
+}
 
 class CottenDnsTrafficAccounting {
     private var lastRawStats: CottenDnsTrafficStats? = null

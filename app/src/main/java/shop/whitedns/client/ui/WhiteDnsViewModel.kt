@@ -2594,7 +2594,7 @@ class WhiteDnsViewModel(
             countActiveProxyClients(listenPort),
             countTrackedSocksStreams(),
         )
-        CottenDnsTrafficAccounting.latest()?.let { stats ->
+        CottenDnsTrafficAccounting.latest()?.takeIf { it.hasTraffic() }?.let { stats ->
             val peakSpeed = maxOf(
                 uiState.connectionStats.peakSpeedBytesPerSecond,
                 stats.downloadSpeedBytesPerSecond + stats.uploadSpeedBytesPerSecond,
