@@ -125,10 +125,20 @@ object CottenDnsConfigRenderer {
             appendLine("DNS_QNAME_CASE_RANDOMIZATION = false")
             appendLine("EDNS_UDP_SIZE = ${ednsUdpSize(preset)}")
             appendLine("RESOLVER_IGNORE_INJECTED_NXDOMAIN = true")
+            // CottenDns MTU style: adaptive per-group MTU runs each resolver group
+            // at its own throughput-optimal operating point.
             appendLine("MTU_PROBE_SAMPLES = ${mtuProbeSamples(preset)}")
             appendLine("MTU_MAX_LOSS = ${mtuMaxLoss(preset)}")
             appendLine("MTU_ADAPTIVE_GROUPING = true")
             appendLine("MTU_GROUP_GAP_RATIO = 0.25")
+        } else {
+            // Master/Storm DNS MTU style: the classic single global MTU scan the
+            // original engine used (one synced MTU across resolvers), not CottenDns's
+            // adaptive per-group MTU, with a simple one-sample probe. Emitting these
+            // explicitly keeps the two scans from conflicting when a profile switches.
+            appendLine("MTU_ADAPTIVE_GROUPING = false")
+            appendLine("MTU_PROBE_SAMPLES = 1")
+            appendLine("MTU_MAX_LOSS = 0.0")
         }
     }
 
@@ -171,19 +181,26 @@ object CottenDnsConfigRenderer {
         return if (configPreset == "survival") 42 else 63
     }
 
+    // CottenDns loss-aware MTU probing (samples > 1): each candidate MTU is probed
+    // several times and accepted on measured loss, which feeds the adaptive
+    // per-group operating point. This is CottenDns's own MTU scan; the legacy
+    // Master/Storm path uses the classic single-probe scan (samples = 1) instead.
     private fun mtuProbeSamples(configPreset: String): Int {
-        // A single fast probe accepts any resolver that responds once, matching
-        // the proven desktop client. Multi-sample loss-aware probing is stricter
-        // and rejects usable-but-lossy resolvers on filtered networks; reserve it
-        // for the survival profile where reliability is prioritized over yield.
         return when (configPreset) {
-            "survival" -> 3
-            else -> 1
+            "survival" -> 5
+            "speed", "tcp-survival" -> 2
+            else -> 3
         }
     }
 
     private fun mtuMaxLoss(configPreset: String): String {
-        return if (configPreset == "survival") "0.25" else "0.0"
+        // Tolerant thresholds: a resolver passes if it succeeds on at least one of
+        // the samples, so lossy-but-usable resolvers are kept (at a lower operating
+        // MTU) rather than rejected on filtered networks. Survival is stricter.
+        return when (configPreset) {
+            "survival" -> "0.5"
+            else -> "0.75"
+        }
     }
 
     private fun queryTypeSet(configPreset: String): List<String> {
