@@ -5364,7 +5364,7 @@ private fun ConnectionProfileDialog(
                 text = if (ConnectionProfile.normalizeServerType(serverType) == ConnectionProfile.ServerTypeCottenDns) {
                     "CottenDns: 2-byte session IDs, TCP/53 fallback, rotated TXT/CNAME/NULL/HTTPS delivery, adaptive + domain-diverse duplication, and rate limiting."
                 } else {
-                    "Storm / Master DNS: legacy 1-byte session IDs over TXT/UDP for older MasterDNS/StormDNS servers. QNAME reshaping and DNS hardening still apply."
+                    "Storm / Master DNS: legacy 1-byte session IDs over TXT/UDP for older MasterDNS/StormDNS servers. QNAME reshaping is off for safety; DNS hardening still applies."
                 },
                 style = MaterialTheme.typography.bodySmall.copy(
                     fontSize = 10.sp,
@@ -5978,6 +5978,22 @@ private fun CottenDnsFeaturePresetGroup(
         value = settings.configPreset,
         options = WhiteDnsOptions.configPresets,
         onValueChange = { preset -> onSettingsChange(settings.applyCottenDnsConfigPreset(preset)) },
+    )
+    WhiteDnsDropdownField(
+        label = "Transport method",
+        value = settings.transportMode,
+        options = WhiteDnsOptions.transportModes,
+        onValueChange = { mode -> onSettingsChange(settings.copy(transportMode = mode)) },
+    )
+    WhiteDnsDropdownField(
+        label = "Delivery method",
+        value = settings.deliveryMode,
+        options = WhiteDnsOptions.deliveryModes,
+        onValueChange = { mode -> onSettingsChange(settings.copy(deliveryMode = mode)) },
+    )
+    Text(
+        text = "Transport and delivery override the preset. In Storm / Master DNS mode they are always forced to TXT over UDP for compatibility.",
+        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp, color = WhiteDnsPalette.Muted),
     )
     Column(
         modifier = Modifier

@@ -87,6 +87,8 @@ class WhiteDnsSettingsStore(
             advancedProfiles = advancedProfiles,
             serverMode = legacyServerMode,
             configPreset = preferences.getString(KeyConfigPreset, defaults.configPreset) ?: defaults.configPreset,
+            transportMode = preferences.getString(KeyTransportMode, defaults.transportMode) ?: defaults.transportMode,
+            deliveryMode = preferences.getString(KeyDeliveryMode, defaults.deliveryMode) ?: defaults.deliveryMode,
             customServerDomain = legacyCustomServerDomain,
             customServerEncryptionKey = legacyCustomServerEncryptionKey,
             customServerEncryptionMethod = legacyCustomServerEncryptionMethod,
@@ -240,6 +242,8 @@ class WhiteDnsSettingsStore(
             .putString(KeyAdvancedProfiles, encodeAdvancedProfiles(normalizedSettings.advancedProfiles))
             .putString(KeyServerMode, normalizedSettings.serverMode)
             .putString(KeyConfigPreset, normalizedSettings.configPreset)
+            .putString(KeyTransportMode, normalizedSettings.transportMode)
+            .putString(KeyDeliveryMode, normalizedSettings.deliveryMode)
             .putString(KeyCustomServerDomain, normalizedSettings.customServerDomain)
             .putString(KeyCustomServerEncryptionKey, normalizedSettings.customServerEncryptionKey)
             .putInt(KeyCustomServerEncryptionMethod, normalizedSettings.customServerEncryptionMethod)
@@ -726,6 +730,8 @@ class WhiteDnsSettingsStore(
         const val KeyAdvancedProfiles = "advanced_profiles"
         const val KeyServerMode = "server_mode"
         const val KeyConfigPreset = "config_preset"
+        const val KeyTransportMode = "transport_mode"
+        const val KeyDeliveryMode = "delivery_mode"
         const val KeyCustomServerDomain = "custom_server_domain"
         const val KeyCustomServerEncryptionKey = "custom_server_encryption_key"
         const val KeyCustomServerEncryptionMethod = "custom_server_encryption_method"

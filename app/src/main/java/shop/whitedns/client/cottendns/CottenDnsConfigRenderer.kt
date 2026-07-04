@@ -42,7 +42,7 @@ object CottenDnsConfigRenderer {
             appendLine("DATA_ENCRYPTION_METHOD = ${serverProfile.encryptionMethod}")
             appendLine("ENCRYPTION_KEY = \"${escape(serverProfile.encryptionKey)}\"")
             appendLine("PROTOCOL_TYPE = \"${escape(resolved.protocolType)}\"")
-            appendServerTypeToml(serverProfile.serverType, resolved.configPreset)
+            appendServerTypeToml(serverProfile.serverType, resolved.configPreset, resolved.transportMode, resolved.deliveryMode)
             appendClientSettingsToml(resolved)
         }.trimEnd()
     }
@@ -58,6 +58,8 @@ object CottenDnsConfigRenderer {
     private fun StringBuilder.appendServerTypeToml(
         serverType: String,
         configPreset: String,
+        transportMode: String,
+        deliveryMode: String,
     ) {
         val isCompatibility =
             ConnectionProfile.normalizeServerType(serverType) == ConnectionProfile.ServerTypeCompatibility
@@ -70,17 +72,30 @@ object CottenDnsConfigRenderer {
         appendLine("LEGACY_SESSION_ID = $isCompatibility")
 
         // Server-generation-sensitive knobs. Compatibility forces the safe subset
-        // regardless of preset so a MasterDNS/StormDNS server always works.
-        val transport = if (isCompatibility) "udp" else resolverTransport(preset)
-        val queryTypes = if (isCompatibility) listOf("TXT") else queryTypeSet(preset)
+        // so a MasterDNS/StormDNS server always works. Otherwise an explicit user
+        // override wins over the preset-derived value; "preset" defers to the preset.
+        val transport = when {
+            isCompatibility -> "udp"
+            transportMode != "preset" -> transportMode
+            else -> resolverTransport(preset)
+        }
+        val queryTypes = when {
+            isCompatibility -> listOf("TXT")
+            deliveryMode != "preset" -> deliveryTypesFor(deliveryMode)
+            else -> queryTypeSet(preset)
+        }
         appendLine("RESOLVER_TRANSPORT = \"$transport\"")
         appendLine("QUERY_TYPES = ${queryTypesToml(queryTypes)}")
 
-        // Server-transparent features: identical behavior against either server
-        // generation, so emit for both. QNAME reshaping is reassembled by the
-        // server regardless of label lengths, and DNS query-id/EDNS/NXDOMAIN
-        // hardening applies to the resolver hop, not the tunnel server.
-        appendLine("QNAME_LABEL_LENGTH = ${qnameLabelLength(preset)}")
+        // DNS query-id/EDNS/NXDOMAIN hardening applies to the resolver hop, not
+        // the tunnel server, so it is safe for both generations.
+        //
+        // QNAME reshaping (shorter labels) is reassembled correctly by CottenDns
+        // and by the StormDNS engine (both strip the domain and remove all label
+        // dots regardless of length). But older MasterDNS variants are not
+        // verified here, so Compatibility mode forces the classic 63-char labels
+        // to guarantee legacy connectivity; CottenDns keeps preset-driven reshaping.
+        appendLine("QNAME_LABEL_LENGTH = ${if (isCompatibility) 63 else qnameLabelLength(preset)}")
         appendLine("ADAPTIVE_DUPLICATION = true")
         appendLine("DUPLICATION_PREFER_DISTINCT_DOMAINS = true")
         appendLine("RESOLVER_RATE_LIMIT_ENABLED = true")
@@ -160,6 +175,17 @@ object CottenDnsConfigRenderer {
         return types.joinToString(prefix = "[", postfix = "]") { "\"$it\"" }
     }
 
+    // Maps a user delivery-method override to the concrete query-type set.
+    private fun deliveryTypesFor(mode: String): List<String> {
+        return when (mode) {
+            "txt" -> listOf("TXT")
+            "txt-cname" -> listOf("TXT", "CNAME")
+            "txt-https" -> listOf("TXT", "HTTPS")
+            "all" -> listOf("TXT", "CNAME", "NULL", "HTTPS")
+            else -> listOf("TXT")
+        }
+    }
+
     fun renderScanClientToml(
         serverProfile: CottenDnsServerProfile,
         settings: WhiteDnsSettings,
@@ -173,7 +199,7 @@ object CottenDnsConfigRenderer {
             appendLine("DATA_ENCRYPTION_METHOD = ${serverProfile.encryptionMethod}")
             appendLine("ENCRYPTION_KEY = \"${escape(serverProfile.encryptionKey)}\"")
             appendLine("PROTOCOL_TYPE = \"${escape(resolved.protocolType)}\"")
-            appendServerTypeToml(serverProfile.serverType, resolved.configPreset)
+            appendServerTypeToml(serverProfile.serverType, resolved.configPreset, resolved.transportMode, resolved.deliveryMode)
             appendClientSettingsToml(
                 resolved = resolved,
                 listenIp = "127.0.0.1",

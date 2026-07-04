@@ -253,6 +253,11 @@ data class WhiteDnsSettings(
     val customServerEncryptionMethod: Int = 1,
     val serverType: String = ConnectionProfile.ServerTypeCottenDns,
     val configPreset: String = "default",
+    // CottenDns delivery/transport overrides. "preset" derives the value from the
+    // active preset; any other value overrides it. Compatibility mode still forces
+    // the safe TXT/UDP subset regardless of these.
+    val transportMode: String = "preset",
+    val deliveryMode: String = "preset",
     val connectionMode: String = "proxy",
     val protocolType: String = "SOCKS5",
     val themeMode: String = WhiteDnsThemeMode.System,
@@ -320,6 +325,8 @@ data class WhiteDnsSettings(
 
 data class ResolvedWhiteDnsSettings(
     val configPreset: String,
+    val transportMode: String,
+    val deliveryMode: String,
     val connectionMode: String,
     val protocolType: String,
     val resolverEntries: List<String>,
@@ -620,6 +627,24 @@ object WhiteDnsOptions {
         Choice("survival", "Survival"),
         Choice("tcp-survival", "TCP Survival"),
         Choice("master-storm", "Master / Storm DNS (compatible)"),
+    )
+
+    // CottenDns delivery/transport override options. "preset" defers to the
+    // active preset; the rest are explicit user choices (ignored in Storm/Master
+    // compatibility mode, which is always forced to TXT/UDP).
+    val transportModes = listOf(
+        Choice("preset", "From preset"),
+        Choice("auto", "Auto (UDP + TCP/53 fallback)"),
+        Choice("udp", "UDP/53 only"),
+        Choice("tcp", "TCP/53 only"),
+    )
+
+    val deliveryModes = listOf(
+        Choice("preset", "From preset"),
+        Choice("txt", "TXT only"),
+        Choice("txt-cname", "TXT + CNAME"),
+        Choice("txt-https", "TXT + HTTPS"),
+        Choice("all", "All (TXT / CNAME / NULL / HTTPS)"),
     )
 
     val balancingStrategies = listOf(
@@ -1711,6 +1736,14 @@ fun WhiteDnsSettings.resolve(): ResolvedWhiteDnsSettings {
         configPreset = when (configPreset) {
             "default", "speed", "survival", "tcp-survival", "master-storm" -> configPreset
             else -> "default"
+        },
+        transportMode = when (transportMode.trim().lowercase()) {
+            "auto", "udp", "tcp" -> transportMode.trim().lowercase()
+            else -> "preset"
+        },
+        deliveryMode = when (deliveryMode.trim().lowercase()) {
+            "txt", "txt-cname", "txt-https", "all" -> deliveryMode.trim().lowercase()
+            else -> "preset"
         },
         connectionMode = when (connectionMode) {
             "proxy", "vpn" -> connectionMode

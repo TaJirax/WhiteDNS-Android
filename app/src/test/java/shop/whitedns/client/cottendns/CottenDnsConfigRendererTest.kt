@@ -202,12 +202,13 @@ class CottenDnsConfigRendererTest {
         assertTrue(cottenDnsToml.contains("EDNS_UDP_SIZE = 1232"))
         assertTrue(cottenDnsToml.contains("MTU_MAX_LOSS = 0.2"))
         assertTrue(cottenDnsToml.contains("QUERY_TYPES = [\"TXT\", \"CNAME\", \"HTTPS\", \"A\"]"))
-        // The server-transparent preset shape (QNAME reshaping, EDNS, MTU) now
-        // applies to the compatibility path too — proving QNAME reshaping works
-        // for legacy MasterDNS/StormDNS servers — while the generation-sensitive
-        // delivery/transport are forced to the safe TXT/UDP subset.
+        // The server-transparent preset shape (EDNS, MTU) applies to the
+        // compatibility path too, while the generation-sensitive delivery and
+        // transport are forced to the safe TXT/UDP subset. QNAME reshaping is
+        // forced off (classic 63-char labels) in compatibility mode to guarantee
+        // connectivity with unverified legacy MasterDNS variants.
         assertTrue(compatibilityToml.contains("CONFIG_PRESET = \"survival\""))
-        assertTrue(compatibilityToml.contains("QNAME_LABEL_LENGTH = 42"))
+        assertTrue(compatibilityToml.contains("QNAME_LABEL_LENGTH = 63"))
         assertTrue(compatibilityToml.contains("RESOLVER_TRANSPORT = \"udp\""))
         assertTrue(compatibilityToml.contains("QUERY_TYPES = [\"TXT\"]"))
     }
