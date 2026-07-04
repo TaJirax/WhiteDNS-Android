@@ -67,18 +67,30 @@ func (c *Client) resolverRuntimeSnapshot() (active []string, standby []string, v
 	if c == nil {
 		return nil, nil, nil
 	}
+	// A resolver appears once per tunnel domain (multi-domain profiles create one
+	// connection per resolver-domain pair). Count each resolver once: it is valid
+	// or active if it qualifies on any domain, so callers see unique resolvers
+	// rather than resolver-domain pairs.
 	active = make([]string, 0, len(c.connections))
 	valid = make([]string, 0, len(c.connections))
+	seenActive := make(map[string]struct{}, len(c.connections))
+	seenValid := make(map[string]struct{}, len(c.connections))
 
 	for _, conn := range c.connections {
 		if conn.Key == "" || conn.ResolverLabel == "" {
 			continue
 		}
 		if conn.UploadMTUBytes > 0 && conn.DownloadMTUBytes > 0 {
-			valid = append(valid, conn.ResolverLabel)
+			if _, ok := seenValid[conn.ResolverLabel]; !ok {
+				seenValid[conn.ResolverLabel] = struct{}{}
+				valid = append(valid, conn.ResolverLabel)
+			}
 		}
 		if conn.IsValid {
-			active = append(active, conn.ResolverLabel)
+			if _, ok := seenActive[conn.ResolverLabel]; !ok {
+				seenActive[conn.ResolverLabel] = struct{}{}
+				active = append(active, conn.ResolverLabel)
+			}
 		}
 	}
 
