@@ -5340,8 +5340,13 @@ private fun ConnectionProfileDialog(
             WhiteDnsTextField(
                 label = WhiteDnsL10n.profileFieldDomain,
                 value = domain,
-                onValueChange = { domain = it.trim() },
+                onValueChange = { domain = it },
                 placeholder = WhiteDnsL10n.profileDomainPlaceholder,
+            )
+            Text(
+                text = "For multiple tunnel domains, separate them with commas (e.g. a.example.com, b.example.com).",
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp, color = WhiteDnsPalette.Muted),
+                modifier = Modifier.padding(top = 2.dp, bottom = 2.dp),
             )
             WhiteDnsTextField(
                 label = WhiteDnsL10n.profileFieldEncryptionKey,

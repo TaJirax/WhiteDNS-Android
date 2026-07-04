@@ -38,7 +38,7 @@ object CottenDnsConfigRenderer {
         val resolved = settings.resolve()
 
         return buildString {
-            appendLine("""DOMAINS = ["${escape(serverProfile.domain)}"]""")
+            appendLine("DOMAINS = ${domainsToml(serverProfile.domain)}")
             appendLine("DATA_ENCRYPTION_METHOD = ${serverProfile.encryptionMethod}")
             appendLine("ENCRYPTION_KEY = \"${escape(serverProfile.encryptionKey)}\"")
             appendLine("PROTOCOL_TYPE = \"${escape(resolved.protocolType)}\"")
@@ -203,7 +203,7 @@ object CottenDnsConfigRenderer {
             trafficWarmupEnabled = false,
         ).resolve()
         return buildString {
-            appendLine("""DOMAINS = ["${escape(serverProfile.domain)}"]""")
+            appendLine("DOMAINS = ${domainsToml(serverProfile.domain)}")
             appendLine("DATA_ENCRYPTION_METHOD = ${serverProfile.encryptionMethod}")
             appendLine("ENCRYPTION_KEY = \"${escape(serverProfile.encryptionKey)}\"")
             appendLine("PROTOCOL_TYPE = \"${escape(resolved.protocolType)}\"")
@@ -347,6 +347,16 @@ object CottenDnsConfigRenderer {
         appendLine("TRAFFIC_KEEPALIVE_INTERVAL_SECONDS = ${resolved.trafficKeepaliveIntervalSeconds}")
         appendLine("AUTO_TUNE_ENABLED = ${resolved.autoTuneEnabled}")
         appendLine("LOG_LEVEL = \"${escape(resolved.logLevel)}\"")
+    }
+
+    // CottenDns supports multiple tunnel domains. The profile stores them as a
+    // comma-separated string; render each as its own DOMAINS array entry.
+    private fun domainsToml(domain: String): String {
+        val domains = domain.split(',')
+            .map { it.trim().trimEnd('.') }
+            .filter { it.isNotEmpty() }
+            .ifEmpty { listOf(domain.trim().trimEnd('.')) }
+        return domains.joinToString(prefix = "[", postfix = "]", separator = ", ") { "\"${escape(it)}\"" }
     }
 
     private fun escape(value: String): String {
