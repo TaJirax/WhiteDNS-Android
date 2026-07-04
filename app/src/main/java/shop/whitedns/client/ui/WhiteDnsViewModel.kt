@@ -79,6 +79,7 @@ import shop.whitedns.client.runtime.WhiteDnsRuntimeStateStore
 import shop.whitedns.client.runtime.WhiteDnsTrafficWarmup
 import shop.whitedns.client.runtime.RuntimeLaunchRequestStore
 import shop.whitedns.client.runtime.formatTrafficSpeed
+import shop.whitedns.client.runtime.parseCottenDnsActiveResolverCountLine
 import shop.whitedns.client.runtime.parseCottenDnsConnectionProgressLine
 import shop.whitedns.client.runtime.parseCottenDnsResolverStateLine
 import shop.whitedns.client.runtime.parseCottenDnsTrafficStatsLine
@@ -2034,22 +2035,29 @@ class WhiteDnsViewModel(
         val trafficStats = parseCottenDnsTrafficStatsLine(message)
         val progressState = parseCottenDnsConnectionProgressLine(message)
         val resolverState = parseCottenDnsResolverStateLine(message)
+        val activeResolverCount = parseCottenDnsActiveResolverCountLine(message)
         if (trafficStats != null) {
             CottenDnsTrafficAccounting.record(trafficStats)
         }
         trackSocksStreamLogLine(message)
-        val isTelemetry = trafficStats != null ||
-            progressState != null ||
+        val isStructuredTelemetry = trafficStats != null ||
             resolverState != null ||
             message.contains("WD_PROGRESS") ||
             message.contains("WD_RESOLVERS")
-        if (progressState == null && resolverState == null && isTelemetry) {
+        if (progressState == null && resolverState == null && activeResolverCount == null && isStructuredTelemetry) {
             return
+        }
+        if (progressState == null && resolverState == null && isStructuredTelemetry) {
+            if (activeResolverCount == null) {
+                return
+            }
         }
         viewModelScope.launch(Dispatchers.Main.immediate) {
             progressState?.let(::updateConnectionProgressOnMain)
             resolverState?.let(::updateResolverStateOnMain)
-            if (!isTelemetry) {
+            activeResolverCount?.let(::updateActiveResolverCountOnMain)
+            progressState?.takeIf { it.valid > 0 }?.let(::updateMtuProgressResolverCountsOnMain)
+            if (!isStructuredTelemetry || activeResolverCount != null) {
                 appendLogOnMain(message)
             }
         }
@@ -2782,6 +2790,45 @@ class WhiteDnsViewModel(
         }
         val mergedValidResolvers = (currentValidResolvers + validResolvers).distinct()
         return copy(validResolvers = mergedValidResolvers)
+    }
+
+    private fun updateActiveResolverCountOnMain(activeResolverCount: Int) {
+        if (activeResolverCount <= 0) {
+            return
+        }
+        val currentState = uiState.resolverRuntimeState
+        if (currentState.activeResolvers.size >= activeResolverCount) {
+            return
+        }
+        uiState = uiState.copy(
+            resolverRuntimeState = currentState.copy(
+                activeResolvers = numberedRuntimeResolvers("active", activeResolverCount),
+            ),
+        )
+    }
+
+    private fun updateMtuProgressResolverCountsOnMain(progressState: ConnectionProgressState) {
+        val currentState = uiState.resolverRuntimeState
+        val activeCount = maxOf(currentState.activeResolvers.size, progressState.valid)
+        val validCount = maxOf(currentState.validResolvers.size, progressState.valid)
+        uiState = uiState.copy(
+            resolverRuntimeState = currentState.copy(
+                activeResolvers = if (activeCount > currentState.activeResolvers.size) {
+                    numberedRuntimeResolvers("active", activeCount)
+                } else {
+                    currentState.activeResolvers
+                },
+                validResolvers = if (validCount > currentState.validResolvers.size) {
+                    numberedRuntimeResolvers("valid", validCount)
+                } else {
+                    currentState.validResolvers
+                },
+            ),
+        )
+    }
+
+    private fun numberedRuntimeResolvers(prefix: String, count: Int): List<String> {
+        return (1..count.coerceAtLeast(0)).map { index -> "$prefix resolver $index" }
     }
 
     private fun countActiveProxyClients(listenPort: Int): Int {

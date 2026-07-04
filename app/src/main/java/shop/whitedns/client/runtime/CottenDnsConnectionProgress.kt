@@ -9,7 +9,7 @@ fun parseCottenDnsConnectionProgressLine(line: String): ConnectionProgressState?
         .trim()
     val markerIndex = cleanLine.indexOf(ProgressMarker)
     if (markerIndex < 0) {
-        return null
+        return parseHumanMtuProgressLine(cleanLine)
     }
 
     val fields = ProgressFieldRegex.findAll(cleanLine.substring(markerIndex + ProgressMarker.length))
@@ -36,6 +36,16 @@ fun parseCottenDnsConnectionProgressLine(line: String): ConnectionProgressState?
     )
 }
 
+fun parseCottenDnsActiveResolverCountLine(line: String): Int? {
+    val cleanLine = line
+        .replace(AnsiEscapeRegex, "")
+        .trim()
+    return ActiveResolverCountRegex.find(cleanLine)
+        ?.groupValues
+        ?.getOrNull(1)
+        ?.toIntOrNull()
+}
+
 private fun inferProgressPercent(
     phase: String,
     completed: Int,
@@ -56,8 +66,34 @@ private fun String?.toIntOrZero(): Int {
     return this?.toIntOrNull() ?: 0
 }
 
+private fun parseHumanMtuProgressLine(cleanLine: String): ConnectionProgressState? {
+    val match = HumanMtuProgressRegex.find(cleanLine) ?: return null
+    val completed = match.groupValues[1].toIntOrZero()
+    val total = match.groupValues[2].toIntOrZero()
+    val valid = match.groupValues[3].toIntOrZero()
+    val rejected = match.groupValues[4].toIntOrZero()
+    return ConnectionProgressState(
+        phase = "mtu",
+        percent = inferProgressPercent("mtu", completed, total).coerceIn(0, 100),
+        completed = completed,
+        total = total,
+        valid = valid,
+        rejected = rejected,
+    )
+}
+
 private const val ProgressMarker = "WD_PROGRESS"
 
 private val ProgressFieldRegex = Regex("""(\w+)=([^\s]+)""")
+
+private val HumanMtuProgressRegex = Regex(
+    """Rejected\s*\((\d+)/(\d+)\).*totals:\s*valid=(\d+),\s*rejected=(\d+)""",
+    RegexOption.IGNORE_CASE,
+)
+
+private val ActiveResolverCountRegex = Regex(
+    """Active\s+Resolvers:\s*(\d+)""",
+    RegexOption.IGNORE_CASE,
+)
 
 private val AnsiEscapeRegex = Regex("\\u001B\\[[;\\d]*m")

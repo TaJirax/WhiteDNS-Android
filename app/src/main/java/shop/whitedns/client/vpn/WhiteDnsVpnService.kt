@@ -19,6 +19,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -241,7 +242,9 @@ class WhiteDnsVpnService : VpnService() {
         resolvedSettings: ResolvedWhiteDnsSettings,
     ) {
         val startupFailure = AtomicReference<String?>(null)
+        val lastStartupActivityMillis = AtomicLong(System.currentTimeMillis())
         CottenDnsProcessManager.start(serverProfile, settings) { line ->
+            lastStartupActivityMillis.set(System.currentTimeMillis())
             logInfo(line)
             detectCottenDnsStartupFailure(line)?.let { failure ->
                 startupFailure.compareAndSet(null, failure)
@@ -250,6 +253,7 @@ class WhiteDnsVpnService : VpnService() {
         waitForProxyPort(
             listenPort = resolvedSettings.listenPort,
             startupFailure = { startupFailure.get() },
+            lastActivityMillis = { lastStartupActivityMillis.get() },
         )
         logInfo("SOCKS proxy is ready")
         startVpnRouting(sessionId, settings, resolvedSettings)
@@ -259,12 +263,13 @@ class WhiteDnsVpnService : VpnService() {
     private suspend fun waitForProxyPort(
         listenPort: Int,
         startupFailure: () -> String?,
+        lastActivityMillis: () -> Long,
     ) {
-        val deadline = System.currentTimeMillis() + ProxyStartupTimeoutMillis
         while (true) {
             startupFailure()?.let { failure ->
                 throw IllegalStateException("CottenDns startup failed: $failure")
             }
+            val now = System.currentTimeMillis()
             if (!CottenDnsProcessManager.isRunning()) {
                 val exitCode = CottenDnsProcessManager.exitCodeOrNull()
                 throw IllegalStateException(
@@ -274,8 +279,10 @@ class WhiteDnsVpnService : VpnService() {
             if (canConnectToLocalPort(listenPort)) {
                 return
             }
-            if (System.currentTimeMillis() >= deadline) {
-                throw IllegalStateException("Timed out waiting for CottenDns SOCKS listener on port $listenPort")
+            if (now - lastActivityMillis() >= ProxyStartupIdleTimeoutMillis) {
+                throw IllegalStateException(
+                    "Timed out waiting for CottenDns SOCKS listener on port $listenPort after startup logs stopped",
+                )
             }
             delay(500)
         }
@@ -646,7 +653,7 @@ class WhiteDnsVpnService : VpnService() {
         private const val TunDnsServer = "172.19.0.2"
         private const val VpnMtu = 1500
         private const val Tun2proxyStopGracePeriodMillis = 5_000L
-        private const val ProxyStartupTimeoutMillis = 60_000L
+        private const val ProxyStartupIdleTimeoutMillis = 120_000L
         private const val PreviousRuntimeStopTimeoutMillis = 3_000L
         private const val PreviousRuntimeStopPollMillis = 100L
         private const val TrafficNotificationUpdateIntervalMillis = 1_000L
