@@ -94,7 +94,7 @@ class CottenDnsConfigRendererTest {
     }
 
     @Test
-    fun renderScanClientTomlDisablesLocalListenersAndUsesSingleProbeWorker() {
+    fun renderScanClientTomlDisablesLocalListenersAndUsesConfiguredProbeParallelism() {
         val toml = CottenDnsConfigRenderer.renderScanClientToml(
             serverProfile = shop.whitedns.client.model.CottenDnsServerProfile(
                 id = "server",
@@ -117,7 +117,7 @@ class CottenDnsConfigRendererTest {
         assertTrue(toml.contains("LISTEN_PORT = 0"))
         assertTrue(toml.contains("LOCAL_DNS_ENABLED = false"))
         assertTrue(toml.contains("LOCAL_DNS_PORT = 0"))
-        assertTrue(toml.contains("MTU_TEST_PARALLELISM_RESOLVERS = 1"))
+        assertTrue(toml.contains("MTU_TEST_PARALLELISM_RESOLVERS = 50"))
         assertTrue(toml.contains("STARTUP_MODE = \"resolvers\""))
         assertTrue(toml.contains("LEGACY_SESSION_ID = false"))
         assertTrue(toml.contains("RESOLVER_TRANSPORT = \"auto\""))

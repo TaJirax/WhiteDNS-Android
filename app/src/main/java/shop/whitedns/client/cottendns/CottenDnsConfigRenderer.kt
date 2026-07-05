@@ -248,7 +248,11 @@ object CottenDnsConfigRenderer {
                 listenPort = 0,
                 localDnsEnabled = false,
                 localDnsPort = 0,
-                mtuTestParallelismResolvers = 1,
+                // Scan probes resolvers in parallel using the user's configured
+                // resolver parallelism, so "how many resolvers are tested at the
+                // same time" is controllable. Each scan worker process still gets
+                // its own shard; the engine caps the worker pool to the shard size.
+                mtuTestParallelismResolvers = resolved.mtuTestParallelismResolvers,
             )
         }.trimEnd()
     }
