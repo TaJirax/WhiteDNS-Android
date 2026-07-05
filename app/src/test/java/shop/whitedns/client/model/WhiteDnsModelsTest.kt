@@ -694,7 +694,7 @@ class WhiteDnsModelsTest {
         assertEquals(140, resolvedSettings.maxUploadMtu)
         assertEquals(300, resolvedSettings.minDownloadMtu)
         assertEquals(3000, resolvedSettings.maxDownloadMtu)
-        assertEquals(2.5, resolvedSettings.mtuTestTimeoutResolvers, 0.0)
+        assertEquals(2.0, resolvedSettings.mtuTestTimeoutResolvers, 0.0)
         assertEquals(256, resolvedSettings.dnsResponseFragmentStoreCapacity)
         assertEquals(3, resolvedSettings.uploadDuplication)
         assertEquals(7, resolvedSettings.downloadDuplication)
