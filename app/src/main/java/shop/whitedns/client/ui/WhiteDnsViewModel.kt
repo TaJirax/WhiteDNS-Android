@@ -95,6 +95,21 @@ import shop.whitedns.client.vpn.WhiteDnsVpnService
 import shop.whitedns.client.vpn.WhiteDnsVpnEvent
 import shop.whitedns.client.vpn.WhiteDnsVpnEvents
 
+internal fun shouldUseParallelTestForConnection(
+    autoTuneEnabled: Boolean,
+    fastConnectEnabled: Boolean,
+    connectionMode: String,
+): Boolean {
+    return autoTuneEnabled &&
+        !fastConnectEnabled &&
+        connectionMode in ParallelTestConnectionModes
+}
+
+private val ParallelTestConnectionModes = setOf(
+    WhiteDnsRuntimeStateStore.ModeProxy,
+    WhiteDnsRuntimeStateStore.ModeVpn,
+)
+
 class WhiteDnsViewModel(
     application: Application,
 ) : AndroidViewModel(application) {
@@ -390,8 +405,11 @@ class WhiteDnsViewModel(
             activeServerProfile = serverProfile
             val runtimeSettings = settings.runtimeConnectionSettings()
             val resolvedRuntimeSettings = runtimeSettings.resolve()
-            val useParallelTest = settings.autoTuneEnabled &&
-                resolvedRuntimeSettings.connectionMode in ParallelTestConnectionModes
+            val useParallelTest = shouldUseParallelTestForConnection(
+                autoTuneEnabled = settings.autoTuneEnabled,
+                fastConnectEnabled = resolvedRuntimeSettings.fastConnectEnabled,
+                connectionMode = resolvedRuntimeSettings.connectionMode,
+            )
             uiState = uiState.copy(
                 settings = settings,
                 activeConnectionProfileId = connectionProfile.id,
@@ -3022,10 +3040,6 @@ class WhiteDnsViewModel(
         const val DefaultScanResolverAssetName = "default_resolvers.txt"
         const val UidTrafficSourcePrefix = "uid:"
         const val VpnTrafficSourcePrefix = "vpn:"
-        val ParallelTestConnectionModes = setOf(
-            WhiteDnsRuntimeStateStore.ModeProxy,
-            WhiteDnsRuntimeStateStore.ModeVpn,
-        )
         val socksStreamOpenedRegex = Regex("""New SOCKS\d TCP CONNECT .*Stream ID:\s*(\d+)""")
         val socksStreamClosedRegex = Regex("""ARQ Stream Closed .*Stream:\s*(\d+)""")
         val SafeNetworkInterfaceNameRegex = Regex("""[A-Za-z0-9_.:-]+""")

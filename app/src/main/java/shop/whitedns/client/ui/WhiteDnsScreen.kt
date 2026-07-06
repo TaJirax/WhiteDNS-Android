@@ -472,20 +472,21 @@ private fun ConnectTabContent(
     val showNotificationBanner = resolvedSettings.connectionMode == "vpn" && !uiState.notificationsEnabled
     val showBatteryBanner = !uiState.batteryOptimizationIgnored &&
         !settings.batteryOptimizationWarningDismissed
+    val parallelTestEnabled = settings.autoTuneEnabled && !settings.fastConnectEnabled
     val shouldCollapseParallelTestSelection =
-        settings.autoTuneEnabled &&
+        parallelTestEnabled &&
             resolvedSettings.connectionMode == "vpn" &&
             uiState.connectionStatus == ConnectionStatus.CONNECTED &&
             uiState.autoTuneTrialResults.any { it.selected }
 
     LaunchedEffect(
         shouldCollapseParallelTestSelection,
-        settings.autoTuneEnabled,
+        parallelTestEnabled,
         uiState.connectionStatus,
     ) {
         when {
             shouldCollapseParallelTestSelection -> parallelTestSelectionExpanded = false
-            !settings.autoTuneEnabled || uiState.connectionStatus == ConnectionStatus.DISCONNECTED ->
+            !parallelTestEnabled || uiState.connectionStatus == ConnectionStatus.DISCONNECTED ->
                 parallelTestSelectionExpanded = true
         }
     }
@@ -633,9 +634,10 @@ private fun ConnectTabContent(
                     val parallelTestControlsEnabled = uiState.connectionStatus == ConnectionStatus.DISCONNECTED
                     ToggleRow(
                         label = WhiteDnsL10n.parallelTest,
-                        enabled = settings.autoTuneEnabled,
+                        enabled = parallelTestEnabled,
                         interactiveEnabled = parallelTestControlsEnabled,
                         onToggle = {
+                            val nextParallelTestEnabled = !parallelTestEnabled
                             val selectedIds = WhiteDnsParallelTest.normalizeConfigIds(
                                 configIds = settings.parallelTestSelectedConfigIds,
                                 advancedProfiles = advancedProfiles,
@@ -643,7 +645,12 @@ private fun ConnectTabContent(
                             )
                             onSettingsChange(
                                 settings.copy(
-                                    autoTuneEnabled = !settings.autoTuneEnabled,
+                                    autoTuneEnabled = nextParallelTestEnabled,
+                                    fastConnectEnabled = if (nextParallelTestEnabled) {
+                                        false
+                                    } else {
+                                        settings.fastConnectEnabled
+                                    },
                                     parallelTestSelectedConfigIds = selectedIds,
                                 ),
                             )
@@ -654,13 +661,21 @@ private fun ConnectTabContent(
                         enabled = settings.fastConnectEnabled,
                         interactiveEnabled = parallelTestControlsEnabled,
                         onToggle = {
+                            val nextFastConnectEnabled = !settings.fastConnectEnabled
                             onSettingsChange(
-                                settings.copy(fastConnectEnabled = !settings.fastConnectEnabled),
+                                settings.copy(
+                                    fastConnectEnabled = nextFastConnectEnabled,
+                                    autoTuneEnabled = if (nextFastConnectEnabled) {
+                                        false
+                                    } else {
+                                        settings.autoTuneEnabled
+                                    },
+                                ),
                             )
                         },
                     )
                     AnimatedVisibility(
-                        visible = settings.autoTuneEnabled,
+                        visible = parallelTestEnabled,
                         enter = fadeIn(animationSpec = tween(180)) + expandVertically(animationSpec = tween(180)),
                         exit = fadeOut(animationSpec = tween(140)) + shrinkVertically(animationSpec = tween(140)),
                     ) {
