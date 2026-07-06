@@ -31,6 +31,7 @@ const (
 	mtuProbeBase64Reply = 1
 	defaultMTUMinFloor  = 10
 	defaultUploadMaxCap = 512
+	fastConnectMinValid = 7
 	// mtuHysteresisDivisor sets the re-clustering hysteresis band: a freshly
 	// derived download MTU must exceed the current one by more than 1/N (here
 	// 1/8 = 12.5%) before the session adopts it, so flapping resolvers do not
@@ -95,7 +96,12 @@ func (c *Client) RunInitialMTUTests(ctx context.Context) error {
 		c.useTCP.Store(false)
 	}
 
-	err := c.runFullMTUTests(ctx)
+	var err error
+	if c.cfg.FastConnect {
+		err = c.runFastConnectMTUTests(ctx)
+	} else {
+		err = c.runFullMTUTests(ctx)
+	}
 	if err == nil {
 		return nil
 	}
@@ -109,7 +115,13 @@ func (c *Client) RunInitialMTUTests(ctx context.Context) error {
 		for i := range c.connections {
 			c.prepareConnectionMTUScanState(&c.connections[i])
 		}
-		if tcpErr := c.runFullMTUTests(ctx); tcpErr == nil {
+		var tcpErr error
+		if c.cfg.FastConnect {
+			tcpErr = c.runFastConnectMTUTests(ctx)
+		} else {
+			tcpErr = c.runFullMTUTests(ctx)
+		}
+		if tcpErr == nil {
 			if c.log != nil {
 				c.log.Infof("<green>✅ Resolver transport fell back to TCP/53.</green>")
 			}
@@ -145,6 +157,101 @@ func (c *Client) runFullMTUTests(ctx context.Context) error {
 
 	c.finalizeMTUSelection(validConns, minUpload, minDownload, minUploadChars)
 	return nil
+}
+
+// runFastConnectMTUTests starts the session as soon as a safe starter pool has
+// passed MTU probing. Remaining resolver probes continue in the background; any
+// later resolver that can carry the chosen session MTU joins the active pool,
+// while smaller-but-valid resolvers stay available as backup.
+func (c *Client) runFastConnectMTUTests(ctx context.Context) error {
+	uploadCaps := c.precomputeUploadCaps()
+	workerCount := min(max(1, c.cfg.MTUTestParallelism), len(c.connections))
+	c.logMTUStart(workerCount)
+	for idx := range c.connections {
+		c.prepareConnectionMTUScanState(&c.connections[idx])
+	}
+	c.balancer.RefreshValidConnections()
+
+	counters := &mtuScanCounters{}
+	ready := make(chan struct{})
+	done := make(chan struct{})
+	var closeReady sync.Once
+	var stateMu sync.Mutex
+	var released bool
+	var finalErr error
+
+	finalizeCurrent := func(reason string) bool {
+		validConns, minUpload, minDownload, minUploadChars := summarizeValidMTUConnections(c.connections)
+		if len(validConns) == 0 {
+			return false
+		}
+		if c.log != nil {
+			c.log.Infof(
+				"<green>⚡ Fast Connect %s with <cyan>%d</cyan> valid resolver(s); MTU scan continues in the background.</green>",
+				reason,
+				len(validConns),
+			)
+		}
+		c.finalizeMTUSelection(validConns, minUpload, minDownload, minUploadChars)
+		released = true
+		closeReady.Do(func() { close(ready) })
+		return true
+	}
+
+	addBackgroundResolver := func(conn Connection) {
+		if c.syncedUploadMTU > 0 && c.syncedDownloadMTU > 0 &&
+			(conn.UploadMTUBytes < c.syncedUploadMTU || conn.DownloadMTUBytes < c.syncedDownloadMTU) {
+			if idx, ok := c.connectionsByKey[conn.Key]; ok && idx >= 0 && idx < len(c.connections) {
+				c.connections[idx].Backup = true
+			}
+		}
+		c.balancer.RefreshValidConnections()
+		c.initResolverRecheckMeta()
+		c.logResolverRuntimeState()
+	}
+
+	go func() {
+		c.runAllMTUProbeWorkers(ctx, uploadCaps, workerCount, counters, func(conn Connection) {
+			stateMu.Lock()
+			defer stateMu.Unlock()
+			if released {
+				addBackgroundResolver(conn)
+				return
+			}
+			validNow := int(counters.valid.Load())
+			if validNow >= fastConnectMinValid {
+				finalizeCurrent("starter pool ready")
+			}
+		})
+
+		stateMu.Lock()
+		defer stateMu.Unlock()
+		if !released {
+			if !finalizeCurrent("full scan completed") {
+				finalErr = ErrNoValidConnections
+				closeReady.Do(func() { close(ready) })
+			}
+		} else if c.log != nil {
+			c.log.Infof(
+				"<green>⚡ Fast Connect background MTU scan completed: valid=<cyan>%d</cyan>, rejected=<red>%d</red>.</green>",
+				counters.valid.Load(),
+				counters.rejectUpload.Load()+counters.rejectDownload.Load(),
+			)
+			c.logResolverTierSummary()
+		}
+		close(done)
+	}()
+
+	select {
+	case <-ready:
+		return finalErr
+	case <-ctx.Done():
+		<-done
+		if finalErr != nil {
+			return finalErr
+		}
+		return ctx.Err()
+	}
 }
 
 // finalizeMTUSelection runs Layer 2 clustering and, when MTU_ADAPTIVE_GROUPING

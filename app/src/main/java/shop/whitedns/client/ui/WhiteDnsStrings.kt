@@ -64,6 +64,7 @@ interface WhiteDnsStrings {
 
     // Connect tab labels
     val parallelTest: String
+    val fastConnect: String
     val connectProgressConnected: String
     val serverTestTitle: String
     val serverTestButton: String
@@ -641,6 +642,7 @@ object EnglishStrings : WhiteDnsStrings {
     override val bannerVpnWarningBody = "Full VPN mode may affect performance. Proxy mode is recommended for most users."
 
     override val parallelTest = "Parallel Test"
+    override val fastConnect = "Fast Connect"
     override val connectProgressConnected = "Connected"
     override val serverTestTitle = "SERVER TEST"
     override val serverTestButton = "TEST SERVERS"
@@ -1307,6 +1309,7 @@ object PersianStrings : WhiteDnsStrings {
     override val bannerVpnWarningBody = "حالت VPN کامل ممکن است عملکرد را تحت‌تأثیر قرار دهد. حالت پروکسی برای اکثر کاربران توصیه می‌شود."
 
     override val parallelTest = "تست موازی"
+    override val fastConnect = "Fast Connect"
     override val connectProgressConnected = "متصل شد"
     override val serverTestTitle = "تست سرور"
     override val serverTestButton = "تست سرورها"

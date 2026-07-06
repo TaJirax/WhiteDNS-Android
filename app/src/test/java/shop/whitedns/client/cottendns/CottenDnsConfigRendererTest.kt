@@ -32,6 +32,7 @@ class CottenDnsConfigRendererTest {
             listenPort = "12345",
             httpProxyEnabled = false,
             uploadDuplication = "4",
+            fastConnectEnabled = true,
             logLevel = "INFO",
         )
 
@@ -45,6 +46,7 @@ class CottenDnsConfigRendererTest {
         assertTrue(toml.contains("ENCRYPTION_KEY = \"secret-key\""))
         assertTrue(toml.contains("LISTEN_PORT = 12345"))
         assertTrue(toml.contains("UPLOAD_PACKET_DUPLICATION_COUNT = 4"))
+        assertTrue(toml.contains("FAST_CONNECT = true"))
         assertTrue(toml.contains("STATS_REPORT_INTERVAL_SECONDS = 1.0"))
         assertTrue(toml.contains("LOG_LEVEL = \"INFO\""))
     }
@@ -74,6 +76,7 @@ class CottenDnsConfigRendererTest {
         assertTrue(toml.contains("HTTP_PROXY_PORT = 12346"))
         assertTrue(toml.contains("UPLOAD_PACKET_DUPLICATION_COUNT = 4"))
         assertTrue(toml.contains("TUNNEL_PACKET_TIMEOUT_SECONDS = 11.5"))
+        assertFalse(toml.contains("FAST_CONNECT"))
         assertTrue(toml, toml.contains("TRAFFIC_WARMUP_ENABLED = false"))
         assertTrue(toml.contains("TRAFFIC_WARMUP_PROBE_COUNT = 2"))
         assertTrue(toml.contains("AUTO_TUNE_ENABLED = true"))

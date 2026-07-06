@@ -83,26 +83,26 @@ type ClientConfig struct {
 	// LegacySessionID selects the 1-byte on-wire session-ID format used by
 	// MasterDNS/StormDNS/WhiteDNS servers. Default false uses CottenDns's 2-byte
 	// native format. Must match the target server's engine generation.
-	LegacySessionID                       bool    `toml:"LEGACY_SESSION_ID"`
+	LegacySessionID bool `toml:"LEGACY_SESSION_ID"`
 	// MaxActiveStreams caps concurrent local tunnel streams (0 = unlimited).
-	MaxActiveStreams                      int     `toml:"MAX_ACTIVE_STREAMS"`
+	MaxActiveStreams int `toml:"MAX_ACTIVE_STREAMS"`
 	// LocalHandshakeTimeoutSeconds bounds the local SOCKS5/TCP client handshake.
-	LocalHandshakeTimeoutSeconds          float64 `toml:"LOCAL_HANDSHAKE_TIMEOUT_SECONDS"`
-	UploadCompressionType                 int     `toml:"UPLOAD_COMPRESSION_TYPE"`
-	DownloadCompressionType               int     `toml:"DOWNLOAD_COMPRESSION_TYPE"`
-	CompressionMinSize                    int     `toml:"COMPRESSION_MIN_SIZE"`
-	DataEncryptionMethod                  int     `toml:"DATA_ENCRYPTION_METHOD"`
-	EncryptionKey                         string  `toml:"ENCRYPTION_KEY"`
-	MinUploadMTU                          int     `toml:"MIN_UPLOAD_MTU"`
-	MinDownloadMTU                        int     `toml:"MIN_DOWNLOAD_MTU"`
-	MaxUploadMTU                          int     `toml:"MAX_UPLOAD_MTU"`
-	MaxDownloadMTU                        int     `toml:"MAX_DOWNLOAD_MTU"`
-	MTUTestRetriesResolvers               int     `toml:"MTU_TEST_RETRIES_RESOLVERS"`
-	MTUTestRetriesLogs                    int     `toml:"MTU_TEST_RETRIES_LOGS"`
-	MTUTestTimeoutResolvers               float64 `toml:"MTU_TEST_TIMEOUT_RESOLVERS"`
-	MTUTestTimeoutLogs                    float64 `toml:"MTU_TEST_TIMEOUT_LOGS"`
-	MTUTestParallelismResolvers           int     `toml:"MTU_TEST_PARALLELISM_RESOLVERS"`
-	MTUTestParallelismLogs                int     `toml:"MTU_TEST_PARALLELISM_LOGS"`
+	LocalHandshakeTimeoutSeconds float64 `toml:"LOCAL_HANDSHAKE_TIMEOUT_SECONDS"`
+	UploadCompressionType        int     `toml:"UPLOAD_COMPRESSION_TYPE"`
+	DownloadCompressionType      int     `toml:"DOWNLOAD_COMPRESSION_TYPE"`
+	CompressionMinSize           int     `toml:"COMPRESSION_MIN_SIZE"`
+	DataEncryptionMethod         int     `toml:"DATA_ENCRYPTION_METHOD"`
+	EncryptionKey                string  `toml:"ENCRYPTION_KEY"`
+	MinUploadMTU                 int     `toml:"MIN_UPLOAD_MTU"`
+	MinDownloadMTU               int     `toml:"MIN_DOWNLOAD_MTU"`
+	MaxUploadMTU                 int     `toml:"MAX_UPLOAD_MTU"`
+	MaxDownloadMTU               int     `toml:"MAX_DOWNLOAD_MTU"`
+	MTUTestRetriesResolvers      int     `toml:"MTU_TEST_RETRIES_RESOLVERS"`
+	MTUTestRetriesLogs           int     `toml:"MTU_TEST_RETRIES_LOGS"`
+	MTUTestTimeoutResolvers      float64 `toml:"MTU_TEST_TIMEOUT_RESOLVERS"`
+	MTUTestTimeoutLogs           float64 `toml:"MTU_TEST_TIMEOUT_LOGS"`
+	MTUTestParallelismResolvers  int     `toml:"MTU_TEST_PARALLELISM_RESOLVERS"`
+	MTUTestParallelismLogs       int     `toml:"MTU_TEST_PARALLELISM_LOGS"`
 	// Adaptive per-group MTU (loss-aware probing + clustering).
 	// MTUProbeSamples > 1 enables loss-aware probing: each candidate MTU is
 	// probed this many times and accepted only if its measured loss is at or
@@ -121,6 +121,10 @@ type ClientConfig struct {
 	// pool is exhausted). When false, the legacy global-minimum MTU across all
 	// valid resolvers is used.
 	MTUAdaptiveGrouping bool `toml:"MTU_ADAPTIVE_GROUPING"`
+	// FastConnect allows startup to continue after a small safe pool has passed
+	// MTU probing. The remaining resolvers keep probing in the background and are
+	// folded into the active/reserve pool as they pass.
+	FastConnect bool `toml:"FAST_CONNECT"`
 	// Active MTU test parameters resolved from the startup mode at runtime.
 	// Populated by ApplyStartupModeMTU after the mode is known. Not loaded from TOML.
 	MTUTestRetries                       int               `toml:"-"`
@@ -321,6 +325,7 @@ func defaultClientConfig() ClientConfig {
 		MTUMaxLoss:                            0.0,
 		MTUGroupGapRatio:                      0.25,
 		MTUAdaptiveGrouping:                   true,
+		FastConnect:                           false,
 		DNSRandomizeQueryID:                   true,
 		DNSEDNSCookie:                         true,
 		DNSQNameCaseRandomization:             false,

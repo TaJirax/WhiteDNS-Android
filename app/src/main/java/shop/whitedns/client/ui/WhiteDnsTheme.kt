@@ -222,6 +222,7 @@ object WhiteDnsL10n {
     val bannerVpnWarningTitle: String @Composable get() = LocalWhiteDnsStrings.current.bannerVpnWarningTitle
     val bannerVpnWarningBody: String @Composable get() = LocalWhiteDnsStrings.current.bannerVpnWarningBody
     val parallelTest: String @Composable get() = LocalWhiteDnsStrings.current.parallelTest
+    val fastConnect: String @Composable get() = LocalWhiteDnsStrings.current.fastConnect
     val profileTabConnection: String @Composable get() = LocalWhiteDnsStrings.current.profileTabConnection
     val profileTabResolver: String @Composable get() = LocalWhiteDnsStrings.current.profileTabResolver
     val profileTabSetting: String @Composable get() = LocalWhiteDnsStrings.current.profileTabSetting

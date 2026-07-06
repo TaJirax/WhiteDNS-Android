@@ -399,12 +399,16 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 	if cfg.BaseEncodeData {
 		responseMode = mtuProbeBase64Reply
 	}
+	balancerStrategy := cfg.ResolverBalancingStrategy
+	if cfg.FastConnect {
+		balancerStrategy = BalancingHighestMTU
+	}
 
 	c := &Client{
 		cfg:                      cfg,
 		log:                      log,
 		codec:                    codec,
-		balancer:                 NewBalancer(cfg.ResolverBalancingStrategy),
+		balancer:                 NewBalancer(balancerStrategy),
 		pacer:                    newResolverPacer(cfg.ResolverRateLimitEnabled),
 		uploadCompression:        uint8(cfg.UploadCompressionType),
 		downloadCompression:      uint8(cfg.DownloadCompressionType),
@@ -513,7 +517,13 @@ func (c *Client) Run(ctx context.Context) error {
 		default:
 			if !c.successMTUChecks {
 				var mtuErr error
-				if c.connectionsHavePreknownMTU && !c.logBasedMTUVerify {
+				if c.cfg.FastConnect {
+					if c.connectionsHavePreknownMTU && c.log != nil {
+						c.log.Infof("<green>⚡ Fast Connect enabled; using resolver MTU scan even with log-based startup configured.</green>")
+					}
+					c.connectionsHavePreknownMTU = false
+					mtuErr = c.RunInitialMTUTests(ctx)
+				} else if c.connectionsHavePreknownMTU && !c.logBasedMTUVerify {
 					mtuErr = c.applyPreknownMTUsFromLog(ctx)
 					if mtuErr != nil {
 						if c.log != nil {

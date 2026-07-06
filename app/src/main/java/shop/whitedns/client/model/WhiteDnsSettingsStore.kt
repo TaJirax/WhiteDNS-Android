@@ -201,6 +201,7 @@ class WhiteDnsSettingsStore(
             startupMode = preferences.getString(KeyStartupMode, defaults.startupMode) ?: defaults.startupMode,
             pingWatchdogSeconds = preferences.getString(KeyPingWatchdogSeconds, defaults.pingWatchdogSeconds)
                 ?: defaults.pingWatchdogSeconds,
+            fastConnectEnabled = preferences.getBoolean(KeyFastConnectEnabled, defaults.fastConnectEnabled),
             trafficWarmupEnabled = preferences.getBoolean(KeyTrafficWarmupEnabled, defaults.trafficWarmupEnabled),
             trafficWarmupProbeCount = preferences.getString(
                 KeyTrafficWarmupProbeCount,
@@ -304,6 +305,7 @@ class WhiteDnsSettingsStore(
             .putString(KeyLocalDnsPort, normalizedSettings.localDnsPort)
             .putString(KeyStartupMode, normalizedSettings.startupMode)
             .putString(KeyPingWatchdogSeconds, normalizedSettings.pingWatchdogSeconds)
+            .putBoolean(KeyFastConnectEnabled, normalizedSettings.fastConnectEnabled)
             .putBoolean(KeyTrafficWarmupEnabled, normalizedSettings.trafficWarmupEnabled)
             .putString(KeyTrafficWarmupProbeCount, normalizedSettings.trafficWarmupProbeCount)
             .putString(KeyTrafficKeepaliveIntervalSeconds, normalizedSettings.trafficKeepaliveIntervalSeconds)
@@ -794,6 +796,7 @@ class WhiteDnsSettingsStore(
         const val KeyLocalDnsPort = "local_dns_port"
         const val KeyStartupMode = "startup_mode"
         const val KeyPingWatchdogSeconds = "ping_watchdog_seconds"
+        const val KeyFastConnectEnabled = "fast_connect_enabled"
         const val KeyTrafficWarmupEnabled = "traffic_warmup_enabled"
         const val KeyTrafficWarmupProbeCount = "traffic_warmup_probe_count"
         const val KeyTrafficKeepaliveIntervalSeconds = "traffic_keepalive_interval_seconds"

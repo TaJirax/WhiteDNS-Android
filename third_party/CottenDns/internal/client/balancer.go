@@ -1,4 +1,4 @@
-﻿// ==============================================================================
+// ==============================================================================
 // CottenDNS
 // Author: tajirax
 // Github: https://github.com/TaJirax/CottenDns
@@ -25,6 +25,11 @@ const (
 	// proportional to their download MTU, so a resolver that can carry 4000-byte
 	// downloads receives proportionally more traffic than one capped at 1000.
 	BalancingMTUWeighted = 5
+	// BalancingHighestMTU selects the highest-capacity active resolvers first.
+	// It is used by Fast Connect so traffic moves to the best MTU-tested
+	// resolvers as soon as they are found. Download MTU dominates, upload MTU is
+	// next, and MTU-probe latency only breaks ties after capacity.
+	BalancingHighestMTU = 6
 )
 
 type Balancer struct {
@@ -295,6 +300,8 @@ func (b *Balancer) GetBestConnection() (Connection, bool) {
 		return derefConnection(snap.connections, idx)
 	case BalancingMTUWeighted:
 		return b.weightedByMTUConnection(snap)
+	case BalancingHighestMTU:
+		return b.bestHighestMTUConnection(snap)
 	case BalancingLeastLoss:
 		if !b.hasLossSignal(snap) {
 			return b.roundRobinBestConnection(snap)
@@ -327,6 +334,8 @@ func (b *Balancer) GetBestConnectionExcluding(excludeKey string) (Connection, bo
 			return conn, true
 		}
 		return Connection{}, false
+	case BalancingHighestMTU:
+		return b.bestHighestMTUConnectionExcluding(snap, excludeKey)
 	case BalancingLeastLoss:
 		if !b.hasLossSignal(snap) {
 			return b.roundRobinBestConnectionExcluding(snap, excludeKey)
@@ -366,6 +375,8 @@ func (b *Balancer) GetUniqueConnections(requiredCount int) []Connection {
 		return b.selectRandom(snap, count)
 	case BalancingMTUWeighted:
 		return b.selectRoundRobin(snap, count)
+	case BalancingHighestMTU:
+		return b.selectHighestMTU(snap, count)
 	case BalancingLeastLoss:
 		if !b.hasLossSignal(snap) {
 			return b.selectRoundRobin(snap, count)
@@ -550,6 +561,35 @@ func (b *Balancer) selectRandom(snap *balancerSnapshot, count int) []Connection 
 	return snapshotConnections(snap.connections, indices[:count])
 }
 
+func (b *Balancer) selectHighestMTU(snap *balancerSnapshot, count int) []Connection {
+	if snap == nil || count <= 0 || len(snap.valid) == 0 {
+		return nil
+	}
+	if count > len(snap.valid) {
+		count = len(snap.valid)
+	}
+
+	selected := make([]int, 0, count)
+	used := make(map[int]struct{}, count)
+	for len(selected) < count {
+		best := -1
+		for _, idx := range snap.valid {
+			if _, ok := used[idx]; ok {
+				continue
+			}
+			if best == -1 || higherMTUFirst(snap.connections[idx], snap.connections[best]) {
+				best = idx
+			}
+		}
+		if best == -1 {
+			break
+		}
+		used[best] = struct{}{}
+		selected = append(selected, best)
+	}
+	return snapshotConnections(snap.connections, selected)
+}
+
 func (b *Balancer) selectLowestScore(snap *balancerSnapshot, count int, scorer func(*balancerSnapshot, int) uint64) []Connection {
 	n := len(snap.valid)
 	if count <= 0 || n == 0 {
@@ -592,6 +632,45 @@ func (b *Balancer) selectLowestScore(snap *balancerSnapshot, count int, scorer f
 	}
 
 	return snapshotConnections(snap.connections, indices)
+}
+
+func (b *Balancer) bestHighestMTUConnection(snap *balancerSnapshot) (Connection, bool) {
+	selected := b.selectHighestMTU(snap, 1)
+	if len(selected) == 0 {
+		return Connection{}, false
+	}
+	return selected[0], true
+}
+
+func (b *Balancer) bestHighestMTUConnectionExcluding(snap *balancerSnapshot, excludeKey string) (Connection, bool) {
+	if snap == nil || len(snap.valid) == 0 {
+		return Connection{}, false
+	}
+	for _, conn := range b.selectHighestMTU(snap, len(snap.valid)) {
+		if conn.Key != "" && conn.Key != excludeKey {
+			return conn, true
+		}
+	}
+	return Connection{}, false
+}
+
+func higherMTUFirst(a, b Connection) bool {
+	if a.DownloadMTUBytes != b.DownloadMTUBytes {
+		return a.DownloadMTUBytes > b.DownloadMTUBytes
+	}
+	if a.UploadMTUBytes != b.UploadMTUBytes {
+		return a.UploadMTUBytes > b.UploadMTUBytes
+	}
+	if a.MTUResolveTime != b.MTUResolveTime {
+		if a.MTUResolveTime <= 0 {
+			return false
+		}
+		if b.MTUResolveTime <= 0 {
+			return true
+		}
+		return a.MTUResolveTime < b.MTUResolveTime
+	}
+	return a.Key < b.Key
 }
 
 func snapshotConnections(connections []Connection, indices []int) []Connection {

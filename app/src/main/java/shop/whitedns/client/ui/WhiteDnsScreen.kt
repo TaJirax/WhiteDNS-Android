@@ -649,6 +649,16 @@ private fun ConnectTabContent(
                             )
                         },
                     )
+                    ToggleRow(
+                        label = WhiteDnsL10n.fastConnect,
+                        enabled = settings.fastConnectEnabled,
+                        interactiveEnabled = parallelTestControlsEnabled,
+                        onToggle = {
+                            onSettingsChange(
+                                settings.copy(fastConnectEnabled = !settings.fastConnectEnabled),
+                            )
+                        },
+                    )
                     AnimatedVisibility(
                         visible = settings.autoTuneEnabled,
                         enter = fadeIn(animationSpec = tween(180)) + expandVertically(animationSpec = tween(180)),

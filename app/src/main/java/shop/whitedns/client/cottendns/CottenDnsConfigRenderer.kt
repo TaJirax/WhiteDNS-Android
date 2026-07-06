@@ -305,6 +305,7 @@ object CottenDnsConfigRenderer {
         appendLine("MTU_TEST_RETRIES_LOGS = ${resolved.mtuTestRetriesLogs}")
         appendLine("MTU_TEST_TIMEOUT_LOGS = ${resolved.mtuTestTimeoutLogs}")
         appendLine("MTU_TEST_PARALLELISM_LOGS = ${resolved.mtuTestParallelismLogs}")
+        appendLine("FAST_CONNECT = ${resolved.fastConnectEnabled}")
         appendLine("RX_TX_WORKERS = ${resolved.rxTxWorkers}")
         appendLine("TUNNEL_PROCESS_WORKERS = ${resolved.tunnelProcessWorkers}")
         appendLine("TUNNEL_PACKET_TIMEOUT_SECONDS = ${resolved.tunnelPacketTimeoutSeconds}")

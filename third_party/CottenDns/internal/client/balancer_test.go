@@ -56,6 +56,44 @@ func TestBalancerLowestLatencyUsesRuntimeStats(t *testing.T) {
 	}
 }
 
+func TestBalancerHighestMTUSelectsLargestDownloadUploadThenLatency(t *testing.T) {
+	b := NewBalancer(BalancingHighestMTU)
+	connections := []*Connection{
+		{Key: "slow", IsValid: true, UploadMTUBytes: 300, DownloadMTUBytes: 1200},
+		{Key: "fast-low-up-latency", IsValid: true, UploadMTUBytes: 100, DownloadMTUBytes: 3000, MTUResolveTime: time.Millisecond},
+		{Key: "mid", IsValid: true, UploadMTUBytes: 400, DownloadMTUBytes: 2000},
+		{Key: "fast-high-up-slower-latency", IsValid: true, UploadMTUBytes: 200, DownloadMTUBytes: 3000, MTUResolveTime: 20 * time.Millisecond},
+		{Key: "fast-high-up-lower-latency", IsValid: true, UploadMTUBytes: 200, DownloadMTUBytes: 3000, MTUResolveTime: 2 * time.Millisecond},
+	}
+	b.SetConnections(connections)
+
+	selected := b.GetUniqueConnections(3)
+	if len(selected) != 3 {
+		t.Fatalf("expected three selected connections, got %d", len(selected))
+	}
+	if selected[0].Key != "fast-high-up-lower-latency" || selected[1].Key != "fast-high-up-slower-latency" || selected[2].Key != "fast-low-up-latency" {
+		t.Fatalf("expected highest MTU order, got %q,%q,%q", selected[0].Key, selected[1].Key, selected[2].Key)
+	}
+
+	best, ok := b.GetBestConnectionExcluding("fast-high-up-lower-latency")
+	if !ok {
+		t.Fatal("expected best fallback connection")
+	}
+	if best.Key != "fast-high-up-slower-latency" {
+		t.Fatalf("expected next highest MTU resolver, got %q", best.Key)
+	}
+
+	connections[0].DownloadMTUBytes = 4000
+	b.RefreshValidConnections()
+	best, ok = b.GetBestConnection()
+	if !ok {
+		t.Fatal("expected best refreshed connection")
+	}
+	if best.Key != "slow" {
+		t.Fatalf("expected refreshed background resolver to become first, got %q", best.Key)
+	}
+}
+
 func TestBalancerStatsHalfLifeAlsoAppliesOnSend(t *testing.T) {
 	b := NewBalancer(BalancingLeastLoss)
 	connections := []*Connection{
