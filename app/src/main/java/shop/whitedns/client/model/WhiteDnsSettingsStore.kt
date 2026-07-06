@@ -127,6 +127,8 @@ class WhiteDnsSettingsStore(
                 ?: defaults.mtuTestTimeoutLogs,
             mtuTestParallelismLogs = preferences.getString(KeyMtuTestParallelismLogs, defaults.mtuTestParallelismLogs)
                 ?: defaults.mtuTestParallelismLogs,
+            scanResolverParallelism = preferences.getString(KeyScanResolverParallelism, defaults.scanResolverParallelism)
+                ?: defaults.scanResolverParallelism,
             rxTxWorkers = preferences.getString(KeyRxTxWorkers, defaults.rxTxWorkers) ?: defaults.rxTxWorkers,
             tunnelProcessWorkers = preferences.getString(KeyTunnelProcessWorkers, defaults.tunnelProcessWorkers)
                 ?: defaults.tunnelProcessWorkers,
@@ -277,6 +279,7 @@ class WhiteDnsSettingsStore(
             .putString(KeyMtuTestRetriesLogs, normalizedSettings.mtuTestRetriesLogs)
             .putString(KeyMtuTestTimeoutLogs, normalizedSettings.mtuTestTimeoutLogs)
             .putString(KeyMtuTestParallelismLogs, normalizedSettings.mtuTestParallelismLogs)
+            .putString(KeyScanResolverParallelism, normalizedSettings.scanResolverParallelism)
             .putString(KeyRxTxWorkers, normalizedSettings.rxTxWorkers)
             .putString(KeyTunnelProcessWorkers, normalizedSettings.tunnelProcessWorkers)
             .putString(KeyTunnelPacketTimeoutSeconds, normalizedSettings.tunnelPacketTimeoutSeconds)
@@ -766,6 +769,7 @@ class WhiteDnsSettingsStore(
         const val KeyMtuTestRetriesLogs = "mtu_test_retries_logs"
         const val KeyMtuTestTimeoutLogs = "mtu_test_timeout_logs"
         const val KeyMtuTestParallelismLogs = "mtu_test_parallelism_logs"
+        const val KeyScanResolverParallelism = "scan_resolver_parallelism"
         const val KeyRxTxWorkers = "rx_tx_workers"
         const val KeyTunnelProcessWorkers = "tunnel_process_workers"
         const val KeyTunnelPacketTimeoutSeconds = "tunnel_packet_timeout_seconds"

@@ -312,10 +312,11 @@ private enum class WhiteDnsTab(
 
 private const val ScanWorkerMin = 1
 private const val ScanWorkerMax = 32
-private const val MtuParallelismMin = 50
-private const val MtuParallelismMax = 1000
-private const val MtuParallelismStep = 50
+private const val MtuParallelismMin = 5
+private const val MtuParallelismMax = 150
+private const val MtuParallelismStep = 5
 private const val MtuParallelismDefault = 100
+private const val ScanResolverParallelismDefault = 25
 
 private enum class CompactActionTone {
     Default,
@@ -1721,6 +1722,17 @@ private fun ScanTabContent(
             ScanNote(
                 text = WhiteDnsL10n.scanWorkerWarning,
             )
+            MtuParallelismSlider(
+                parallelism = uiState.settings.scanResolverParallelism.toMtuParallelismSliderValue(),
+                enabled = !scanState.isRunning,
+                onParallelismChange = { parallelism ->
+                    onSettingsChange(
+                        uiState.settings.copy(scanResolverParallelism = parallelism.toString()),
+                    )
+                },
+                label = WhiteDnsL10n.settingScanResolverParallel,
+                note = WhiteDnsL10n.settingScanResolverParallelNote,
+            )
             WhiteDnsDropdownField(
                 label = WhiteDnsL10n.scanProfileLabel,
                 value = selectedScanConnectionProfile.id,
@@ -2081,6 +2093,8 @@ private fun MtuParallelismSlider(
     parallelism: Int,
     enabled: Boolean,
     onParallelismChange: (Int) -> Unit,
+    label: String = WhiteDnsL10n.settingResolverParallel,
+    note: String = WhiteDnsL10n.settingResolverParallelNote,
 ) {
     val context = LocalContext.current
     var sliderValue by remember(parallelism) { mutableStateOf(parallelism.toMtuParallelismSliderValue().toFloat()) }
@@ -2091,7 +2105,7 @@ private fun MtuParallelismSlider(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            FieldLabel(WhiteDnsL10n.settingResolverParallel)
+            FieldLabel(label)
             Text(
                 text = displayedParallelism.toString(),
                 style = MaterialTheme.typography.bodyMedium.copy(
@@ -2128,7 +2142,7 @@ private fun MtuParallelismSlider(
             ),
         )
         Text(
-            text = WhiteDnsL10n.settingResolverParallelNote,
+            text = note,
             style = MaterialTheme.typography.bodySmall.copy(
                 fontSize = 11.sp,
                 lineHeight = 16.sp,

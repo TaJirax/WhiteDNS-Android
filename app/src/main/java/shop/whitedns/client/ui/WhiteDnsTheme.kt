@@ -422,6 +422,8 @@ object WhiteDnsL10n {
     val settingResolverTimeout: String @Composable get() = LocalWhiteDnsStrings.current.settingResolverTimeout
     val settingResolverParallel: String @Composable get() = LocalWhiteDnsStrings.current.settingResolverParallel
     val settingResolverParallelNote: String @Composable get() = LocalWhiteDnsStrings.current.settingResolverParallelNote
+    val settingScanResolverParallel: String @Composable get() = LocalWhiteDnsStrings.current.settingScanResolverParallel
+    val settingScanResolverParallelNote: String @Composable get() = LocalWhiteDnsStrings.current.settingScanResolverParallelNote
     val settingLogsRetries: String @Composable get() = LocalWhiteDnsStrings.current.settingLogsRetries
     val settingLogsTimeout: String @Composable get() = LocalWhiteDnsStrings.current.settingLogsTimeout
     val settingLogsParallel: String @Composable get() = LocalWhiteDnsStrings.current.settingLogsParallel

@@ -138,6 +138,7 @@ object RuntimeLaunchRequestStore {
             .put("mtuTestRetriesLogs", settings.mtuTestRetriesLogs)
             .put("mtuTestTimeoutLogs", settings.mtuTestTimeoutLogs)
             .put("mtuTestParallelismLogs", settings.mtuTestParallelismLogs)
+            .put("scanResolverParallelism", settings.scanResolverParallelism)
             .put("rxTxWorkers", settings.rxTxWorkers)
             .put("tunnelProcessWorkers", settings.tunnelProcessWorkers)
             .put("tunnelPacketTimeoutSeconds", settings.tunnelPacketTimeoutSeconds)
@@ -217,6 +218,7 @@ object RuntimeLaunchRequestStore {
             mtuTestRetriesLogs = json.optString("mtuTestRetriesLogs", "5"),
             mtuTestTimeoutLogs = json.optString("mtuTestTimeoutLogs", "2.0"),
             mtuTestParallelismLogs = json.optString("mtuTestParallelismLogs", "32"),
+            scanResolverParallelism = json.optString("scanResolverParallelism", "25"),
             rxTxWorkers = json.optString("rxTxWorkers", "4"),
             tunnelProcessWorkers = json.optString("tunnelProcessWorkers", "4"),
             tunnelPacketTimeoutSeconds = json.optString("tunnelPacketTimeoutSeconds", "10.0"),

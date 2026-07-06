@@ -287,6 +287,8 @@ interface WhiteDnsStrings {
     val settingResolverTimeout: String
     val settingResolverParallel: String
     val settingResolverParallelNote: String
+    val settingScanResolverParallel: String
+    val settingScanResolverParallelNote: String
     val settingLogsRetries: String
     val settingLogsTimeout: String
     val settingLogsParallel: String
@@ -979,6 +981,8 @@ object EnglishStrings : WhiteDnsStrings {
     override val settingResolverTimeout = "Resolver Timeout"
     override val settingResolverParallel = "Resolver MTU Parallelism"
     override val settingResolverParallelNote = "More parallel MTU tests can make the first connection faster, but may put pressure on the phone."
+    override val settingScanResolverParallel = "Scanner Resolver Parallelism"
+    override val settingScanResolverParallelNote = "How many resolvers each scan worker tests at the same time. Higher is faster but heavier on the phone; it multiplies with the worker count above."
     override val settingLogsRetries = "Logs Retries"
     override val settingLogsTimeout = "Logs Timeout"
     override val settingLogsParallel = "Logs Parallel"
@@ -1643,6 +1647,8 @@ object PersianStrings : WhiteDnsStrings {
     override val settingResolverTimeout = "تایم‌اوت ریزالور"
     override val settingResolverParallel = "موازی‌سازی MTU ریزالور"
     override val settingResolverParallelNote = "تست‌های موازی بیشتر می‌تواند اتصال اول را سریع‌تر کند، اما ممکن است به گوشی فشار وارد کند."
+    override val settingScanResolverParallel = "موازی‌سازی ریزالور اسکنر"
+    override val settingScanResolverParallelNote = "هر کارگر اسکن هم‌زمان چند ریزالور را تست کند. مقدار بیشتر سریع‌تر است اما فشار بیشتری به گوشی وارد می‌کند و با تعداد کارگرهای بالا ضرب می‌شود."
     override val settingLogsRetries = "تلاش مجدد لاگ‌ها"
     override val settingLogsTimeout = "تایم‌اوت لاگ‌ها"
     override val settingLogsParallel = "موازی لاگ‌ها"

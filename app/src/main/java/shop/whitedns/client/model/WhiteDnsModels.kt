@@ -290,6 +290,10 @@ data class WhiteDnsSettings(
     val mtuTestRetriesLogs: String = "5",
     val mtuTestTimeoutLogs: String = "2.0",
     val mtuTestParallelismLogs: String = "32",
+    // Bulk-scanner resolver parallelism: how many resolvers each scan worker
+    // process probes at the same time. Independent from the connect-time MTU
+    // scan (mtuTestParallelismResolvers) and from Parallel Test.
+    val scanResolverParallelism: String = "25",
     val rxTxWorkers: String = "4",
     val tunnelProcessWorkers: String = "4",
     val tunnelPacketTimeoutSeconds: String = "10.0",
@@ -358,6 +362,7 @@ data class ResolvedWhiteDnsSettings(
     val mtuTestRetriesLogs: Int,
     val mtuTestTimeoutLogs: Double,
     val mtuTestParallelismLogs: Int,
+    val scanResolverParallelism: Int,
     val rxTxWorkers: Int,
     val tunnelProcessWorkers: Int,
     val tunnelPacketTimeoutSeconds: Double,
@@ -1799,6 +1804,7 @@ fun WhiteDnsSettings.resolve(): ResolvedWhiteDnsSettings {
         mtuTestRetriesLogs = boundedInt(mtuTestRetriesLogs, defaultValue = 5, minValue = 1, maxValue = 100),
         mtuTestTimeoutLogs = positiveDouble(mtuTestTimeoutLogs, defaultValue = 2.0),
         mtuTestParallelismLogs = boundedInt(mtuTestParallelismLogs, defaultValue = 32, minValue = 1, maxValue = 1024),
+        scanResolverParallelism = boundedInt(scanResolverParallelism, defaultValue = 25, minValue = 1, maxValue = 150),
         rxTxWorkers = resolvedRxTxWorkers,
         tunnelProcessWorkers = resolvedTunnelProcessWorkers,
         tunnelPacketTimeoutSeconds = boundedDouble(
