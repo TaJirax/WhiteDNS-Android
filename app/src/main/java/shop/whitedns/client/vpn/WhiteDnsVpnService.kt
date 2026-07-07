@@ -524,7 +524,8 @@ class WhiteDnsVpnService : VpnService() {
     }
 
     private fun Builder.excludeWhiteDnsApp() {
-        tryAddDisallowedApplication(packageName, "Unable to exclude WhiteDNS app from VPN")
+        requireDisallowedApplication(packageName, "Unable to exclude WhiteDNS app from VPN")
+        logInfo("WhiteDNS app traffic bypasses VPN routing")
     }
 
     private fun Builder.tryAddAllowedApplication(appPackage: String): Boolean {
@@ -534,6 +535,17 @@ class WhiteDnsVpnService : VpnService() {
         }.getOrElse { error ->
             logWarning("Unable to route $appPackage through VPN: ${error.message ?: error::class.java.simpleName}")
             false
+        }
+    }
+
+    private fun Builder.requireDisallowedApplication(appPackage: String, message: String) {
+        runCatching {
+            addDisallowedApplication(appPackage)
+        }.onFailure { error ->
+            throw IllegalStateException(
+                "$message: ${error.message ?: error::class.java.simpleName}",
+                error,
+            )
         }
     }
 

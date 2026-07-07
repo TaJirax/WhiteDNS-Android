@@ -177,10 +177,14 @@ func (c *Client) runFastConnectMTUTests(ctx context.Context) error {
 	done := make(chan struct{})
 	var closeReady sync.Once
 	var stateMu sync.Mutex
+	var backgroundSingleWorker atomic.Bool
 	var released bool
 	var finalErr error
 
 	finalizeCurrent := func(reason string) bool {
+		c.mtuStateMu.Lock()
+		defer c.mtuStateMu.Unlock()
+
 		validConns, minUpload, minDownload, minUploadChars := summarizeValidMTUConnections(c.connections)
 		if len(validConns) == 0 {
 			return false
@@ -192,13 +196,18 @@ func (c *Client) runFastConnectMTUTests(ctx context.Context) error {
 				len(validConns),
 			)
 		}
-		c.finalizeMTUSelection(validConns, minUpload, minDownload, minUploadChars)
+		c.finalizeMTUSelectionLocked(validConns, minUpload, minDownload, minUploadChars)
+		backgroundSingleWorker.Store(true)
+		if c.log != nil && workerCount > 1 {
+			c.log.Infof("<green>⚡ Fast Connect established; background MTU scan throttled to <cyan>1</cyan> worker.</green>")
+		}
 		released = true
 		closeReady.Do(func() { close(ready) })
 		return true
 	}
 
 	addBackgroundResolver := func(conn Connection) {
+		c.mtuStateMu.Lock()
 		if c.syncedUploadMTU > 0 && c.syncedDownloadMTU > 0 &&
 			(conn.UploadMTUBytes < c.syncedUploadMTU || conn.DownloadMTUBytes < c.syncedDownloadMTU) {
 			if idx, ok := c.connectionsByKey[conn.Key]; ok && idx >= 0 && idx < len(c.connections) {
@@ -206,23 +215,36 @@ func (c *Client) runFastConnectMTUTests(ctx context.Context) error {
 			}
 		}
 		c.balancer.RefreshValidConnections()
+		c.mtuStateMu.Unlock()
 		c.initResolverRecheckMeta()
 		c.logResolverRuntimeState()
 	}
 
 	go func() {
-		c.runAllMTUProbeWorkers(ctx, uploadCaps, workerCount, counters, func(conn Connection) {
-			stateMu.Lock()
-			defer stateMu.Unlock()
-			if released {
-				addBackgroundResolver(conn)
-				return
-			}
-			validNow := int(counters.valid.Load())
-			if validNow >= fastConnectMinValid {
-				finalizeCurrent("starter pool ready")
-			}
-		})
+		c.runAllMTUProbeWorkersWithLimit(
+			ctx,
+			uploadCaps,
+			workerCount,
+			counters,
+			func(conn Connection) {
+				stateMu.Lock()
+				defer stateMu.Unlock()
+				if released {
+					addBackgroundResolver(conn)
+					return
+				}
+				validNow := int(counters.valid.Load())
+				if validNow >= fastConnectMinValid {
+					finalizeCurrent("starter pool ready")
+				}
+			},
+			func() int {
+				if backgroundSingleWorker.Load() {
+					return 1
+				}
+				return workerCount
+			},
+		)
 
 		stateMu.Lock()
 		defer stateMu.Unlock()
@@ -261,6 +283,12 @@ func (c *Client) runFastConnectMTUTests(ctx context.Context) error {
 // balancer, primes resolver-recheck metadata, and logs the outcome. It returns
 // the final set of connections kept in the active pool.
 func (c *Client) finalizeMTUSelection(validConns []Connection, minUpload, minDownload, minUploadChars int) []Connection {
+	c.mtuStateMu.Lock()
+	defer c.mtuStateMu.Unlock()
+	return c.finalizeMTUSelectionLocked(validConns, minUpload, minDownload, minUploadChars)
+}
+
+func (c *Client) finalizeMTUSelectionLocked(validConns []Connection, minUpload, minDownload, minUploadChars int) []Connection {
 	// Cluster the full validated set BEFORE any demotion so every tier (including
 	// the slower ones that may be demoted) is visible in the UI.
 	groups := clusterConnectionsByMTU(c.connections, c.cfg.MTUGroupGapRatio)
@@ -460,6 +488,19 @@ func primaryMTUConnections(conns []Connection) []Connection {
 // non-nil it is called (with a copy of the connection) after each successful
 // probe, from within the worker goroutine.
 func (c *Client) runAllMTUProbeWorkers(ctx context.Context, uploadCaps map[string]int, workerCount int, counters *mtuScanCounters, onValid func(Connection)) {
+	c.runAllMTUProbeWorkersWithLimit(ctx, uploadCaps, workerCount, counters, onValid, nil)
+}
+
+// runAllMTUProbeWorkersWithLimit is like runAllMTUProbeWorkers, but the caller
+// can lower the maximum number of in-flight probes before each new job starts.
+func (c *Client) runAllMTUProbeWorkersWithLimit(
+	ctx context.Context,
+	uploadCaps map[string]int,
+	workerCount int,
+	counters *mtuScanCounters,
+	onValid func(Connection),
+	workerLimit func() int,
+) {
 	total := len(c.connections)
 	if workerCount <= 1 {
 		for idx := range c.connections {
@@ -468,42 +509,71 @@ func (c *Client) runAllMTUProbeWorkers(ctx context.Context, uploadCaps map[strin
 			}
 			conn := &c.connections[idx]
 			c.runConnectionMTUTest(ctx, conn, idx+1, total, uploadCaps[conn.Domain], counters)
-			if onValid != nil && conn.IsValid {
-				onValid(*conn)
+			if onValid != nil {
+				if snapshot, ok := c.validMTUConnectionSnapshot(idx); ok {
+					onValid(snapshot)
+				}
 			}
 		}
 		return
 	}
 
-	jobs := make(chan int, total)
-	var wg sync.WaitGroup
-	for i := 0; i < workerCount; i++ {
-		wg.Add(1)
+	maxWorkers := min(max(1, workerCount), total)
+	done := make(chan struct{}, maxWorkers)
+	next := 0
+	active := 0
+
+	startJob := func(idx int) {
+		active++
 		go func() {
-			defer wg.Done()
-			for idx := range jobs {
-				if ctx.Err() != nil {
-					return
-				}
-				conn := &c.connections[idx]
-				c.runConnectionMTUTest(ctx, conn, idx+1, total, uploadCaps[conn.Domain], counters)
-				if onValid != nil && conn.IsValid {
-					onValid(*conn)
+			conn := &c.connections[idx]
+			c.runConnectionMTUTest(ctx, conn, idx+1, total, uploadCaps[conn.Domain], counters)
+			if onValid != nil {
+				if snapshot, ok := c.validMTUConnectionSnapshot(idx); ok {
+					onValid(snapshot)
 				}
 			}
+			done <- struct{}{}
 		}()
 	}
-	for idx := range c.connections {
-		select {
-		case <-ctx.Done():
-			close(jobs)
-			wg.Wait()
-			return
-		case jobs <- idx:
+
+	waitForActive := func() {
+		for active > 0 {
+			<-done
+			active--
 		}
 	}
-	close(jobs)
-	wg.Wait()
+
+	for next < total || active > 0 {
+		if ctx.Err() != nil {
+			waitForActive()
+			return
+		}
+
+		limit := maxWorkers
+		if workerLimit != nil {
+			limit = min(maxWorkers, max(1, workerLimit()))
+		}
+
+		started := false
+		for next < total && active < limit {
+			startJob(next)
+			next++
+			started = true
+		}
+		if active == 0 {
+			continue
+		}
+		if !started || active >= limit || next >= total {
+			select {
+			case <-ctx.Done():
+				waitForActive()
+				return
+			case <-done:
+				active--
+			}
+		}
+	}
 }
 
 // prepareConnectionMTUScanState resets a connection's MTU state before a probe
@@ -516,6 +586,8 @@ func (c *Client) prepareConnectionMTUScanState(conn *Connection) {
 	if conn == nil {
 		return
 	}
+	c.mtuStateMu.Lock()
+	defer c.mtuStateMu.Unlock()
 	conn.IsValid = false
 	conn.Backup = false
 	conn.UploadMTUBytes = 0
@@ -526,13 +598,25 @@ func (c *Client) prepareConnectionMTUScanState(conn *Connection) {
 	conn.DownloadMTULoss = 0
 }
 
+func (c *Client) validMTUConnectionSnapshot(idx int) (Connection, bool) {
+	c.mtuStateMu.Lock()
+	defer c.mtuStateMu.Unlock()
+	if idx < 0 || idx >= len(c.connections) {
+		return Connection{}, false
+	}
+	conn := c.connections[idx]
+	return conn, conn.IsValid
+}
+
 func (c *Client) runConnectionMTUTest(ctx context.Context, conn *Connection, serverID int, total int, maxUploadPayload int, counters *mtuScanCounters) {
 	if conn == nil {
 		return
 	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			c.mtuStateMu.Lock()
 			conn.IsValid = false
+			c.mtuStateMu.Unlock()
 			if c.log != nil {
 				c.log.Errorf(
 					"💥 <red>MTU Probe Worker Panic: <cyan>%v</cyan> (Resolver: <cyan>%s</cyan>)</red>",
@@ -575,6 +659,9 @@ func (c *Client) runConnectionMTUTest(ctx context.Context, conn *Connection, ser
 
 	switch reason {
 	case mtuRejectUpload:
+		c.mtuStateMu.Lock()
+		conn.IsValid = false
+		c.mtuStateMu.Unlock()
 		completed := counters.completed.Add(1)
 		rejectedNow := counters.rejectUpload.Add(1) + counters.rejectDownload.Load()
 		if c.log != nil && c.log.Enabled(logger.LevelWarn) {
@@ -591,6 +678,9 @@ func (c *Client) runConnectionMTUTest(ctx context.Context, conn *Connection, ser
 		}
 		return
 	case mtuRejectDownload:
+		c.mtuStateMu.Lock()
+		conn.IsValid = false
+		c.mtuStateMu.Unlock()
 		completed := counters.completed.Add(1)
 		rejectedNow := counters.rejectUpload.Load() + counters.rejectDownload.Add(1)
 		if c.log != nil && c.log.Enabled(logger.LevelWarn) {
@@ -608,6 +698,7 @@ func (c *Client) runConnectionMTUTest(ctx context.Context, conn *Connection, ser
 		return
 	}
 
+	c.mtuStateMu.Lock()
 	conn.IsValid = true
 	conn.UploadMTUBytes = result.UploadBytes
 	conn.UploadMTUChars = result.UploadChars
@@ -615,6 +706,8 @@ func (c *Client) runConnectionMTUTest(ctx context.Context, conn *Connection, ser
 	conn.MTUResolveTime = result.ResolveTime
 	conn.UploadMTULoss = result.UploadLoss
 	conn.DownloadMTULoss = result.DownloadLoss
+	accepted := *conn
+	c.mtuStateMu.Unlock()
 
 	completed := counters.completed.Add(1)
 	validNow := counters.valid.Add(1)
@@ -624,15 +717,15 @@ func (c *Client) runConnectionMTUTest(ctx context.Context, conn *Connection, ser
 			"<green>✅ Accepted (%d/%d): <cyan>%s</cyan> via <cyan>%s</cyan> | upload=<cyan>%d</cyan> | download=<cyan>%d</cyan> | totals: valid=<green>%d</green>, rejected=<red>%d</red></green>",
 			completed,
 			total,
-			conn.Domain,
-			conn.ResolverLabel,
-			conn.UploadMTUBytes,
-			conn.DownloadMTUBytes,
+			accepted.Domain,
+			accepted.ResolverLabel,
+			accepted.UploadMTUBytes,
+			accepted.DownloadMTUBytes,
 			validNow,
 			rejectedNow,
 		)
 	}
-	c.appendResolverCacheEntry(conn)
+	c.appendResolverCacheEntry(&accepted)
 }
 
 func (c *Client) probeConnectionMTU(ctx context.Context, conn *Connection, maxUploadPayload int) (mtuConnectionProbeResult, mtuRejectReason) {
@@ -640,14 +733,12 @@ func (c *Client) probeConnectionMTU(ctx context.Context, conn *Connection, maxUp
 
 	probeTransport, err := c.newQueryTransport(conn.ResolverLabel)
 	if err != nil {
-		conn.IsValid = false
 		return result, mtuRejectUpload
 	}
 	defer probeTransport.Close()
 
 	upOK, upBytes, upChars, upRTT, upLoss, err := c.testUploadMTU(ctx, conn, probeTransport, maxUploadPayload)
 	if err != nil || !upOK {
-		conn.IsValid = false
 		result.UploadBytes = upBytes
 		result.UploadChars = upChars
 		return result, mtuRejectUpload
@@ -658,7 +749,6 @@ func (c *Client) probeConnectionMTU(ctx context.Context, conn *Connection, maxUp
 
 	downOK, downBytes, downRTT, downLoss, err := c.testDownloadMTU(ctx, conn, probeTransport, upBytes)
 	if err != nil || !downOK {
-		conn.IsValid = false
 		result.DownloadBytes = downBytes
 		return result, mtuRejectDownload
 	}

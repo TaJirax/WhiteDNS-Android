@@ -77,6 +77,7 @@ type Client struct {
 	lastResolverRuntimeLogAt time.Time
 
 	// MTU States
+	mtuStateMu        sync.Mutex
 	syncedUploadMTU   int
 	syncedDownloadMTU int
 	syncedUploadChars int

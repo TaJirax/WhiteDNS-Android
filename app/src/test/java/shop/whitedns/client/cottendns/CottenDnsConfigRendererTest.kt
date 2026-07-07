@@ -157,6 +157,52 @@ class CottenDnsConfigRendererTest {
         // legacy MasterDNS/StormDNS servers) rather than omitting QUERY_TYPES.
         assertTrue(toml.contains("QUERY_TYPES = [\"TXT\"]"))
     }
+
+    @Test
+    fun renderClientTomlKeepsFastConnectForStormMasterCompatibilityProfiles() {
+        val toml = CottenDnsConfigRenderer.renderClientToml(
+            serverProfile = shop.whitedns.client.model.CottenDnsServerProfile(
+                id = "server",
+                label = "Storm Master",
+                domain = "legacy.example.com",
+                encryptionKey = "secret-key",
+                encryptionMethod = 1,
+                serverType = ConnectionProfile.ServerTypeCompatibility,
+            ),
+            settings = WhiteDnsSettings(fastConnectEnabled = true),
+        )
+
+        assertTrue(toml.contains("LEGACY_SESSION_ID = true"))
+        assertTrue(toml.contains("RESOLVER_TRANSPORT = \"udp\""))
+        assertTrue(toml.contains("QUERY_TYPES = [\"TXT\"]"))
+        assertTrue(toml.contains("MTU_ADAPTIVE_GROUPING = false"))
+        assertTrue(toml.contains("FAST_CONNECT = true"))
+    }
+
+    @Test
+    fun renderClientTomlKeepsFastConnectForMasterStormPreset() {
+        val toml = CottenDnsConfigRenderer.renderClientToml(
+            serverProfile = shop.whitedns.client.model.CottenDnsServerProfile(
+                id = "server",
+                label = "Master Storm",
+                domain = "master.example.com",
+                encryptionKey = "secret-key",
+                encryptionMethod = 1,
+                serverType = ConnectionProfile.ServerTypeCompatibility,
+            ),
+            settings = WhiteDnsSettings(
+                configPreset = "master-storm",
+                fastConnectEnabled = true,
+            ),
+        )
+
+        assertTrue(toml.contains("CONFIG_PRESET = \"default\""))
+        assertTrue(toml.contains("LEGACY_SESSION_ID = true"))
+        assertTrue(toml.contains("RESOLVER_TRANSPORT = \"udp\""))
+        assertTrue(toml.contains("QUERY_TYPES = [\"TXT\"]"))
+        assertTrue(toml.contains("FAST_CONNECT = true"))
+    }
+
     @Test
     fun renderClientTomlAppliesTcpSurvivalPresetToRuntimeKeys() {
         val toml = CottenDnsConfigRenderer.renderClientToml(
