@@ -121,6 +121,13 @@ type ClientConfig struct {
 	// pool is exhausted). When false, the legacy global-minimum MTU across all
 	// valid resolvers is used.
 	MTUAdaptiveGrouping bool `toml:"MTU_ADAPTIVE_GROUPING"`
+	// MTUWeightedMinPool applies only when RESOLVER_BALANCING_STRATEGY is
+	// MTU-weighted (5). In that mode the session runs at the *highest* MTU a viable
+	// subset of resolvers can sustain — instead of the throughput-optimal common
+	// denominator — so resolvers that support a higher MTU actually use it. This is
+	// the minimum number of resolvers that must sustain the raised MTU before it is
+	// adopted, trading a little redundancy for the larger MTU. Default 2.
+	MTUWeightedMinPool int `toml:"MTU_WEIGHTED_MIN_POOL"`
 	// FastConnect allows startup to continue after a small safe pool has passed
 	// MTU probing. The remaining resolvers keep probing in the background and are
 	// folded into the active/reserve pool as they pass.
@@ -325,6 +332,7 @@ func defaultClientConfig() ClientConfig {
 		MTUMaxLoss:                            0.0,
 		MTUGroupGapRatio:                      0.25,
 		MTUAdaptiveGrouping:                   true,
+		MTUWeightedMinPool:                    2,
 		FastConnect:                           false,
 		DNSRandomizeQueryID:                   true,
 		DNSEDNSCookie:                         true,
@@ -664,6 +672,9 @@ func finalizeClientConfig(cfg ClientConfig) (ClientConfig, error) {
 	}
 	if cfg.MTUGroupGapRatio <= 0 {
 		cfg.MTUGroupGapRatio = 0.25
+	}
+	if cfg.MTUWeightedMinPool < 1 {
+		cfg.MTUWeightedMinPool = 2
 	}
 	// Default the active MTU-test trio to the resolvers-mode values until the
 	// caller selects a startup mode via ApplyStartupModeMTU.

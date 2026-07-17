@@ -10,6 +10,7 @@ import android.service.quicksettings.TileService
 import androidx.core.app.NotificationManagerCompat
 import java.util.UUID
 import shop.whitedns.client.MainActivity
+import shop.whitedns.client.model.ConnectionProfile
 import shop.whitedns.client.model.CottenDnsServerProfile
 import shop.whitedns.client.model.WhiteDnsSettings
 import shop.whitedns.client.model.WhiteDnsSettingsStore
@@ -150,7 +151,7 @@ class WhiteDnsTileService : TileService() {
             domain = domain,
             encryptionKey = encryptionKey,
             encryptionMethod = connectionProfile.customServerEncryptionMethod.coerceIn(0, 5),
-            serverType = connectionProfile.serverType,
+            serverType = ConnectionProfile.normalizeServerType(connectionProfile.serverType),
         )
     }
 }

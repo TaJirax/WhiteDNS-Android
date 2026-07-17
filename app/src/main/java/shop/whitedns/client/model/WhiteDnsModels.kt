@@ -42,8 +42,17 @@ data class ConnectionProfile(
         const val ServerTypeCompatibility = "compatibility"
 
         fun normalizeServerType(value: String?): String {
+            // Storm DNS and Master DNS are the same legacy wire generation; the app
+            // models them jointly as "compatibility". Recognize every legacy alias a
+            // profile, exported payload, or older-app link might carry so a
+            // Storm/Master connection is never silently misclassified as native
+            // CottenDns (which would apply the wrong wire mode and break the tunnel).
             return when (value?.trim()?.lowercase()) {
-                ServerTypeCompatibility -> ServerTypeCompatibility
+                ServerTypeCompatibility,
+                "storm", "stormdns", "storm-dns", "storm_dns",
+                "master", "masterdns", "master-dns", "master_dns",
+                "master-storm", "masterstorm", "legacy",
+                -> ServerTypeCompatibility
                 else -> ServerTypeCottenDns
             }
         }

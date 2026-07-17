@@ -97,7 +97,11 @@ object RuntimeLaunchRequestStore {
             domain = json.optString("domain"),
             encryptionKey = json.optString("encryptionKey"),
             encryptionMethod = json.optInt("encryptionMethod", 1),
-            serverType = json.optString("serverType", "CottenDns"),
+            // Normalize on read so a persisted legacy alias (storm/master/…) is
+            // restored as canonical compatibility, never silently as native cotten.
+            serverType = ConnectionProfile.normalizeServerType(
+                json.optString("serverType", ConnectionProfile.ServerTypeCottenDns),
+            ),
         )
     }
 

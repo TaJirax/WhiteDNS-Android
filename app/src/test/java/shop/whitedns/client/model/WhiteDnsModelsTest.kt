@@ -882,6 +882,96 @@ class WhiteDnsModelsTest {
     }
 
     @Test
+    fun normalizeServerTypeRecognizesLegacyStormAndMasterAliases() {
+        for (alias in listOf(
+            "compatibility", "storm", "stormdns", "storm-dns", "storm_dns",
+            "master", "masterdns", "master-dns", "master_dns",
+            "master-storm", "masterstorm", "legacy",
+            "STORM", " MasterDNS ",
+        )) {
+            assertEquals(
+                "alias '$alias' should classify as compatibility",
+                ConnectionProfile.ServerTypeCompatibility,
+                ConnectionProfile.normalizeServerType(alias),
+            )
+        }
+        // Native and unknown/blank values default to CottenDns.
+        for (native in listOf("cottendns", "CottenDns", "cotten", "", "  ", null, "anything")) {
+            assertEquals(
+                ConnectionProfile.ServerTypeCottenDns,
+                ConnectionProfile.normalizeServerType(native),
+            )
+        }
+    }
+
+    @Test
+    fun importProfileLinkWithExplicitLegacyServerTypeClassifiesAsCompatibility() {
+        // Regression: a payload whose server_type carries a legacy alias ("storm"/
+        // "master") — as produced by the original Storm/Master DNS apps or external
+        // tooling — must import as compatibility, not be silently downgraded to
+        // native CottenDns. The payload value is preferred over scheme inference, so
+        // this is the exact path that used to mislabel the connection.
+        for (alias in listOf("storm", "master", "masterdns")) {
+            val payload = """
+                {
+                  "schema": "whitedns.profile",
+                  "version": 1,
+                  "profile": {
+                    "name": "Legacy $alias",
+                    "server": {
+                      "domain": "legacy.example.com",
+                      "encryption_key": "secret-key",
+                      "encryption_method": 1,
+                      "server_type": "$alias"
+                    }
+                  }
+                }
+            """.trimIndent()
+            val encoded = Base64.getUrlEncoder().withoutPadding().encodeToString(payload.toByteArray())
+            // Even over the native CottenDns:// scheme, the explicit legacy payload wins.
+            val imported = WhiteDnsSettings().importCottenDnsProfileLink("CottenDns://$encoded")
+            assertEquals(
+                "server_type '$alias' should import as compatibility",
+                ConnectionProfile.ServerTypeCompatibility,
+                imported.selectedConnectionProfile().serverType,
+            )
+        }
+    }
+
+    @Test
+    fun exportCompatibilityProfileRoundTripsAsCompatibility() {
+        val compatibilityProfile = ConnectionProfile(
+            id = "profile-legacy",
+            name = "Legacy Profile",
+            serverMode = "custom",
+            customServerDomain = "legacy.example.com",
+            customServerEncryptionKey = "secret-key",
+            customServerEncryptionMethod = 1,
+            serverType = ConnectionProfile.ServerTypeCompatibility,
+        )
+        val settings = WhiteDnsSettings(
+            selectedConnectionProfileId = compatibilityProfile.id,
+            connectionProfiles = listOf(ConnectionProfile.defaultProfile(), compatibilityProfile),
+        )
+
+        val link = settings.exportCottenDnsProfileLink(compatibilityProfile)
+        // The exported payload must carry the compatibility type…
+        val exportedServerJson = JSONObject(decodeCottenDnsProfilePayload(link))
+            .getJSONObject("profile")
+            .getJSONObject("server")
+        assertEquals(
+            ConnectionProfile.ServerTypeCompatibility,
+            exportedServerJson.getString("server_type"),
+        )
+        // …and re-importing it must preserve compatibility (not fall back to cotten).
+        val imported = WhiteDnsSettings().importCottenDnsProfileLink(link, nowMillis = 7L)
+        assertEquals(
+            ConnectionProfile.ServerTypeCompatibility,
+            imported.selectedConnectionProfile().serverType,
+        )
+    }
+
+    @Test
     fun exportAndImportCottenDnsProfileLinkUsesOnlyRequiredProfileFields() {
         val resolverProfile = ResolverProfile(
             id = "resolver-main",
