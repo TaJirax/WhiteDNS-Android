@@ -14,9 +14,11 @@ captures/
 *.keystore
 *.p12
 *.pem
+keystore.properties
 id_ed25519*
 id_rsa*
 nemigam*
 
 /storm-dns/
 /CottenDns/
+keystore.properties.example
