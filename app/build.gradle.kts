@@ -28,7 +28,10 @@ android {
     ndkVersion = "26.3.11579264"
 
     defaultConfig {
-        applicationId = "shop.whitedns.client"
+        // Forked app identity: installs side-by-side with the upstream WhiteDNS
+        // (namespace stays shop.whitedns.client so the R class / code package is
+        // unchanged; only the install id and FileProvider authority shift).
+        applicationId = "shop.whitedns.client.c"
         minSdk = 26
         targetSdk = 34
         versionCode = whiteDnsVersionCode.get()

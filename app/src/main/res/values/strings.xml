@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">WhiteDNS</string>
+    <string name="app_name">WhiteDns C</string>
 
     <!-- Navigation -->
     <string name="cd_tab_profiles">Profiles tab - manage connection and resolver profiles</string>
