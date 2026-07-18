@@ -22,3 +22,7 @@ nemigam*
 /storm-dns/
 /CottenDns/
 keystore.properties.example
+.vscode/
+.cxx/
+dist/
+*.log
