@@ -105,7 +105,7 @@ object RuntimeLaunchRequestStore {
         )
     }
 
-    private fun encodeSettings(settings: WhiteDnsSettings): JSONObject {
+    internal fun encodeSettings(settings: WhiteDnsSettings): JSONObject {
         val splitTunnelPackages = JSONArray()
         settings.splitTunnelPackages.forEach { packageName ->
             splitTunnelPackages.put(packageName)
@@ -116,6 +116,10 @@ object RuntimeLaunchRequestStore {
             .put("customServerDomain", settings.customServerDomain)
             .put("customServerEncryptionKey", settings.customServerEncryptionKey)
             .put("customServerEncryptionMethod", settings.customServerEncryptionMethod)
+            .put("configPreset", settings.configPreset)
+            .put("transportMode", settings.transportMode)
+            .put("deliveryMode", settings.deliveryMode)
+            .put("qnameMode", settings.qnameMode)
             .put("connectionMode", settings.connectionMode)
             .put("protocolType", settings.protocolType)
             .put("resolverText", settings.resolverText)
@@ -178,7 +182,7 @@ object RuntimeLaunchRequestStore {
             .put("logLevel", settings.logLevel)
     }
 
-    private fun decodeSettings(json: JSONObject): WhiteDnsSettings {
+    internal fun decodeSettings(json: JSONObject): WhiteDnsSettings {
         val selectedConnectionProfileId = json.optString("selectedConnectionProfileId", ConnectionProfile.DefaultId)
         val settings = WhiteDnsSettings(
             selectedConnectionProfileId = selectedConnectionProfileId,
@@ -197,6 +201,10 @@ object RuntimeLaunchRequestStore {
             customServerDomain = json.optString("customServerDomain"),
             customServerEncryptionKey = json.optString("customServerEncryptionKey"),
             customServerEncryptionMethod = json.optInt("customServerEncryptionMethod", 1),
+            configPreset = json.optString("configPreset", "default"),
+            transportMode = json.optString("transportMode", "preset"),
+            deliveryMode = json.optString("deliveryMode", "preset"),
+            qnameMode = json.optString("qnameMode", "preset"),
             connectionMode = json.optString("connectionMode", "proxy"),
             protocolType = json.optString("protocolType", "SOCKS5"),
             resolverText = json.optString("resolverText"),

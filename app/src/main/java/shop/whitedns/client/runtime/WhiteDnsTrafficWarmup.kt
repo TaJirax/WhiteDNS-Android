@@ -63,10 +63,7 @@ object WhiteDnsTrafficWarmup {
                 }
                 output.write(ProbeHttpRequest)
                 output.flush()
-                runCatching {
-                    input.read(ByteArray(ProbeReadBufferSize))
-                }
-                true
+                input.read(ByteArray(ProbeReadBufferSize)) > 0
             }
         }.getOrDefault(false)
     }
