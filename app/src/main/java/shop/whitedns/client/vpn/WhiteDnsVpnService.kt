@@ -353,9 +353,17 @@ class WhiteDnsVpnService : VpnService() {
                 .setSession("WhiteDNS")
                 .setMtu(VpnMtu)
                 .addAddress(TunIpv4Address, TunIpv4PrefixLength)
+                // IPv6 sinkhole: this is an IPv4-only DNS tunnel, so IPv6 must be
+                // pulled into the tun (and dropped) instead of leaking out the
+                // physical interface. Dual-stack apps fall back to IPv4 via Happy
+                // Eyeballs, so IPv4 connectivity is unaffected.
+                // ponytail: failure-based sinkhole (tun2proxy resets v6 connects);
+                // strip AAAA at the resolver if the fallback latency ever matters.
+                .addAddress(TunIpv6Address, TunIpv6PrefixLength)
                 .addDnsServer(TunDnsServer)
                 .addRoute(TunDnsServer, 32)
                 .addRoute("0.0.0.0", 0)
+                .addRoute("::", 0)
                 .apply {
                     configureSplitTunnelApplications(
                         splitTunnelMode = resolvedSettings.splitTunnelMode,
@@ -662,6 +670,8 @@ class WhiteDnsVpnService : VpnService() {
         private const val ExtraSessionId = "shop.whitedns.client.vpn.extra.SESSION_ID"
         const val TunIpv4Address = "172.19.0.1"
         private const val TunIpv4PrefixLength = 30
+        private const val TunIpv6Address = "fd00:2:fd00:1:1:1:1:1"
+        private const val TunIpv6PrefixLength = 128
         private const val TunDnsServer = "172.19.0.2"
         private const val VpnMtu = 1500
         private const val Tun2proxyStopGracePeriodMillis = 5_000L
