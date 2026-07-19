@@ -1637,6 +1637,17 @@ private fun normalizeIpAddress(raw: String): String? {
         return normalizeIpv4Address(text)
     }
 
+    // A bare IPv6 literal always has at least two colons ("::" or several 16-bit
+    // groups). Exactly one colon means this is an "ip:port" host — never an
+    // address — so bail and let the caller split off the port. This also stops
+    // InetAddress.getByName() below from doing a name-service lookup on an
+    // "ip:port" string, which on Android throws NetworkOnMainThreadException, can
+    // block on the DNS timeout off the main thread, or (behind a captive/broken
+    // resolver) resolve to a bogus address that would silently replace the IP.
+    if (text.count { it == ':' } < 2) {
+        return null
+    }
+
     if (!ResolverIpv6Chars.matches(text)) {
         return null
     }
