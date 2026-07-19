@@ -8,6 +8,9 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
@@ -56,6 +59,7 @@ class WhiteDnsVpnService : VpnService() {
     private var foregroundStarted = false
     private var startJob: Job? = null
     private var keepaliveJob: Job? = null
+    private var networkRestartJob: Job? = null
     private var runtimeReady = false
     private var lastTrafficNotificationUpdateMillis = 0L
     private var currentSessionId = ""
@@ -67,6 +71,33 @@ class WhiteDnsVpnService : VpnService() {
     }
     private val tun2SocksProcessManager by lazy {
         Tun2SocksProcessManager(applicationContext)
+    }
+    private val connectivityManager by lazy {
+        getSystemService(ConnectivityManager::class.java)
+    }
+    @Volatile
+    private var defaultNetworkSignature = ""
+    private val defaultNetworkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            scheduleNetworkHandover(network, null, "available")
+        }
+
+        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+            scheduleNetworkHandover(network, capabilities, "capabilities changed")
+        }
+
+        override fun onLost(network: Network) {
+            scheduleNetworkHandover(network, null, "lost")
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        runCatching {
+            connectivityManager.registerDefaultNetworkCallback(defaultNetworkCallback)
+        }.onFailure { error ->
+            Log.w(Tag, "Unable to monitor default-network changes", error)
+        }
     }
 
     override fun onBind(intent: Intent): IBinder? {
@@ -100,6 +131,8 @@ class WhiteDnsVpnService : VpnService() {
 
     override fun onDestroy() {
         startJob?.cancel()
+        networkRestartJob?.cancel()
+        runCatching { connectivityManager.unregisterNetworkCallback(defaultNetworkCallback) }
         stopVpn()
         exitForeground()
         serviceScope.cancel()
@@ -198,39 +231,60 @@ class WhiteDnsVpnService : VpnService() {
         startJob = serviceScope.launch {
             previousJob?.cancelAndJoin()
             currentSessionId = sessionId
-            try {
-                val launchRequest = RuntimeLaunchRequestStore.load(applicationContext, sessionId)
-                    ?: throw IllegalStateException("Runtime launch request is missing")
-                val settings = launchRequest.settings.runtimeConnectionSettings()
-                val resolvedSettings = settings.resolve()
-                if (resolvedSettings.connectionMode != "vpn") {
-                    throw IllegalStateException("VPN mode is not enabled")
-                }
-                if (resolvedSettings.resolverEntries.isEmpty()) {
-                    throw IllegalStateException("Resolvers are required to connect")
-                }
-                val serverProfile = launchRequest.serverProfile
+            stopping = false
+            var startedOnce = false
+            var restartDelayMillis = RestartInitialDelayMillis
+            while (isActive && !stopping) {
+                try {
+                    val launchRequest = RuntimeLaunchRequestStore.load(applicationContext, sessionId)
+                        ?: throw IllegalStateException("Runtime launch request is missing")
+                    val settings = launchRequest.settings.runtimeConnectionSettings()
+                    val resolvedSettings = settings.resolve()
+                    if (resolvedSettings.connectionMode != "vpn") {
+                        throw IllegalStateException("VPN mode is not enabled")
+                    }
+                    if (resolvedSettings.resolverEntries.isEmpty()) {
+                        throw IllegalStateException("Resolvers are required to connect")
+                    }
+                    val serverProfile = launchRequest.serverProfile
 
-                stopVpn()
-                WhiteDnsProxyService.stop(applicationContext)
-                waitForLocalPortToClose(resolvedSettings.listenPort)
-                stopping = false
-                runtimeReady = false
-                lastTrafficNotificationUpdateMillis = 0L
-                WhiteDnsRuntimeStateStore.markStarting(
-                    context = applicationContext,
-                    settings = settings,
-                    sessionId = sessionId,
-                    message = "Starting full-device VPN",
-                )
-                logInfo("Using custom CottenDns server")
-                logInfo("Starting internal SOCKS bridge")
-                startCottenDnsAndVpn(sessionId, serverProfile, settings, resolvedSettings)
-            } catch (error: CancellationException) {
-                stopVpn()
-                throw error
-            } catch (error: Exception) {
-                failAndStopVpn("Failed to start WhiteDNS VPN", error)
+                    stopVpn()
+                    stopping = false
+                    WhiteDnsProxyService.stop(applicationContext)
+                    waitForLocalPortToClose(resolvedSettings.listenPort)
+                    runtimeReady = false
+                    lastTrafficNotificationUpdateMillis = 0L
+                    WhiteDnsRuntimeStateStore.markStarting(
+                        context = applicationContext,
+                        settings = settings,
+                        sessionId = sessionId,
+                        message = if (startedOnce) "Reconnecting full-device VPN" else "Starting full-device VPN",
+                    )
+                    logInfo("Using custom CottenDns server")
+                    logInfo("Starting internal SOCKS bridge")
+                    startCottenDnsAndVpn(sessionId, serverProfile, settings, resolvedSettings)
+                    startedOnce = true
+                    restartDelayMillis = RestartInitialDelayMillis
+                    monitorCottenDnsProcess()
+                } catch (error: CancellationException) {
+                    stopVpn()
+                    throw error
+                } catch (error: Exception) {
+                    val shouldRetry = startedOnce && isActive && !stopping
+                    stopVpn()
+                    if (!shouldRetry) {
+                        failAndStopVpn("Failed to start WhiteDNS VPN", error)
+                        return@launch
+                    }
+                    stopping = false
+                    updateForegroundNotification("VPN reconnecting")
+                    logWarning(
+                        "CottenDns stopped unexpectedly: ${error.message ?: error::class.java.simpleName}. " +
+                            "Restarting in ${restartDelayMillis / 1_000}s",
+                    )
+                    delay(restartDelayMillis)
+                    restartDelayMillis = (restartDelayMillis * 2).coerceAtMost(RestartMaxDelayMillis)
+                }
             }
         }
     }
@@ -257,7 +311,40 @@ class WhiteDnsVpnService : VpnService() {
         )
         logInfo("SOCKS proxy is ready")
         startVpnRouting(sessionId, settings, resolvedSettings)
-        monitorCottenDnsProcess()
+    }
+
+    private fun scheduleNetworkHandover(
+        network: Network,
+        capabilities: NetworkCapabilities?,
+        reason: String,
+    ) {
+        if (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true) {
+            return
+        }
+        val transports = buildString {
+            if (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) append("wifi,")
+            if (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true) append("cellular,")
+            if (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true) append("ethernet,")
+            if (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true) append("vpn,")
+        }
+        val signature = "$network|$reason|$transports"
+        if (signature == defaultNetworkSignature) {
+            return
+        }
+        defaultNetworkSignature = signature
+        if (!runtimeReady || stopping) {
+            return
+        }
+
+        networkRestartJob?.cancel()
+        networkRestartJob = serviceScope.launch {
+            delay(NetworkHandoverDebounceMillis)
+            if (!runtimeReady || stopping || !isActive) {
+                return@launch
+            }
+            logWarning("Default network $reason; restarting the DNS tunnel on the new route")
+            CottenDnsProcessManager.stop()
+        }
     }
 
     private suspend fun waitForProxyPort(
@@ -391,10 +478,8 @@ class WhiteDnsVpnService : VpnService() {
                     if (stopping) {
                         Log.i(Tag, "tun2proxy stopped with code $exitCode")
                     } else {
-                        val message = "tun2proxy exited with code $exitCode"
-                        serviceScope.launch {
-                            failAndStopVpn(message)
-                        }
+                        logWarning("tun2proxy exited with code $exitCode; restarting the VPN runtime")
+                        CottenDnsProcessManager.stop()
                     }
                 },
             )
@@ -409,12 +494,14 @@ class WhiteDnsVpnService : VpnService() {
             reportReady("Full-device VPN routing started")
             startTrafficKeepalive(resolvedSettings)
         } catch (error: Exception) {
-            failAndStopVpn("Failed to start WhiteDNS VPN", error)
+            throw error
         }
     }
 
     private fun stopVpn() {
         stopping = true
+        networkRestartJob?.cancel()
+        networkRestartJob = null
         runtimeReady = false
         lastTrafficNotificationUpdateMillis = 0L
         stopTrafficKeepalive()
@@ -680,6 +767,9 @@ class WhiteDnsVpnService : VpnService() {
         private const val PreviousRuntimeStopPollMillis = 100L
         private const val TrafficNotificationUpdateIntervalMillis = 1_000L
         private const val TrafficWarmupProbeSpacingMillis = 300L
+        private const val NetworkHandoverDebounceMillis = 1_500L
+        private const val RestartInitialDelayMillis = 2_000L
+        private const val RestartMaxDelayMillis = 30_000L
         private const val NotificationId = 3101
         private const val NotificationChannelId = "whitedns_vpn"
 

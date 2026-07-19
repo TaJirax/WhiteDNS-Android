@@ -40,6 +40,17 @@ class CottenDnsTrafficStatsTest {
     }
 
     @Test
+    fun parseCottenDnsTrafficStatsLineReadsLossAndResolverHealth() {
+        val stats = parseCottenDnsTrafficStatsLine(
+            "↑ 1.00 KB/s (Total: 2.00 KB) | ↓ 3.00 KB/s (Total: 4.00 KB) | loss 12.5% | resolvers 7",
+        )
+
+        requireNotNull(stats)
+        assertEquals(12.5, stats.lossPercent, 0.001)
+        assertEquals(7, stats.activeResolvers)
+    }
+
+    @Test
     fun trafficAccountingKeepsSessionTotalsAcrossRawCounterResets() {
         val accounting = CottenDnsTrafficAccounting()
 

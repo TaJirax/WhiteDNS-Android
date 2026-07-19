@@ -8,6 +8,8 @@ data class CottenDnsTrafficStats(
     val uploadBytes: Long,
     val downloadSpeedBytesPerSecond: Long,
     val uploadSpeedBytesPerSecond: Long,
+    val lossPercent: Double = 0.0,
+    val activeResolvers: Int = 0,
 ) {
     fun hasTraffic(): Boolean {
         return downloadBytes > 0L ||
@@ -85,6 +87,8 @@ fun parseCottenDnsTrafficStatsLine(line: String): CottenDnsTrafficStats? {
         uploadBytes = uploadTotal,
         downloadSpeedBytesPerSecond = downloadSpeed,
         uploadSpeedBytesPerSecond = uploadSpeed,
+        lossPercent = match.groupValues.getOrNull(9)?.toDoubleOrNull()?.coerceIn(0.0, 100.0) ?: 0.0,
+        activeResolvers = match.groupValues.getOrNull(10)?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
     )
 }
 
@@ -101,7 +105,14 @@ fun formatTrafficSpeed(bytesPerSecond: Long): String {
 }
 
 fun formatTrafficNotificationText(stats: CottenDnsTrafficStats): String {
-    return "Down ${formatTrafficSpeed(stats.downloadSpeedBytesPerSecond)} | Up ${formatTrafficSpeed(stats.uploadSpeedBytesPerSecond)}"
+    return buildString {
+        append("Down ${formatTrafficSpeed(stats.downloadSpeedBytesPerSecond)}")
+        append(" | Up ${formatTrafficSpeed(stats.uploadSpeedBytesPerSecond)}")
+        append(" | Loss ${String.format(Locale.US, "%.1f%%", stats.lossPercent)}")
+        if (stats.activeResolvers > 0) {
+            append(" | DNS ${stats.activeResolvers}")
+        }
+    }
 }
 
 private fun parseDataAmount(
@@ -122,5 +133,6 @@ private fun parseDataAmount(
 
 private val AnsiEscapeRegex = Regex("\\u001B\\[[;\\d]*m")
 private val CottenDnsTrafficStatsRegex = Regex(
-    """([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?B)/s\s*\(Total:\s*([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?B)\)\s*\|\s*[^0-9]*([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?B)/s\s*\(Total:\s*([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?B)\)""",
+    """([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?B)/s\s*\(Total:\s*([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?B)\)\s*\|\s*[^0-9]*([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?B)/s\s*\(Total:\s*([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?B)\)(?:.*?loss\s*([0-9]+(?:\.[0-9]+)?)%.*?resolvers\s*(\d+))?""",
+    RegexOption.IGNORE_CASE,
 )
