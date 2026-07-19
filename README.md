@@ -24,12 +24,58 @@ The Android VPN path also packages `tun2proxy`; see [THIRD_PARTY_NOTICES.md](./T
 - Proxy mode with local SOCKS5 support and optional HTTP proxy bridge.
 - VPN mode using Android `VpnService` and packaged `tun2proxy` native libraries.
 - Built-in and custom server profile support.
-- `CottenDns://` (and interoperable `cottendns://`) profile import, plus `CottenDns://` export helpers.
+- Native `CottenDns://` profiles plus `stormdns://` and `masterdns://` compatibility-profile import.
 - Resolver profile management with validation and default resolver assets.
 - Split tunnel options for VPN routing.
 - Runtime connection logs, resolver state, progress, and traffic statistics.
 - Foreground service notifications for long-running proxy and VPN sessions.
 - Jetpack Compose UI with Material 3 components.
+
+## Server Installation And Upgrade
+
+Install a native Linux server in one command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TaJirax/cottenDNS/main/server_linux_install.sh | sudo bash
+```
+
+Upgrade an existing native installation without replacing its configuration or
+encryption key:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TaJirax/cottenDNS/main/server_linux_install.sh | sudo bash -s -- --upgrade
+```
+
+Install with Docker Compose (replace the example domain):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TaJirax/cottenDNS/main/server_docker_install.sh | sudo sh -s -- --domain vpn.example.com
+```
+
+Upgrade an existing Docker installation while retaining
+`/opt/cottendns-docker/data`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TaJirax/cottenDNS/main/server_docker_install.sh | sudo sh -s -- --upgrade
+```
+
+Native upgrades preserve `server_config.toml` and `encrypt_key.txt`, place the
+new default template at `server_config.toml.dist`, health-check the replacement,
+and restore the previous systemd unit if the new server does not start cleanly.
+
+## StormDNS And MasterDNS Compatibility
+
+Choose **Storm / Master DNS** for an older compatible server, or import a
+`stormdns://` / `masterdns://` profile. Compatibility is stored per connection
+profile and remains separate from native CottenDNS mode.
+
+Compatibility connections always use the legacy one-byte session ID, TXT over
+UDP, and classic 63-character QNAME labels. Client-only protections that do not
+change the tunnel protocol—fast connection, resolver pacing, randomized DNS
+query IDs, injected-NXDOMAIN handling, and long-session recovery—remain enabled.
+Native-only or potentially harmful behavior such as TCP/53 fallback, alternate
+record delivery, adaptive/domain-diverse duplication, EDNS cookies, QNAME
+reshaping, and adaptive grouped MTU are forced off for Storm/Master profiles.
 
 ## Project Structure
 

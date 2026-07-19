@@ -47,14 +47,10 @@ object CottenDnsConfigRenderer {
         }.trimEnd()
     }
 
-    // Emits the wire-format + feature keys. serverType controls only the
-    // session-ID wire width (the sole true incompatibility between CottenDns and
-    // MasterDNS/StormDNS). Everything else is server-transparent (QNAME reshaping,
-    // adaptive duplication, DNS hardening, MTU tuning) and is emitted for BOTH
-    // server types. The two server-generation-sensitive knobs — response delivery
-    // types and TCP/53 — are forced to a safe TXT/UDP subset in Compatibility mode
-    // so old MasterDNS/StormDNS servers never receive a query type or transport
-    // they cannot answer.
+    // Emits the per-connection wire-format and feature boundary. Compatibility
+    // preserves the legacy session width and conservative DNS shape; safe
+    // client-only recovery remains shared, while CottenDns-only transport and
+    // traffic-amplifying features are isolated to native profiles.
     private fun StringBuilder.appendServerTypeToml(
         serverType: String,
         configPreset: String,
@@ -69,7 +65,7 @@ object CottenDnsConfigRenderer {
         // CONFIG_PRESET only accepts the engine's own presets; the app-level
         // "master-storm" preset expands to explicit legacy-safe keys over a
         // default base (explicit keys always win over the preset in the engine).
-        appendLine("CONFIG_PRESET = \"${escape(enginePresetBase(preset))}\"")
+        appendLine("CONFIG_PRESET = \"${escape(enginePresetBase(preset, isCompatibility))}\"")
         appendLine("LEGACY_SESSION_ID = $isCompatibility")
 
         // Server-generation-sensitive knobs. Compatibility forces the safe subset
@@ -105,11 +101,19 @@ object CottenDnsConfigRenderer {
         }
         appendLine("QNAME_LABEL_LENGTH = $qnameLen")
 
-        // CottenDns client-side optimization suite. Explicit for CottenDns servers.
-        // Storm/Master (compatibility) intentionally omits it and uses the original
-        // app client preset instead (the base client settings emitted by
-        // appendClientSettingsToml plus the engine's own conservative defaults),
-        // so legacy servers behave exactly as they did in the original app.
+        // These protections are entirely client/resolver-side and do not change
+        // the tunnel protocol, so both CottenDns and legacy Storm/Master profiles
+        // retain them.
+        appendLine("RESOLVER_RATE_LIMIT_ENABLED = true")
+        appendLine("DNS_RANDOMIZE_QUERY_ID = true")
+        appendLine("DNS_QNAME_CASE_RANDOMIZATION = false")
+        appendLine("RESOLVER_IGNORE_INJECTED_NXDOMAIN = true")
+
+        // CottenDns-only optimization suite. Adaptive/domain-diverse duplication
+        // can amplify query volume and EDNS cookies change the DNS wire shape, so
+        // neither is allowed to leak into a Storm/Master compatibility profile.
+        // Compatibility explicitly disables them even when the app's global
+        // settings currently name a CottenDns speed/survival preset.
         if (!isCompatibility) {
             // Adaptive/domain-diverse duplication raise query volume under loss,
             // which can push already-lossy resolvers into timeout-disable on
@@ -118,13 +122,9 @@ object CottenDnsConfigRenderer {
             val aggressiveDuplication = preset == "survival"
             appendLine("ADAPTIVE_DUPLICATION = $aggressiveDuplication")
             appendLine("DUPLICATION_PREFER_DISTINCT_DOMAINS = $aggressiveDuplication")
-            appendLine("RESOLVER_RATE_LIMIT_ENABLED = true")
             appendLine("ADAPTIVE_DUPLICATION_TARGET_DELIVERY = ${adaptiveDuplicationTarget(preset)}")
-            appendLine("DNS_RANDOMIZE_QUERY_ID = true")
             appendLine("DNS_EDNS_COOKIE = true")
-            appendLine("DNS_QNAME_CASE_RANDOMIZATION = false")
             appendLine("EDNS_UDP_SIZE = ${ednsUdpSize(preset)}")
-            appendLine("RESOLVER_IGNORE_INJECTED_NXDOMAIN = true")
             // CottenDns MTU style: adaptive per-group MTU runs each resolver group
             // at its own throughput-optimal operating point.
             appendLine("MTU_PROBE_SAMPLES = ${mtuProbeSamples(preset)}")
@@ -132,6 +132,9 @@ object CottenDnsConfigRenderer {
             appendLine("MTU_ADAPTIVE_GROUPING = true")
             appendLine("MTU_GROUP_GAP_RATIO = 0.25")
         } else {
+            appendLine("ADAPTIVE_DUPLICATION = false")
+            appendLine("DUPLICATION_PREFER_DISTINCT_DOMAINS = false")
+            appendLine("DNS_EDNS_COOKIE = false")
             // Master/Storm DNS MTU style: the classic single global MTU scan the
             // original engine used (one synced MTU across resolvers), not CottenDns's
             // adaptive per-group MTU, with a simple one-sample probe. Emitting these
@@ -154,7 +157,12 @@ object CottenDnsConfigRenderer {
     }
 
     // Maps an app-level preset to the engine's own CONFIG_PRESET vocabulary.
-    private fun enginePresetBase(preset: String): String {
+    private fun enginePresetBase(preset: String, isCompatibility: Boolean): String {
+        if (isCompatibility) {
+            // Never let a CottenDns engine preset silently enable native-only
+            // transport or traffic-amplifying behavior on a legacy connection.
+            return "default"
+        }
         return when (preset) {
             "speed", "survival", "tcp-survival" -> preset
             else -> "default" // "default" and "master-storm"

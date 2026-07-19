@@ -252,18 +252,25 @@ class CottenDnsConfigRendererTest {
         assertTrue(cottenDnsToml.contains("QNAME_LABEL_LENGTH = 42"))
         assertTrue(cottenDnsToml.contains("EDNS_UDP_SIZE = 1232"))
         assertTrue(cottenDnsToml.contains("MTU_MAX_LOSS = 0.5"))
+        assertTrue(cottenDnsToml.contains("ADAPTIVE_DUPLICATION = true"))
+        assertTrue(cottenDnsToml.contains("DUPLICATION_PREFER_DISTINCT_DOMAINS = true"))
+        assertTrue(cottenDnsToml.contains("DNS_EDNS_COOKIE = true"))
         // Legacy Master/Storm uses the classic single-probe, single-MTU scan.
         assertTrue(compatibilityToml.contains("MTU_ADAPTIVE_GROUPING = false"))
         assertTrue(compatibilityToml.contains("MTU_PROBE_SAMPLES = 1"))
         assertTrue(cottenDnsToml.contains("QUERY_TYPES = [\"TXT\", \"CNAME\", \"HTTPS\", \"A\"]"))
-        // The server-transparent preset shape (EDNS, MTU) applies to the
-        // compatibility path too, while the generation-sensitive delivery and
-        // transport are forced to the safe TXT/UDP subset. QNAME reshaping is
-        // forced off (classic 63-char labels) in compatibility mode to guarantee
-        // connectivity with unverified legacy MasterDNS variants.
-        assertTrue(compatibilityToml.contains("CONFIG_PRESET = \"survival\""))
+        // A CottenDns preset must not leak into the compatibility path. Safe
+        // client-side protections stay enabled, while traffic-amplifying and
+        // wire-changing native features are explicitly disabled.
+        assertTrue(compatibilityToml.contains("CONFIG_PRESET = \"default\""))
         assertTrue(compatibilityToml.contains("QNAME_LABEL_LENGTH = 63"))
         assertTrue(compatibilityToml.contains("RESOLVER_TRANSPORT = \"udp\""))
         assertTrue(compatibilityToml.contains("QUERY_TYPES = [\"TXT\"]"))
+        assertTrue(compatibilityToml.contains("ADAPTIVE_DUPLICATION = false"))
+        assertTrue(compatibilityToml.contains("DUPLICATION_PREFER_DISTINCT_DOMAINS = false"))
+        assertTrue(compatibilityToml.contains("DNS_EDNS_COOKIE = false"))
+        assertTrue(compatibilityToml.contains("RESOLVER_RATE_LIMIT_ENABLED = true"))
+        assertTrue(compatibilityToml.contains("DNS_RANDOMIZE_QUERY_ID = true"))
+        assertTrue(compatibilityToml.contains("RESOLVER_IGNORE_INJECTED_NXDOMAIN = true"))
     }
 }
