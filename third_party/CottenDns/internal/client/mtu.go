@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -89,48 +90,69 @@ func (c *Client) RunInitialMTUTests(ctx context.Context) error {
 		return ErrNoValidConnections
 	}
 
-	switch c.cfg.ResolverTransport {
-	case "tcp":
-		c.useTCP.Store(true)
-	default: // "udp" or "auto" both start on UDP
-		c.useTCP.Store(false)
-	}
-
-	var err error
-	if c.cfg.FastConnect {
-		err = c.runFastConnectMTUTests(ctx)
-	} else {
-		err = c.runFullMTUTests(ctx)
-	}
-	if err == nil {
-		return nil
-	}
-
-	// auto fallback: zero usable resolvers over UDP -> retry the fleet over TCP.
-	if c.cfg.ResolverTransport == "auto" && errors.Is(err, ErrNoValidConnections) && !c.useTCP.Load() {
-		if c.log != nil {
-			c.log.Warnf("<yellow>No resolvers passed over UDP/53 — retrying the whole fleet over TCP/53…</yellow>")
-		}
-		c.useTCP.Store(true)
-		for i := range c.connections {
-			c.prepareConnectionMTUScanState(&c.connections[i])
-		}
-		var tcpErr error
-		if c.cfg.FastConnect {
-			tcpErr = c.runFastConnectMTUTests(ctx)
-		} else {
-			tcpErr = c.runFullMTUTests(ctx)
-		}
-		if tcpErr == nil {
+	chain := resolverTransportChain(c.cfg.ResolverTransport)
+	var firstErr error
+	for i, transport := range chain {
+		c.setActiveTransport(transport)
+		if i > 0 {
 			if c.log != nil {
-				c.log.Infof("<green>✅ Resolver transport fell back to TCP/53.</green>")
+				c.log.Warnf(
+					"<yellow>No resolvers passed over %s — retrying the whole fleet over %s…</yellow>",
+					chain[i-1], transport,
+				)
+			}
+			for idx := range c.connections {
+				c.prepareConnectionMTUScanState(&c.connections[idx])
+			}
+		}
+
+		err := c.runMTUScan(ctx)
+		if err == nil {
+			if i > 0 && c.log != nil {
+				c.log.Infof("<green>✅ Resolver transport fell back to %s.</green>", transport)
 			}
 			return nil
 		}
-		// TCP also failed — surface the original error, restore UDP default.
-		c.useTCP.Store(false)
+		if firstErr == nil {
+			firstErr = err
+		}
+		// Only "no usable resolver" is a transport problem worth falling back on;
+		// anything else (cancellation, config) would fail identically elsewhere.
+		if !errors.Is(err, ErrNoValidConnections) {
+			c.setActiveTransport(chain[0])
+			return err
+		}
 	}
-	return err
+
+	// Nothing worked — restore the configured transport so state is predictable.
+	c.setActiveTransport(chain[0])
+	return firstErr
+}
+
+// runMTUScan picks the scan strategy for the current transport: FastConnect
+// stops as soon as enough resolvers pass, otherwise every connection is probed.
+func (c *Client) runMTUScan(ctx context.Context) error {
+	if c.cfg.FastConnect {
+		return c.runFastConnectMTUTests(ctx)
+	}
+	return c.runFullMTUTests(ctx)
+}
+
+// resolverTransportChain returns the ordered fallback chain for a configured
+// RESOLVER_TRANSPORT value. The first entry is always the configured transport.
+func resolverTransportChain(name string) []resolverTransport {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "udp":
+		return []resolverTransport{transportUDP}
+	case "tcp":
+		return []resolverTransport{transportTCP}
+	case "dot":
+		return []resolverTransport{transportDoT, transportUDP, transportTCP}
+	case "doh":
+		return []resolverTransport{transportDoH, transportUDP, transportTCP}
+	default: // "auto"
+		return []resolverTransport{transportUDP, transportTCP}
+	}
 }
 
 // runFullMTUTests performs the original fully-sequential blocking MTU scan and

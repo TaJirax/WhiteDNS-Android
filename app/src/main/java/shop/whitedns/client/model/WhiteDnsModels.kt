@@ -653,11 +653,17 @@ object WhiteDnsOptions {
     // CottenDns delivery/transport override options. "preset" defers to the
     // active preset; the rest are explicit user choices (ignored in Storm/Master
     // compatibility mode, which is always forced to TXT/UDP).
+    // DoT/DoH are opt-in disguise transports: "Auto" never escalates into them.
+    // Picking one is still safe on a hostile network — if the TLS port is blocked
+    // the engine falls back to UDP and then TCP/53 on its own. They require the
+    // matching listener to be enabled on the server.
     val transportModes = listOf(
         Choice("preset", "From preset"),
         Choice("auto", "Auto (UDP + TCP/53 fallback)"),
         Choice("udp", "UDP/53 only"),
         Choice("tcp", "TCP/53 only"),
+        Choice("dot", "DoT (TLS, falls back to UDP/TCP)"),
+        Choice("doh", "DoH (HTTPS, falls back to UDP/TCP)"),
     )
 
     val deliveryModes = listOf(
@@ -1786,7 +1792,7 @@ fun WhiteDnsSettings.resolve(): ResolvedWhiteDnsSettings {
             else -> "default"
         },
         transportMode = when (transportMode.trim().lowercase()) {
-            "auto", "udp", "tcp" -> transportMode.trim().lowercase()
+            "auto", "udp", "tcp", "dot", "doh" -> transportMode.trim().lowercase()
             else -> "preset"
         },
         deliveryMode = when (deliveryMode.trim().lowercase()) {

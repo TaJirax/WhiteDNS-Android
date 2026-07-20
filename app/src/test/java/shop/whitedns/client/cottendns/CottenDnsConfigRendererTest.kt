@@ -180,6 +180,46 @@ class CottenDnsConfigRendererTest {
     }
 
     @Test
+    fun renderClientTomlEmitsEncryptedResolverNameForDotAndDoh() {
+        listOf("dot", "doh").forEach { mode ->
+            val toml = CottenDnsConfigRenderer.renderClientToml(
+                serverProfile = shop.whitedns.client.model.CottenDnsServerProfile(
+                    id = "server",
+                    label = "Encrypted",
+                    domain = "tunnel.example.com, alt.example.com",
+                    encryptionKey = "secret-key",
+                    encryptionMethod = 3,
+                ),
+                settings = WhiteDnsSettings(transportMode = mode),
+            )
+
+            assertTrue(toml.contains("RESOLVER_TRANSPORT = \"$mode\""))
+            // The server issues its DoT/DoH certificate for its own DOMAIN, so the
+            // first tunnel domain is the name the client must present as SNI.
+            assertTrue(toml.contains("RESOLVER_TLS_SERVER_NAME = \"tunnel.example.com\""))
+        }
+    }
+
+    @Test
+    fun renderClientTomlOmitsEncryptedResolverNameForPlainTransports() {
+        listOf("udp", "tcp", "auto").forEach { mode ->
+            val toml = CottenDnsConfigRenderer.renderClientToml(
+                serverProfile = shop.whitedns.client.model.CottenDnsServerProfile(
+                    id = "server",
+                    label = "Plain",
+                    domain = "tunnel.example.com",
+                    encryptionKey = "secret-key",
+                    encryptionMethod = 3,
+                ),
+                settings = WhiteDnsSettings(transportMode = mode),
+            )
+
+            assertTrue(toml.contains("RESOLVER_TRANSPORT = \"$mode\""))
+            assertTrue(!toml.contains("RESOLVER_TLS_SERVER_NAME"))
+        }
+    }
+
+    @Test
     fun renderClientTomlKeepsFastConnectForMasterStormPreset() {
         val toml = CottenDnsConfigRenderer.renderClientToml(
             serverProfile = shop.whitedns.client.model.CottenDnsServerProfile(

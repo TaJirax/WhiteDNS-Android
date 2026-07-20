@@ -9,6 +9,7 @@ package udpserver
 
 import (
 	"context"
+	"crypto/tls"
 	"net"
 	"strconv"
 	"sync"
@@ -80,6 +81,7 @@ type Server struct {
 	immediateConnectedLog    throttledLogState
 	invalidSessionDropLog    throttledLogState
 	droppedPackets           atomic.Uint64
+	ingressRejectedPackets   atomic.Uint64
 	lastDropLogUnix          atomic.Int64
 	deferredDroppedPackets   atomic.Uint64
 	lastDeferredDropLogUnix  atomic.Int64
@@ -100,6 +102,15 @@ type Server struct {
 	dnsUpstreamFailures     atomic.Uint64
 	dnsUpstreamHedges       atomic.Uint64
 	dnsUpstreamTCPFallbacks atomic.Uint64
+	streamConnBudget        *connectionBudget
+	encryptedConnBudget     *connectionBudget
+	dotListenerUp           atomic.Uint64
+	dohListenerUp           atomic.Uint64
+	tlsHandshakeFailures    atomic.Uint64
+	encryptedConnRejected   atomic.Uint64
+	dohRequestRejected      atomic.Uint64
+	sniPassthroughActive    atomic.Uint64
+	sniPassthroughFailures  atomic.Uint64
 }
 
 // Stats is a point-in-time snapshot of operational counters maintained by the
@@ -108,6 +119,7 @@ type Server struct {
 // goroutine.
 type Stats struct {
 	DroppedPackets          uint64
+	IngressRejectedPackets  uint64
 	DeferredDroppedPackets  uint64
 	StreamCapRejections     uint64
 	DNSResponseOversize     uint64
@@ -121,6 +133,13 @@ type Stats struct {
 	DNSUpstreamFailures     uint64
 	DNSUpstreamHedges       uint64
 	DNSUpstreamTCPFallbacks uint64
+	DoTListenerUp           uint64
+	DoHListenerUp           uint64
+	TLSHandshakeFailures    uint64
+	EncryptedConnRejected   uint64
+	DoHRequestRejected      uint64
+	SNIPassthroughActive    uint64
+	SNIPassthroughFailures  uint64
 }
 
 // Stats returns a consistent snapshot of the server's observability counters.
@@ -138,6 +157,7 @@ func (s *Server) Stats() Stats {
 	activeSessions, activeStreams := s.sessions.operationalCounts()
 	return Stats{
 		DroppedPackets:          s.droppedPackets.Load(),
+		IngressRejectedPackets:  s.ingressRejectedPackets.Load(),
 		DeferredDroppedPackets:  s.deferredDroppedPackets.Load(),
 		StreamCapRejections:     s.sessions.streamCapRejectionsCount(),
 		DNSResponseOversize:     s.dnsResponseOversize.Load(),
@@ -151,6 +171,13 @@ func (s *Server) Stats() Stats {
 		DNSUpstreamFailures:     s.dnsUpstreamFailures.Load(),
 		DNSUpstreamHedges:       s.dnsUpstreamHedges.Load(),
 		DNSUpstreamTCPFallbacks: s.dnsUpstreamTCPFallbacks.Load(),
+		DoTListenerUp:           s.dotListenerUp.Load(),
+		DoHListenerUp:           s.dohListenerUp.Load(),
+		TLSHandshakeFailures:    s.tlsHandshakeFailures.Load(),
+		EncryptedConnRejected:   s.encryptedConnRejected.Load(),
+		DoHRequestRejected:      s.dohRequestRejected.Load(),
+		SNIPassthroughActive:    s.sniPassthroughActive.Load(),
+		SNIPassthroughFailures:  s.sniPassthroughFailures.Load(),
 	}
 }
 
@@ -179,6 +206,7 @@ func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Se
 	if dropLogInterval <= 0 {
 		dropLogInterval = 2 * time.Second
 	}
+	streamBudget := newConnectionBudget(cfg.TCPMaxConns)
 	socksConnectTimeout := cfg.SOCKSConnectTimeout()
 	if socksConnectTimeout <= 0 {
 		socksConnectTimeout = 8 * time.Second
@@ -231,6 +259,11 @@ func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Se
 			},
 		},
 		deferredInflight: make(map[uint64]struct{}, 128),
+		streamConnBudget: streamBudget,
+		// DoT/DoH draw from a capped sub-share so that flooding the optional
+		// encrypted listeners can never consume the connection headroom the
+		// plain DNS-over-TCP/53 survival path depends on.
+		encryptedConnBudget: newChildConnectionBudget(streamBudget, encryptedConnCeiling(cfg.TCPMaxConns, cfg.EncryptedMaxConns)),
 		packetPool: sync.Pool{
 			New: func() any {
 				return make([]byte, cfg.MaxPacketSize)
@@ -399,15 +432,17 @@ func (s *Server) Run(ctx context.Context) error {
 
 	s.configureSocketBuffers(conn)
 
+	queueCapacity := s.ingressQueueCapacity()
 	s.log.Infof(
-		"\U0001F4E1 <green>UDP Listener Ready, Addr: <cyan>%s</cyan>, Readers: <cyan>%d</cyan>, Workers: <cyan>%d</cyan>, Queue: <cyan>%d</cyan></green>",
+		"\U0001F4E1 <green>UDP Listener Ready, Addr: <cyan>%s</cyan>, Readers: <cyan>%d</cyan>, Workers: <cyan>%d</cyan>, Queue: <cyan>%d</cyan> <gray>(memory cap %d bytes)</gray></green>",
 		s.cfg.Address(),
 		s.cfg.UDPReaders,
 		s.cfg.DNSRequestWorkers,
-		s.cfg.MaxConcurrentRequests,
+		queueCapacity,
+		s.cfg.MaxIngressQueueBytes,
 	)
 
-	reqCh := make(chan request, s.cfg.MaxConcurrentRequests)
+	reqCh := make(chan request, queueCapacity)
 	var workerWG sync.WaitGroup
 	cleanupDone := make(chan struct{})
 
@@ -431,6 +466,45 @@ func (s *Server) Run(ctx context.Context) error {
 				s.log.Warnf("<yellow>TCP listener stopped: <cyan>%v</cyan></yellow>", err)
 			}
 		}()
+	}
+
+	// Optional encrypted-DNS listeners (DoT/DoH). These are opt-in disguise
+	// transports, not part of the UDP/TCP fallback chain — the client selects
+	// them and falls back to UDP/TCP itself on failure. Both share one TLS config,
+	// built once (manual cert -> ACME -> self-signed). A TLS build error only
+	// disables the encrypted listeners; the UDP/TCP tunnel keeps serving.
+	if s.cfg.DoTListenerEnabled || s.cfg.DoHListenerEnabled {
+		// TLS material is only needed when we terminate TLS ourselves: DoT always,
+		// and DoH unless it runs behind a TLS-terminating proxy (DoHTLSEnabled=false).
+		var tlsCfg *tls.Config
+		needTLS := s.cfg.DoTListenerEnabled || s.dohWillTerminateTLS()
+		if needTLS {
+			cfg, tlsErr := s.buildStreamTLSConfig()
+			if tlsErr != nil {
+				s.log.Errorf("<red>Encrypted-DNS TLS setup failed, TLS listeners disabled: <yellow>%v</yellow></red>", tlsErr)
+			} else {
+				tlsCfg = cfg
+			}
+		}
+		if s.cfg.DoTListenerEnabled && tlsCfg != nil {
+			tcpWG.Add(1)
+			go func() {
+				defer tcpWG.Done()
+				if err := s.serveDoT(runCtx, s.cfg.DoTListenHost, s.cfg.DoTListenPort, dotTLSConfig(tlsCfg)); err != nil && runCtx.Err() == nil {
+					s.log.Warnf("<yellow>DoT listener stopped: <cyan>%v</cyan></yellow>", err)
+				}
+			}()
+		}
+		// DoH starts whenever it is not TLS (behind-proxy) or TLS built successfully.
+		// The supervisor owns the listener and keeps re-deciding model A vs model B
+		// so a panel installed (or removed) later flips coexistence automatically.
+		if s.cfg.DoHListenerEnabled && (!s.dohWillTerminateTLS() || tlsCfg != nil) {
+			tcpWG.Add(1)
+			go func() {
+				defer tcpWG.Done()
+				s.runDoHSupervisor(runCtx, dohTLSConfig(tlsCfg))
+			}()
+		}
 	}
 
 	go func() {

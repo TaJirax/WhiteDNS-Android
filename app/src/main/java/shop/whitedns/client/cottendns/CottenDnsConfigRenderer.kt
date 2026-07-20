@@ -42,7 +42,7 @@ object CottenDnsConfigRenderer {
             appendLine("DATA_ENCRYPTION_METHOD = ${serverProfile.encryptionMethod}")
             appendLine("ENCRYPTION_KEY = \"${escape(serverProfile.encryptionKey)}\"")
             appendLine("PROTOCOL_TYPE = \"${escape(resolved.protocolType)}\"")
-            appendServerTypeToml(serverProfile.serverType, resolved.configPreset, resolved.transportMode, resolved.deliveryMode, resolved.qnameMode)
+            appendServerTypeToml(serverProfile.serverType, resolved.configPreset, resolved.transportMode, resolved.deliveryMode, resolved.qnameMode, serverProfile.domain)
             appendClientSettingsToml(resolved)
         }.trimEnd()
     }
@@ -57,6 +57,7 @@ object CottenDnsConfigRenderer {
         transportMode: String,
         deliveryMode: String,
         qnameMode: String,
+        serverDomain: String = "",
     ) {
         val isCompatibility =
             ConnectionProfile.normalizeServerType(serverType) == ConnectionProfile.ServerTypeCompatibility
@@ -82,6 +83,15 @@ object CottenDnsConfigRenderer {
             else -> queryTypeSet(preset)
         }
         appendLine("RESOLVER_TRANSPORT = \"$transport\"")
+        // The encrypted transports need an SNI/certificate name. The server issues
+        // its DoT/DoH certificate for its own DOMAIN — ACME and the self-signed
+        // fallback both use it — so the tunnel domain is the correct name to
+        // present, and no extra user setting is required for the default setup.
+        if (transport == "dot" || transport == "doh") {
+            primaryDomain(serverDomain).takeIf { it.isNotEmpty() }?.let { name ->
+                appendLine("RESOLVER_TLS_SERVER_NAME = \"${escape(name)}\"")
+            }
+        }
         appendLine("QUERY_TYPES = ${queryTypesToml(queryTypes)}")
 
         // DNS query-id/EDNS/NXDOMAIN hardening applies to the resolver hop, not
@@ -249,7 +259,7 @@ object CottenDnsConfigRenderer {
             appendLine("DATA_ENCRYPTION_METHOD = ${serverProfile.encryptionMethod}")
             appendLine("ENCRYPTION_KEY = \"${escape(serverProfile.encryptionKey)}\"")
             appendLine("PROTOCOL_TYPE = \"${escape(resolved.protocolType)}\"")
-            appendServerTypeToml(serverProfile.serverType, resolved.configPreset, resolved.transportMode, resolved.deliveryMode, resolved.qnameMode)
+            appendServerTypeToml(serverProfile.serverType, resolved.configPreset, resolved.transportMode, resolved.deliveryMode, resolved.qnameMode, serverProfile.domain)
             appendClientSettingsToml(
                 resolved = resolved,
                 listenIp = "127.0.0.1",
@@ -407,6 +417,15 @@ object CottenDnsConfigRenderer {
 
     // CottenDns supports multiple tunnel domains. The profile stores them as a
     // comma-separated string; render each as its own DOMAINS array entry.
+    // primaryDomain picks the first entry of the comma-separated DOMAIN list,
+    // which is the name the server's certificate is issued for.
+    private fun primaryDomain(domain: String): String {
+        return domain.split(',')
+            .map { it.trim().trimEnd('.') }
+            .firstOrNull { it.isNotEmpty() }
+            .orEmpty()
+    }
+
     private fun domainsToml(domain: String): String {
         val domains = domain.split(',')
             .map { it.trim().trimEnd('.') }
