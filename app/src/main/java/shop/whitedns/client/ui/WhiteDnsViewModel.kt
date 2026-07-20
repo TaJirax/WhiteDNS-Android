@@ -367,8 +367,9 @@ class WhiteDnsViewModel(
                 stopServerTestManagers()
             }
             val settings = uiState.settings.syncSelectedConnectionProfileFields()
+            appendLog(connectionContextSummary(settings))
             if (settings.resolve().resolverEntries.isEmpty()) {
-                appendLog("Resolvers are required to connect")
+                appendLog("Resolvers are required to connect (validResolvers=0)")
                 activeRuntimeSessionId = ""
                 uiState = uiState.copy(
                     connectionStatus = ConnectionStatus.DISCONNECTED,
@@ -383,13 +384,12 @@ class WhiteDnsViewModel(
             val connectionProfile = settings.selectedConnectionProfile()
             val serverProfile = selectServerProfile(settings)
             if (serverProfile == null) {
-                appendLog(
-                    if (connectionProfile.serverMode == "custom") {
-                        "Custom CottenDns domain and encryption key are required"
-                    } else {
-                        "No CottenDns server profile configured"
-                    },
-                )
+                val serverProfileError = if (connectionProfile.serverMode == "custom") {
+                    "Custom CottenDns domain and encryption key are required"
+                } else {
+                    "No CottenDns server profile configured"
+                }
+                appendLog("$serverProfileError — ${connectionContextSummary(settings)}")
                 activeRuntimeSessionId = ""
                 uiState = uiState.copy(
                     connectionStatus = ConnectionStatus.DISCONNECTED,
@@ -444,7 +444,13 @@ class WhiteDnsViewModel(
                 resetTrafficAccounting()
                 resetSocksStreamTracker()
                 resetRuntimeUiThrottles()
-                appendLog("Connection failed")
+                appendLog(
+                    "Connection failed at phase=${uiState.connectionProgress.phase} " +
+                        "(probed=${uiState.connectionProgress.completed}/${uiState.connectionProgress.total}, " +
+                        "valid=${uiState.connectionProgress.valid}, " +
+                        "rejected=${uiState.connectionProgress.rejected}) — " +
+                        connectionContextSummary(settings),
+                )
                 uiState = uiState.copy(
                     connectionStatus = ConnectionStatus.DISCONNECTED,
                     connectionStats = ConnectionStats(),
@@ -1864,7 +1870,6 @@ class WhiteDnsViewModel(
 
     fun refreshScanState() {
         scanStateRefreshJob?.cancel()
-        val currentSettings = uiState.settings
         scanStateRefreshJob = viewModelScope.launch {
             val refreshResult = withContext(Dispatchers.IO) {
                 val persistedState = WhiteDnsScanStateStore.read(appContext)
@@ -1877,11 +1882,23 @@ class WhiteDnsViewModel(
                 }
                 ScanStateRefreshResult(
                     scanState = scanState,
-                    updatedSettings = syncScannerResultProfile(currentSettings, scanState),
+                    scannerResultText = if (scanState.isRunning) {
+                        ""
+                    } else {
+                        WhiteDnsScannerResultStore.readValidResolvers(appContext)
+                            .joinToString(separator = "\n")
+                    },
                 )
             }
+            // Merge against uiState.settings *after* the IO hop, never against a
+            // snapshot taken before it: settings the user saved while that read was
+            // in flight would otherwise be written back stale and silently reverted.
+            val updatedSettings = syncScannerResultProfile(
+                scannerResultText = refreshResult.scannerResultText,
+                scanState = refreshResult.scanState,
+            )
             uiState = uiState.copy(
-                settings = refreshResult.updatedSettings ?: uiState.settings,
+                settings = updatedSettings ?: uiState.settings,
                 scanState = refreshResult.scanState,
             )
         }
@@ -2124,6 +2141,7 @@ class WhiteDnsViewModel(
                 return@launch
             }
             appendLogOnMain(message)
+            appendLogOnMain("Proxy runtime failed — ${connectionContextSummary(uiState.settings)}")
             connectJob?.cancel()
             statsJob?.cancel()
             verificationJob?.cancel()
@@ -2160,6 +2178,7 @@ class WhiteDnsViewModel(
                 return@launch
             }
             appendLogOnMain(message)
+            appendLogOnMain("VPN runtime failed — ${connectionContextSummary(uiState.settings)}")
             connectJob?.cancel()
             statsJob?.cancel()
             verificationJob?.cancel()
@@ -2434,19 +2453,17 @@ class WhiteDnsViewModel(
     }
 
     private fun syncScannerResultProfile(
-        currentSettings: WhiteDnsSettings,
+        scannerResultText: String,
         scanState: WhiteDnsScanState,
     ): WhiteDnsSettings? {
         if (scanState.isRunning) {
             return null
         }
-        val scannerResultText = WhiteDnsScannerResultStore.readValidResolvers(appContext)
-            .joinToString(separator = "\n")
         if (scannerResultText.isBlank() || scannerResultText == lastScannerResultProfileText) {
             return null
         }
 
-        val normalizedSettings = currentSettings.syncSelectedConnectionProfileFields()
+        val normalizedSettings = uiState.settings.syncSelectedConnectionProfileFields()
         val resolverProfiles = normalizedSettings.normalizedResolverProfiles()
         val existingIndex = resolverProfiles.indexOfFirst { it.name == ScannerResultProfileName }
         if (existingIndex >= 0 && resolverProfiles[existingIndex].resolverText == scannerResultText) {
@@ -2959,7 +2976,7 @@ class WhiteDnsViewModel(
 
     private data class ScanStateRefreshResult(
         val scanState: WhiteDnsScanState,
-        val updatedSettings: WhiteDnsSettings?,
+        val scannerResultText: String,
     )
 
     private fun isIgnoringBatteryOptimizations(context: Context): Boolean {
@@ -2985,6 +3002,36 @@ class WhiteDnsViewModel(
 
     private fun <T> java.util.Enumeration<T>.asSequence(): Sequence<T> {
         return Collections.list(this).asSequence()
+    }
+
+    // One-line snapshot of everything needed to reproduce a connection report:
+    // which profiles are selected, the wire settings actually in force, and how
+    // many resolvers survived validation. Raw setting values (not UI labels) are
+    // logged on purpose so they can be grepped and pasted straight into a config.
+    // A transport/delivery of "preset" means it is inherited from the preset.
+    private fun connectionContextSummary(settings: WhiteDnsSettings): String {
+        val resolved = settings.resolve()
+        val connectionProfile = settings.selectedConnectionProfile()
+        val advancedName = settings.normalizedAdvancedProfiles()
+            .firstOrNull { it.id == settings.selectedAdvancedProfileId }
+            ?.name
+            ?: "Default"
+        val resolverName = settings.normalizedResolverProfiles()
+            .firstOrNull { it.id == settings.selectedResolverProfileId }
+            ?.name
+            ?: "None"
+        return listOf(
+            "connectionProfile=${connectionProfile.name}",
+            "serverType=${ConnectionProfile.normalizeServerType(connectionProfile.serverType)}",
+            "settingProfile=$advancedName",
+            "resolverProfile=$resolverName",
+            "validResolvers=${resolved.resolverEntries.size}",
+            "preset=${resolved.configPreset}",
+            "transport=${resolved.transportMode}",
+            "delivery=${resolved.deliveryMode}",
+            "qname=${resolved.qnameMode}",
+            "mode=${resolved.connectionMode}",
+        ).joinToString(separator = ", ")
     }
 
     private fun appendLog(message: String) {
