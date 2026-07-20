@@ -194,8 +194,8 @@ func (c *Client) new_stream(streamID uint16, conn net.Conn, targetPayload []byte
 	}
 
 	arqCfg := arq.Config{
-		WindowSize:                  c.cfg.ARQWindowSize,
-		RTO:                         c.cfg.ARQInitialRTOSeconds,
+		WindowSize:                  c.effectiveARQWindowSize(),
+		RTO:                         c.effectiveARQInitialRTO(),
 		MaxRTO:                      c.cfg.ARQMaxRTOSeconds,
 		StartPaused:                 conn != nil && streamID != 0 && (c.cfg.ProtocolType == "SOCKS5" || c.cfg.ProtocolType == "TCP"),
 		EnableControlReliability:    true,
@@ -205,7 +205,7 @@ func (c *Client) new_stream(streamID uint16, conn net.Conn, targetPayload []byte
 		InactivityTimeout:           c.cfg.ARQInactivityTimeoutSeconds,
 		DataPacketTTL:               c.cfg.ARQDataPacketTTLSeconds,
 		MaxDataRetries:              c.cfg.ARQMaxDataRetries,
-		DataNackMaxGap:              c.cfg.ARQDataNackMaxGap,
+		DataNackMaxGap:              c.effectiveARQDataNackMaxGap(),
 		DataNackInitialDelaySeconds: c.cfg.ARQDataNackInitialDelaySeconds,
 		DataNackRepeatSeconds:       c.cfg.ARQDataNackRepeatSeconds,
 		ControlPacketTTL:            c.cfg.ARQControlPacketTTLSeconds,
@@ -632,8 +632,8 @@ func (c *Client) InitVirtualStream0() {
 	}
 
 	arqCfg := arq.Config{
-		WindowSize:                  c.cfg.ARQWindowSize,
-		RTO:                         c.cfg.ARQInitialRTOSeconds,
+		WindowSize:                  c.effectiveARQWindowSize(),
+		RTO:                         c.effectiveARQInitialRTO(),
 		MaxRTO:                      c.cfg.ARQMaxRTOSeconds,
 		IsVirtual:                   true, // Bypasses internal timeout closures
 		EnableControlReliability:    true,
