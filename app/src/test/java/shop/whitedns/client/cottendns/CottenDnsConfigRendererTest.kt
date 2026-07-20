@@ -179,17 +179,19 @@ class CottenDnsConfigRendererTest {
         assertTrue(toml.contains("FAST_CONNECT = true"))
     }
 
+    private fun encryptedServerProfile() = shop.whitedns.client.model.CottenDnsServerProfile(
+        id = "server",
+        label = "Encrypted",
+        domain = "tunnel.example.com, alt.example.com",
+        encryptionKey = "secret-key",
+        encryptionMethod = 3,
+    )
+
     @Test
     fun renderClientTomlEmitsEncryptedResolverNameForDotAndDoh() {
         listOf("dot", "doh").forEach { mode ->
             val toml = CottenDnsConfigRenderer.renderClientToml(
-                serverProfile = shop.whitedns.client.model.CottenDnsServerProfile(
-                    id = "server",
-                    label = "Encrypted",
-                    domain = "tunnel.example.com, alt.example.com",
-                    encryptionKey = "secret-key",
-                    encryptionMethod = 3,
-                ),
+                serverProfile = encryptedServerProfile(),
                 settings = WhiteDnsSettings(transportMode = mode),
             )
 
@@ -198,6 +200,55 @@ class CottenDnsConfigRendererTest {
             // first tunnel domain is the name the client must present as SNI.
             assertTrue(toml.contains("RESOLVER_TLS_SERVER_NAME = \"tunnel.example.com\""))
         }
+    }
+
+    @Test
+    fun renderClientTomlEmitsOnlyTheSelectedEncryptedTransportKeys() {
+        val dot = CottenDnsConfigRenderer.renderClientToml(
+            serverProfile = encryptedServerProfile(),
+            settings = WhiteDnsSettings(transportMode = "dot", resolverDoTPort = "8853"),
+        )
+        assertTrue(dot.contains("RESOLVER_DOT_PORT = 8853"))
+        assertTrue(!dot.contains("RESOLVER_DOH_PORT"))
+        assertTrue(!dot.contains("RESOLVER_DOH_PATH"))
+
+        val doh = CottenDnsConfigRenderer.renderClientToml(
+            serverProfile = encryptedServerProfile(),
+            settings = WhiteDnsSettings(
+                transportMode = "doh",
+                resolverDoHPort = "8443",
+                resolverDoHPath = "resolve",
+            ),
+        )
+        assertTrue(doh.contains("RESOLVER_DOH_PORT = 8443"))
+        // A path typed without the leading slash is still emitted as a valid path.
+        assertTrue(doh.contains("RESOLVER_DOH_PATH = \"/resolve\""))
+        assertTrue(!doh.contains("RESOLVER_DOT_PORT"))
+    }
+
+    @Test
+    fun renderClientTomlPrefersExplicitServerNameAndEmitsPinWhenSet() {
+        val toml = CottenDnsConfigRenderer.renderClientToml(
+            serverProfile = encryptedServerProfile(),
+            settings = WhiteDnsSettings(
+                transportMode = "doh",
+                resolverTlsServerName = "Doh.Example.Com.",
+                resolverTlsPin = "abc123",
+            ),
+        )
+
+        assertTrue(toml.contains("RESOLVER_TLS_SERVER_NAME = \"doh.example.com\""))
+        assertTrue(toml.contains("RESOLVER_TLS_PIN = \"abc123\""))
+    }
+
+    @Test
+    fun renderClientTomlOmitsPinWhenUnset() {
+        val toml = CottenDnsConfigRenderer.renderClientToml(
+            serverProfile = encryptedServerProfile(),
+            settings = WhiteDnsSettings(transportMode = "dot"),
+        )
+
+        assertTrue(!toml.contains("RESOLVER_TLS_PIN"))
     }
 
     @Test

@@ -42,7 +42,7 @@ object CottenDnsConfigRenderer {
             appendLine("DATA_ENCRYPTION_METHOD = ${serverProfile.encryptionMethod}")
             appendLine("ENCRYPTION_KEY = \"${escape(serverProfile.encryptionKey)}\"")
             appendLine("PROTOCOL_TYPE = \"${escape(resolved.protocolType)}\"")
-            appendServerTypeToml(serverProfile.serverType, resolved.configPreset, resolved.transportMode, resolved.deliveryMode, resolved.qnameMode, serverProfile.domain)
+            appendServerTypeToml(serverProfile.serverType, resolved.configPreset, resolved.transportMode, resolved.deliveryMode, resolved.qnameMode, serverProfile.domain, resolved)
             appendClientSettingsToml(resolved)
         }.trimEnd()
     }
@@ -57,7 +57,8 @@ object CottenDnsConfigRenderer {
         transportMode: String,
         deliveryMode: String,
         qnameMode: String,
-        serverDomain: String = "",
+        serverDomain: String,
+        resolved: ResolvedWhiteDnsSettings,
     ) {
         val isCompatibility =
             ConnectionProfile.normalizeServerType(serverType) == ConnectionProfile.ServerTypeCompatibility
@@ -83,15 +84,7 @@ object CottenDnsConfigRenderer {
             else -> queryTypeSet(preset)
         }
         appendLine("RESOLVER_TRANSPORT = \"$transport\"")
-        // The encrypted transports need an SNI/certificate name. The server issues
-        // its DoT/DoH certificate for its own DOMAIN — ACME and the self-signed
-        // fallback both use it — so the tunnel domain is the correct name to
-        // present, and no extra user setting is required for the default setup.
-        if (transport == "dot" || transport == "doh") {
-            primaryDomain(serverDomain).takeIf { it.isNotEmpty() }?.let { name ->
-                appendLine("RESOLVER_TLS_SERVER_NAME = \"${escape(name)}\"")
-            }
-        }
+        appendEncryptedResolverToml(transport, serverDomain, resolved)
         appendLine("QUERY_TYPES = ${queryTypesToml(queryTypes)}")
 
         // DNS query-id/EDNS/NXDOMAIN hardening applies to the resolver hop, not
@@ -259,7 +252,7 @@ object CottenDnsConfigRenderer {
             appendLine("DATA_ENCRYPTION_METHOD = ${serverProfile.encryptionMethod}")
             appendLine("ENCRYPTION_KEY = \"${escape(serverProfile.encryptionKey)}\"")
             appendLine("PROTOCOL_TYPE = \"${escape(resolved.protocolType)}\"")
-            appendServerTypeToml(serverProfile.serverType, resolved.configPreset, resolved.transportMode, resolved.deliveryMode, resolved.qnameMode, serverProfile.domain)
+            appendServerTypeToml(serverProfile.serverType, resolved.configPreset, resolved.transportMode, resolved.deliveryMode, resolved.qnameMode, serverProfile.domain, resolved)
             appendClientSettingsToml(
                 resolved = resolved,
                 listenIp = "127.0.0.1",
@@ -417,6 +410,37 @@ object CottenDnsConfigRenderer {
 
     // CottenDns supports multiple tunnel domains. The profile stores them as a
     // comma-separated string; render each as its own DOMAINS array entry.
+    // Emits the encrypted-resolver keys, and only for the transports that use
+    // them, so a UDP/TCP config stays exactly as it was before DoT/DoH existed.
+    //
+    // The server name defaults to the tunnel domain rather than being required:
+    // the server issues its DoT/DoH certificate for its own DOMAIN (via ACME or
+    // the self-signed fallback), so that is the name the client must present as
+    // SNI. Anyone terminating TLS on a different hostname can override it.
+    private fun StringBuilder.appendEncryptedResolverToml(
+        transport: String,
+        serverDomain: String,
+        resolved: ResolvedWhiteDnsSettings,
+    ) {
+        if (transport != "dot" && transport != "doh") {
+            return
+        }
+
+        val serverName = resolved.resolverTlsServerName.ifEmpty { primaryDomain(serverDomain) }
+        if (serverName.isNotEmpty()) {
+            appendLine("RESOLVER_TLS_SERVER_NAME = \"${escape(serverName)}\"")
+        }
+        if (resolved.resolverTlsPin.isNotEmpty()) {
+            appendLine("RESOLVER_TLS_PIN = \"${escape(resolved.resolverTlsPin)}\"")
+        }
+        if (transport == "dot") {
+            appendLine("RESOLVER_DOT_PORT = ${resolved.resolverDoTPort}")
+        } else {
+            appendLine("RESOLVER_DOH_PORT = ${resolved.resolverDoHPort}")
+            appendLine("RESOLVER_DOH_PATH = \"${escape(resolved.resolverDoHPath)}\"")
+        }
+    }
+
     // primaryDomain picks the first entry of the comma-separated DOMAIN list,
     // which is the name the server's certificate is issued for.
     private fun primaryDomain(domain: String): String {

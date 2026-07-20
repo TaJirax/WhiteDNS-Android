@@ -6043,9 +6043,12 @@ private fun CottenDnsFeaturePresetGroup(
         onValueChange = { mode -> onSettingsChange(settings.copy(qnameMode = mode)) },
     )
     Text(
-        text = "Transport, delivery, and QNAME reshaping override the preset. In Storm / Master DNS mode they are always forced to TXT over UDP with classic 63-char labels for compatibility.",
+        text = "These three override the preset. Storm / Master DNS mode always forces TXT over UDP with 63-char labels.",
         style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp, color = WhiteDnsPalette.Muted),
     )
+    // Only shown for the encrypted transports. Everyone else never sees these
+    // four fields, which is what keeps this section short for the common case.
+    CottenDnsEncryptedResolverFields(settings, onSettingsChange)
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -6059,6 +6062,98 @@ private fun CottenDnsFeaturePresetGroup(
         CottenDnsFeatureLine("Delivery", presetSummary.delivery)
         CottenDnsFeatureLine("MTU", presetSummary.mtu)
         CottenDnsFeatureLine("Hardening", "query-id randomization, EDNS cookie, injected NXDOMAIN ignore")
+    }
+}
+
+// Settings for the DoT/DoH transports. Rendered only when one of them is
+// selected: they are meaningless otherwise, and hiding them keeps the transport
+// section the same length it has always been for UDP/TCP users.
+//
+// Every field is optional. Left blank, the hostname follows the server profile's
+// domain — which is what the server's own certificate is issued for — so the
+// common setup needs nothing here at all.
+@Composable
+private fun CottenDnsEncryptedResolverFields(
+    settings: WhiteDnsSettings,
+    onSettingsChange: (WhiteDnsSettings) -> Unit,
+) {
+    val isDoH = settings.transportMode == "doh"
+    val isDoT = settings.transportMode == "dot"
+    if (!isDoH && !isDoT) {
+        return
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(WhiteDnsPalette.SurfaceAlt)
+            .border(1.5.dp, WhiteDnsPalette.Border, RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            text = if (isDoH) "DNS over HTTPS" else "DNS over TLS",
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 11.sp,
+                color = WhiteDnsPalette.Ink,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 0.6.sp,
+            ),
+        )
+        Text(
+            text = "Optional. Leave blank to use the server's own domain and standard port.",
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp, color = WhiteDnsPalette.Muted),
+        )
+
+        WhiteDnsTextField(
+            label = "Server hostname",
+            value = settings.resolverTlsServerName,
+            onValueChange = { onSettingsChange(settings.copy(resolverTlsServerName = it)) },
+            placeholder = "Same as the server domain",
+            rawValue = true,
+        )
+        if (isDoT) {
+            WhiteDnsTextField(
+                label = "Port",
+                value = settings.resolverDoTPort,
+                onValueChange = { onSettingsChange(settings.copy(resolverDoTPort = it)) },
+                placeholder = "853",
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                rawValue = true,
+            )
+        } else {
+            WhiteDnsTextField(
+                label = "Port",
+                value = settings.resolverDoHPort,
+                onValueChange = { onSettingsChange(settings.copy(resolverDoHPort = it)) },
+                placeholder = "443",
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                rawValue = true,
+            )
+            WhiteDnsTextField(
+                label = "Query path",
+                value = settings.resolverDoHPath,
+                onValueChange = { onSettingsChange(settings.copy(resolverDoHPath = it)) },
+                placeholder = "/dns-query",
+                rawValue = true,
+            )
+        }
+        WhiteDnsTextField(
+            label = "Certificate pin",
+            value = settings.resolverTlsPin,
+            onValueChange = { onSettingsChange(settings.copy(resolverTlsPin = it)) },
+            placeholder = "Only for a self-signed server",
+            rawValue = true,
+        )
+        Text(
+            text = "A pin trusts one certificate and nothing else. Set it when the server uses its own self-signed certificate instead of a public one.",
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp, color = WhiteDnsPalette.Muted),
+        )
+        Text(
+            text = "If the encrypted port is blocked, the app falls back to UDP and then TCP on port 53.",
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp, color = WhiteDnsPalette.Muted),
+        )
     }
 }
 

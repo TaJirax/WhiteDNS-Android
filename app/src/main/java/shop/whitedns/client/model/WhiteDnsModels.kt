@@ -271,6 +271,15 @@ data class WhiteDnsSettings(
     // classic 63-char labels; "moderate"/"aggressive" shorten labels for a lower
     // fingerprint. Forced off in Storm/Master compatibility mode.
     val qnameMode: String = "preset",
+    // Encrypted-resolver settings, used only when transportMode is "dot"/"doh".
+    // resolverTlsServerName blank means "use the server profile's domain", which
+    // is what the server's own certificate is issued for, so it is the right
+    // default and most people never touch these.
+    val resolverTlsServerName: String = "",
+    val resolverTlsPin: String = "",
+    val resolverDoTPort: String = "853",
+    val resolverDoHPort: String = "443",
+    val resolverDoHPath: String = "/dns-query",
     val connectionMode: String = "proxy",
     val protocolType: String = "SOCKS5",
     val themeMode: String = WhiteDnsThemeMode.System,
@@ -346,6 +355,11 @@ data class ResolvedWhiteDnsSettings(
     val transportMode: String,
     val deliveryMode: String,
     val qnameMode: String,
+    val resolverTlsServerName: String,
+    val resolverTlsPin: String,
+    val resolverDoTPort: Int,
+    val resolverDoHPort: Int,
+    val resolverDoHPath: String,
     val connectionMode: String,
     val protocolType: String,
     val resolverEntries: List<String>,
@@ -1803,6 +1817,12 @@ fun WhiteDnsSettings.resolve(): ResolvedWhiteDnsSettings {
             "off", "moderate", "aggressive" -> qnameMode.trim().lowercase()
             else -> "preset"
         },
+        resolverTlsServerName = resolverTlsServerName.trim().trimEnd('.').lowercase(),
+        resolverTlsPin = resolverTlsPin.trim(),
+        resolverDoTPort = boundedInt(resolverDoTPort, 853, 1, 65535),
+        resolverDoHPort = boundedInt(resolverDoHPort, 443, 1, 65535),
+        resolverDoHPath = resolverDoHPath.trim().ifEmpty { "/dns-query" }
+            .let { if (it.startsWith("/")) it else "/$it" },
         connectionMode = when (connectionMode) {
             "proxy", "vpn" -> connectionMode
             else -> "proxy"

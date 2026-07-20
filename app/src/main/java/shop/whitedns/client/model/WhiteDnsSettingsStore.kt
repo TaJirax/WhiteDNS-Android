@@ -90,6 +90,11 @@ class WhiteDnsSettingsStore(
             transportMode = preferences.getString(KeyTransportMode, defaults.transportMode) ?: defaults.transportMode,
             deliveryMode = preferences.getString(KeyDeliveryMode, defaults.deliveryMode) ?: defaults.deliveryMode,
             qnameMode = preferences.getString(KeyQnameMode, defaults.qnameMode) ?: defaults.qnameMode,
+            resolverTlsServerName = preferences.getString(KeyResolverTlsServerName, defaults.resolverTlsServerName) ?: defaults.resolverTlsServerName,
+            resolverTlsPin = preferences.getString(KeyResolverTlsPin, defaults.resolverTlsPin) ?: defaults.resolverTlsPin,
+            resolverDoTPort = preferences.getString(KeyResolverDoTPort, defaults.resolverDoTPort) ?: defaults.resolverDoTPort,
+            resolverDoHPort = preferences.getString(KeyResolverDoHPort, defaults.resolverDoHPort) ?: defaults.resolverDoHPort,
+            resolverDoHPath = preferences.getString(KeyResolverDoHPath, defaults.resolverDoHPath) ?: defaults.resolverDoHPath,
             customServerDomain = legacyCustomServerDomain,
             customServerEncryptionKey = legacyCustomServerEncryptionKey,
             customServerEncryptionMethod = legacyCustomServerEncryptionMethod,
@@ -249,6 +254,11 @@ class WhiteDnsSettingsStore(
             .putString(KeyTransportMode, normalizedSettings.transportMode)
             .putString(KeyDeliveryMode, normalizedSettings.deliveryMode)
             .putString(KeyQnameMode, normalizedSettings.qnameMode)
+            .putString(KeyResolverTlsServerName, normalizedSettings.resolverTlsServerName)
+            .putString(KeyResolverTlsPin, normalizedSettings.resolverTlsPin)
+            .putString(KeyResolverDoTPort, normalizedSettings.resolverDoTPort)
+            .putString(KeyResolverDoHPort, normalizedSettings.resolverDoHPort)
+            .putString(KeyResolverDoHPath, normalizedSettings.resolverDoHPath)
             .putString(KeyCustomServerDomain, normalizedSettings.customServerDomain)
             .putString(KeyCustomServerEncryptionKey, normalizedSettings.customServerEncryptionKey)
             .putInt(KeyCustomServerEncryptionMethod, normalizedSettings.customServerEncryptionMethod)
@@ -740,6 +750,11 @@ class WhiteDnsSettingsStore(
         const val KeyTransportMode = "transport_mode"
         const val KeyDeliveryMode = "delivery_mode"
         const val KeyQnameMode = "qname_mode"
+        const val KeyResolverTlsServerName = "resolver_tls_server_name"
+        const val KeyResolverTlsPin = "resolver_tls_pin"
+        const val KeyResolverDoTPort = "resolver_dot_port"
+        const val KeyResolverDoHPort = "resolver_doh_port"
+        const val KeyResolverDoHPath = "resolver_doh_path"
         const val KeyCustomServerDomain = "custom_server_domain"
         const val KeyCustomServerEncryptionKey = "custom_server_encryption_key"
         const val KeyCustomServerEncryptionMethod = "custom_server_encryption_method"
