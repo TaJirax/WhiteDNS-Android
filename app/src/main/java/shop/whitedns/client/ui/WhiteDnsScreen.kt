@@ -6102,7 +6102,7 @@ private fun CottenDnsEncryptedResolverFields(
             ),
         )
         Text(
-            text = "Optional. Leave blank to use the server's own domain and standard port.",
+            text = "Works as-is with public resolvers like Cloudflare or Google. Fill these in only when you point at your own encrypted DNS server.",
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp, color = WhiteDnsPalette.Muted),
         )
 
@@ -6110,7 +6110,7 @@ private fun CottenDnsEncryptedResolverFields(
             label = "Server hostname",
             value = settings.resolverTlsServerName,
             onValueChange = { onSettingsChange(settings.copy(resolverTlsServerName = it)) },
-            placeholder = "Same as the server domain",
+            placeholder = "Leave blank for public resolvers",
             rawValue = true,
         )
         if (isDoT) {

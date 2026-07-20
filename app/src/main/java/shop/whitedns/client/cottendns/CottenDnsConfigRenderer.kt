@@ -42,7 +42,7 @@ object CottenDnsConfigRenderer {
             appendLine("DATA_ENCRYPTION_METHOD = ${serverProfile.encryptionMethod}")
             appendLine("ENCRYPTION_KEY = \"${escape(serverProfile.encryptionKey)}\"")
             appendLine("PROTOCOL_TYPE = \"${escape(resolved.protocolType)}\"")
-            appendServerTypeToml(serverProfile.serverType, resolved.configPreset, resolved.transportMode, resolved.deliveryMode, resolved.qnameMode, serverProfile.domain, resolved)
+            appendServerTypeToml(serverProfile.serverType, resolved.configPreset, resolved.transportMode, resolved.deliveryMode, resolved.qnameMode, resolved)
             appendClientSettingsToml(resolved)
         }.trimEnd()
     }
@@ -57,7 +57,6 @@ object CottenDnsConfigRenderer {
         transportMode: String,
         deliveryMode: String,
         qnameMode: String,
-        serverDomain: String,
         resolved: ResolvedWhiteDnsSettings,
     ) {
         val isCompatibility =
@@ -84,7 +83,7 @@ object CottenDnsConfigRenderer {
             else -> queryTypeSet(preset)
         }
         appendLine("RESOLVER_TRANSPORT = \"$transport\"")
-        appendEncryptedResolverToml(transport, serverDomain, resolved)
+        appendEncryptedResolverToml(transport, resolved)
         appendLine("QUERY_TYPES = ${queryTypesToml(queryTypes)}")
 
         // DNS query-id/EDNS/NXDOMAIN hardening applies to the resolver hop, not
@@ -252,7 +251,7 @@ object CottenDnsConfigRenderer {
             appendLine("DATA_ENCRYPTION_METHOD = ${serverProfile.encryptionMethod}")
             appendLine("ENCRYPTION_KEY = \"${escape(serverProfile.encryptionKey)}\"")
             appendLine("PROTOCOL_TYPE = \"${escape(resolved.protocolType)}\"")
-            appendServerTypeToml(serverProfile.serverType, resolved.configPreset, resolved.transportMode, resolved.deliveryMode, resolved.qnameMode, serverProfile.domain, resolved)
+            appendServerTypeToml(serverProfile.serverType, resolved.configPreset, resolved.transportMode, resolved.deliveryMode, resolved.qnameMode, resolved)
             appendClientSettingsToml(
                 resolved = resolved,
                 listenIp = "127.0.0.1",
@@ -413,22 +412,24 @@ object CottenDnsConfigRenderer {
     // Emits the encrypted-resolver keys, and only for the transports that use
     // them, so a UDP/TCP config stays exactly as it was before DoT/DoH existed.
     //
-    // The server name defaults to the tunnel domain rather than being required:
-    // the server issues its DoT/DoH certificate for its own DOMAIN (via ACME or
-    // the self-signed fallback), so that is the name the client must present as
-    // SNI. Anyone terminating TLS on a different hostname can override it.
+    // The hostname is deliberately NOT defaulted to the tunnel domain. The common
+    // case is a public resolver (Cloudflare, Google, Quad9), which is reached at
+    // its own IP and whose certificate carries that IP as a SAN — so leaving the
+    // key unset lets the engine verify against the resolver's own identity and
+    // works with no configuration. Sending the tunnel domain as SNI to a public
+    // resolver would instead fail verification and silently drop back to UDP/TCP.
+    // Pointing the client straight at your own DoT/DoH server is the case that
+    // needs a hostname, and that is what the setting is for.
     private fun StringBuilder.appendEncryptedResolverToml(
         transport: String,
-        serverDomain: String,
         resolved: ResolvedWhiteDnsSettings,
     ) {
         if (transport != "dot" && transport != "doh") {
             return
         }
 
-        val serverName = resolved.resolverTlsServerName.ifEmpty { primaryDomain(serverDomain) }
-        if (serverName.isNotEmpty()) {
-            appendLine("RESOLVER_TLS_SERVER_NAME = \"${escape(serverName)}\"")
+        if (resolved.resolverTlsServerName.isNotEmpty()) {
+            appendLine("RESOLVER_TLS_SERVER_NAME = \"${escape(resolved.resolverTlsServerName)}\"")
         }
         if (resolved.resolverTlsPin.isNotEmpty()) {
             appendLine("RESOLVER_TLS_PIN = \"${escape(resolved.resolverTlsPin)}\"")
@@ -439,15 +440,6 @@ object CottenDnsConfigRenderer {
             appendLine("RESOLVER_DOH_PORT = ${resolved.resolverDoHPort}")
             appendLine("RESOLVER_DOH_PATH = \"${escape(resolved.resolverDoHPath)}\"")
         }
-    }
-
-    // primaryDomain picks the first entry of the comma-separated DOMAIN list,
-    // which is the name the server's certificate is issued for.
-    private fun primaryDomain(domain: String): String {
-        return domain.split(',')
-            .map { it.trim().trimEnd('.') }
-            .firstOrNull { it.isNotEmpty() }
-            .orEmpty()
     }
 
     private fun domainsToml(domain: String): String {

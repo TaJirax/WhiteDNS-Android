@@ -187,8 +187,12 @@ class CottenDnsConfigRendererTest {
         encryptionMethod = 3,
     )
 
+    // A public resolver (Cloudflare, Google, Quad9) is reached at its own IP and
+    // its certificate carries that IP as a SAN, so no hostname must be emitted by
+    // default. Sending the tunnel domain as SNI to a public resolver would fail
+    // verification and silently fall back to UDP/TCP.
     @Test
-    fun renderClientTomlEmitsEncryptedResolverNameForDotAndDoh() {
+    fun renderClientTomlOmitsServerNameSoPublicResolversVerifyByTheirOwnIdentity() {
         listOf("dot", "doh").forEach { mode ->
             val toml = CottenDnsConfigRenderer.renderClientToml(
                 serverProfile = encryptedServerProfile(),
@@ -196,9 +200,7 @@ class CottenDnsConfigRendererTest {
             )
 
             assertTrue(toml.contains("RESOLVER_TRANSPORT = \"$mode\""))
-            // The server issues its DoT/DoH certificate for its own DOMAIN, so the
-            // first tunnel domain is the name the client must present as SNI.
-            assertTrue(toml.contains("RESOLVER_TLS_SERVER_NAME = \"tunnel.example.com\""))
+            assertTrue(!toml.contains("RESOLVER_TLS_SERVER_NAME"))
         }
     }
 
