@@ -180,9 +180,14 @@ func (c *Client) applySessionAccept(packet VpnProto.Packet, initPayload []byte, 
 	c.sessionCookie = packet.Payload[sidLen]
 	c.responseMode = initPayload[0]
 	c.uploadCompression, c.downloadCompression = compression.SplitPair(packet.Payload[sidLen+1])
+	// Apply the server's ceilings before the session is announced as ready.
+	// Everything below derives from them (the compression decision reads the
+	// effective minimum size, and the policy refreshes maxPackedBlocks), and
+	// the send path starts reading those values the moment sessionReady is set
+	// -- so the policy has to be in place first, not merely stored afterwards.
+	c.applyServerClientPolicy(packet.Payload)
 	c.sessionReady = true
 	c.applySessionCompressionPolicy()
-	c.applyServerClientPolicy(packet.Payload)
 	c.clearSessionInitBusyUntil()
 	c.resetSessionInitState()
 	c.clearSessionResetPending()
@@ -487,7 +492,7 @@ func (c *Client) applySessionCompressionPolicy() {
 		return
 	}
 
-	minSize := c.cfg.CompressionMinSize
+	minSize := c.effectiveCompressionMinSize()
 	if minSize <= 0 {
 		minSize = compression.DefaultMinSize
 	}
