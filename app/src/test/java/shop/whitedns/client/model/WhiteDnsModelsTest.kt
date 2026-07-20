@@ -542,6 +542,42 @@ class WhiteDnsModelsTest {
     }
 
     @Test
+    fun savingSettingProfileKeepsCottenDnsWireSettingsEditedInTheDialog() {
+        // The dialog edits these on its draft, but AdvancedSettingsProfile does not
+        // carry them, so saving through the profile alone used to drop them and the
+        // fields snapped back to "From preset".
+        val settings = WhiteDnsSettings()
+        val draft = settings.copy(
+            transportMode = "doh",
+            deliveryMode = "txt-cname",
+            qnameMode = "aggressive",
+            resolverTlsServerName = "dns.example.org",
+            resolverTlsPin = "pin123",
+            resolverDoTPort = "8853",
+            resolverDoHPort = "8443",
+            resolverDoHPath = "/query",
+        )
+        val profile = AdvancedSettingsProfile.fromSettings(
+            settings = draft,
+            id = "advanced-wire",
+            name = "Wire",
+        )
+
+        val saved = settings
+            .copyCottenDnsWireSettingsFrom(draft)
+            .upsertAdvancedProfile(profile)
+
+        assertEquals("doh", saved.transportMode)
+        assertEquals("txt-cname", saved.deliveryMode)
+        assertEquals("aggressive", saved.qnameMode)
+        assertEquals("dns.example.org", saved.resolverTlsServerName)
+        assertEquals("pin123", saved.resolverTlsPin)
+        assertEquals("8853", saved.resolverDoTPort)
+        assertEquals("8443", saved.resolverDoHPort)
+        assertEquals("/query", saved.resolverDoHPath)
+    }
+
+    @Test
     fun moveAdvancedProfileToIndexReordersCustomProfilesAfterDefault() {
         val first = AdvancedSettingsProfile.fromSettings(
             settings = WhiteDnsSettings(uploadDuplication = "4"),

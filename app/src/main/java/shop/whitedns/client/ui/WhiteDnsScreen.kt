@@ -176,6 +176,7 @@ import shop.whitedns.client.model.applyAdvancedProfile
 import shop.whitedns.client.model.applyAutoTunePreset
 import shop.whitedns.client.model.applyCottenDnsConfigPreset
 import shop.whitedns.client.model.applyResolverProfileToSelectedConnection
+import shop.whitedns.client.model.copyCottenDnsWireSettingsFrom
 import shop.whitedns.client.model.deleteConnectionProfile
 import shop.whitedns.client.model.deleteDuplicateConnectionProfiles
 import shop.whitedns.client.model.deleteAdvancedProfile
@@ -988,13 +989,17 @@ private fun ConnectTabContent(
                 initialName = editingProfile?.name ?: advancedSaveAsInitialName(selectedAdvancedProfile, WhiteDnsL10n.homeSelectorCustomAdvanced, WhiteDnsL10n.profileNameCopySuffix),
                 initialSettings = settings,
                 onDismiss = { showAdvancedEditDialog = false },
-                onSave = { profile ->
+                onSave = { profile, draftSettings ->
                     val nextProfile = if (editingProfile == null) {
                         profile
                     } else {
                         profile.copy(id = editingProfile.id)
                     }
-                    onSettingsChange(settings.upsertAdvancedProfile(nextProfile))
+                    onSettingsChange(
+                        settings
+                            .copyCottenDnsWireSettingsFrom(draftSettings)
+                            .upsertAdvancedProfile(nextProfile),
+                    )
                     showAdvancedEditDialog = false
                 },
             )
@@ -1016,8 +1021,12 @@ private fun ConnectTabContent(
                     initialName = result.label,
                     initialSettings = initialSettings,
                     onDismiss = { autoTuneSaveResult = null },
-                    onSave = { profile ->
-                        onSettingsChange(settings.upsertAdvancedProfile(profile))
+                    onSave = { profile, draftSettings ->
+                        onSettingsChange(
+                            settings
+                                .copyCottenDnsWireSettingsFrom(draftSettings)
+                                .upsertAdvancedProfile(profile),
+                        )
                         autoTuneSaveResult = null
                     },
                 )
@@ -4343,8 +4352,12 @@ private fun SettingProfilesSettings(
             initialName = advancedSaveAsInitialName(selectedProfile, WhiteDnsL10n.homeSelectorCustomAdvanced, WhiteDnsL10n.profileNameCopySuffix),
             initialSettings = settings,
             onDismiss = { showCreateDialog = false },
-            onSave = { profile ->
-                onSettingsChange(settings.upsertAdvancedProfile(profile))
+            onSave = { profile, draftSettings ->
+                onSettingsChange(
+                    settings
+                        .copyCottenDnsWireSettingsFrom(draftSettings)
+                        .upsertAdvancedProfile(profile),
+                )
                 showCreateDialog = false
             },
         )
@@ -4370,8 +4383,12 @@ private fun SettingProfilesSettings(
             initialName = profile.name,
             initialSettings = settings.applyAdvancedProfile(profile),
             onDismiss = { editProfile = null },
-            onSave = { updatedProfile ->
-                onSettingsChange(settings.upsertAdvancedProfile(updatedProfile.copy(id = profile.id)))
+            onSave = { updatedProfile, draftSettings ->
+                onSettingsChange(
+                    settings
+                        .copyCottenDnsWireSettingsFrom(draftSettings)
+                        .upsertAdvancedProfile(updatedProfile.copy(id = profile.id)),
+                )
                 editProfile = null
             },
         )
@@ -4417,7 +4434,9 @@ private fun AdvancedSettingsProfileDialog(
     initialName: String,
     initialSettings: WhiteDnsSettings,
     onDismiss: () -> Unit,
-    onSave: (AdvancedSettingsProfile) -> Unit,
+    // The draft is handed back alongside the profile because the CottenDns wire
+    // settings live on WhiteDnsSettings, not on AdvancedSettingsProfile.
+    onSave: (AdvancedSettingsProfile, WhiteDnsSettings) -> Unit,
 ) {
     var name by remember(profile?.id) { mutableStateOf(initialName) }
     var draftSettings by remember(profile?.id) { mutableStateOf(initialSettings) }
@@ -4485,6 +4504,7 @@ private fun AdvancedSettingsProfileDialog(
                                 id = profile?.id.orEmpty(),
                                 name = name.trim(),
                             ),
+                            draftSettings,
                         )
                     },
                 )

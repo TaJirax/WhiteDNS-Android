@@ -1045,6 +1045,24 @@ fun WhiteDnsSettings.selectAdvancedProfile(profileId: String): WhiteDnsSettings 
     return applyAdvancedProfile(selectedProfile)
 }
 
+// The CottenDns wire settings are deliberately global rather than per-profile,
+// so AdvancedSettingsProfile does not carry them. The settings dialog still
+// edits them on its draft, which means a save has to copy them across
+// explicitly -- going through AdvancedSettingsProfile alone silently drops
+// them and the fields snap back to "From preset".
+fun WhiteDnsSettings.copyCottenDnsWireSettingsFrom(source: WhiteDnsSettings): WhiteDnsSettings {
+    return copy(
+        transportMode = source.transportMode,
+        deliveryMode = source.deliveryMode,
+        qnameMode = source.qnameMode,
+        resolverTlsServerName = source.resolverTlsServerName,
+        resolverTlsPin = source.resolverTlsPin,
+        resolverDoTPort = source.resolverDoTPort,
+        resolverDoHPort = source.resolverDoHPort,
+        resolverDoHPath = source.resolverDoHPath,
+    )
+}
+
 fun WhiteDnsSettings.saveSelectedAdvancedProfile(): WhiteDnsSettings {
     if (selectedAdvancedProfileId == AdvancedSettingsProfile.DefaultId) {
         return syncSelectedConnectionProfileFields()
