@@ -221,6 +221,9 @@ QUERY_TYPES = ["TXT"]
 	if cfg.DownloadPacketDuplicationCount != 3 {
 		t.Fatalf("speed preset download duplication = %d, want 3", cfg.DownloadPacketDuplicationCount)
 	}
+	if cfg.SessionInitRacingCount != 5 {
+		t.Fatalf("speed preset session init racing count = %d, want 5", cfg.SessionInitRacingCount)
+	}
 	if !cfg.AdaptiveDuplication || cfg.MTUProbeSamples != 4 || cfg.MTUMaxLoss != 0.25 {
 		t.Fatalf("speed preset loss controls not applied: adaptive=%v samples=%d maxLoss=%v", cfg.AdaptiveDuplication, cfg.MTUProbeSamples, cfg.MTUMaxLoss)
 	}
