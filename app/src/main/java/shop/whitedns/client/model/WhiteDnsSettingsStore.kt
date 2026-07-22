@@ -86,6 +86,15 @@ class WhiteDnsSettingsStore(
             ) ?: defaults.selectedAdvancedProfileId,
             advancedProfiles = advancedProfiles,
             serverMode = legacyServerMode,
+            configPreset = preferences.getString(KeyConfigPreset, defaults.configPreset) ?: defaults.configPreset,
+            transportMode = preferences.getString(KeyTransportMode, defaults.transportMode) ?: defaults.transportMode,
+            deliveryMode = preferences.getString(KeyDeliveryMode, defaults.deliveryMode) ?: defaults.deliveryMode,
+            qnameMode = preferences.getString(KeyQnameMode, defaults.qnameMode) ?: defaults.qnameMode,
+            resolverTlsServerName = preferences.getString(KeyResolverTlsServerName, defaults.resolverTlsServerName) ?: defaults.resolverTlsServerName,
+            resolverTlsPin = preferences.getString(KeyResolverTlsPin, defaults.resolverTlsPin) ?: defaults.resolverTlsPin,
+            resolverDoTPort = preferences.getString(KeyResolverDoTPort, defaults.resolverDoTPort) ?: defaults.resolverDoTPort,
+            resolverDoHPort = preferences.getString(KeyResolverDoHPort, defaults.resolverDoHPort) ?: defaults.resolverDoHPort,
+            resolverDoHPath = preferences.getString(KeyResolverDoHPath, defaults.resolverDoHPath) ?: defaults.resolverDoHPath,
             customServerDomain = legacyCustomServerDomain,
             customServerEncryptionKey = legacyCustomServerEncryptionKey,
             customServerEncryptionMethod = legacyCustomServerEncryptionMethod,
@@ -123,6 +132,8 @@ class WhiteDnsSettingsStore(
                 ?: defaults.mtuTestTimeoutLogs,
             mtuTestParallelismLogs = preferences.getString(KeyMtuTestParallelismLogs, defaults.mtuTestParallelismLogs)
                 ?: defaults.mtuTestParallelismLogs,
+            scanResolverParallelism = preferences.getString(KeyScanResolverParallelism, defaults.scanResolverParallelism)
+                ?: defaults.scanResolverParallelism,
             rxTxWorkers = preferences.getString(KeyRxTxWorkers, defaults.rxTxWorkers) ?: defaults.rxTxWorkers,
             tunnelProcessWorkers = preferences.getString(KeyTunnelProcessWorkers, defaults.tunnelProcessWorkers)
                 ?: defaults.tunnelProcessWorkers,
@@ -195,6 +206,7 @@ class WhiteDnsSettingsStore(
             startupMode = preferences.getString(KeyStartupMode, defaults.startupMode) ?: defaults.startupMode,
             pingWatchdogSeconds = preferences.getString(KeyPingWatchdogSeconds, defaults.pingWatchdogSeconds)
                 ?: defaults.pingWatchdogSeconds,
+            fastConnectEnabled = preferences.getBoolean(KeyFastConnectEnabled, defaults.fastConnectEnabled),
             trafficWarmupEnabled = preferences.getBoolean(KeyTrafficWarmupEnabled, defaults.trafficWarmupEnabled),
             trafficWarmupProbeCount = preferences.getString(
                 KeyTrafficWarmupProbeCount,
@@ -238,6 +250,15 @@ class WhiteDnsSettingsStore(
             .putString(KeySelectedAdvancedProfileId, normalizedSettings.selectedAdvancedProfileId)
             .putString(KeyAdvancedProfiles, encodeAdvancedProfiles(normalizedSettings.advancedProfiles))
             .putString(KeyServerMode, normalizedSettings.serverMode)
+            .putString(KeyConfigPreset, normalizedSettings.configPreset)
+            .putString(KeyTransportMode, normalizedSettings.transportMode)
+            .putString(KeyDeliveryMode, normalizedSettings.deliveryMode)
+            .putString(KeyQnameMode, normalizedSettings.qnameMode)
+            .putString(KeyResolverTlsServerName, normalizedSettings.resolverTlsServerName)
+            .putString(KeyResolverTlsPin, normalizedSettings.resolverTlsPin)
+            .putString(KeyResolverDoTPort, normalizedSettings.resolverDoTPort)
+            .putString(KeyResolverDoHPort, normalizedSettings.resolverDoHPort)
+            .putString(KeyResolverDoHPath, normalizedSettings.resolverDoHPath)
             .putString(KeyCustomServerDomain, normalizedSettings.customServerDomain)
             .putString(KeyCustomServerEncryptionKey, normalizedSettings.customServerEncryptionKey)
             .putInt(KeyCustomServerEncryptionMethod, normalizedSettings.customServerEncryptionMethod)
@@ -269,6 +290,7 @@ class WhiteDnsSettingsStore(
             .putString(KeyMtuTestRetriesLogs, normalizedSettings.mtuTestRetriesLogs)
             .putString(KeyMtuTestTimeoutLogs, normalizedSettings.mtuTestTimeoutLogs)
             .putString(KeyMtuTestParallelismLogs, normalizedSettings.mtuTestParallelismLogs)
+            .putString(KeyScanResolverParallelism, normalizedSettings.scanResolverParallelism)
             .putString(KeyRxTxWorkers, normalizedSettings.rxTxWorkers)
             .putString(KeyTunnelProcessWorkers, normalizedSettings.tunnelProcessWorkers)
             .putString(KeyTunnelPacketTimeoutSeconds, normalizedSettings.tunnelPacketTimeoutSeconds)
@@ -293,6 +315,7 @@ class WhiteDnsSettingsStore(
             .putString(KeyLocalDnsPort, normalizedSettings.localDnsPort)
             .putString(KeyStartupMode, normalizedSettings.startupMode)
             .putString(KeyPingWatchdogSeconds, normalizedSettings.pingWatchdogSeconds)
+            .putBoolean(KeyFastConnectEnabled, normalizedSettings.fastConnectEnabled)
             .putBoolean(KeyTrafficWarmupEnabled, normalizedSettings.trafficWarmupEnabled)
             .putString(KeyTrafficWarmupProbeCount, normalizedSettings.trafficWarmupProbeCount)
             .putString(KeyTrafficKeepaliveIntervalSeconds, normalizedSettings.trafficKeepaliveIntervalSeconds)
@@ -337,6 +360,9 @@ class WhiteDnsSettingsStore(
                     customServerDomain = item.optString("customServerDomain"),
                     customServerEncryptionKey = item.optString("customServerEncryptionKey"),
                     customServerEncryptionMethod = item.optInt("customServerEncryptionMethod", 1),
+                    serverType = ConnectionProfile.normalizeServerType(
+                        item.optString("serverType", ConnectionProfile.ServerTypeCottenDns),
+                    ),
                     resolverProfileId = item.optString("resolverProfileId"),
                     connectionMode = item.optString("connectionMode", "proxy"),
                 )
@@ -357,6 +383,7 @@ class WhiteDnsSettingsStore(
                     .put("customServerDomain", profile.customServerDomain)
                     .put("customServerEncryptionKey", profile.customServerEncryptionKey)
                     .put("customServerEncryptionMethod", profile.customServerEncryptionMethod)
+                    .put("serverType", profile.serverType)
                     .put("resolverProfileId", profile.resolverProfileId)
                     .put("connectionMode", profile.connectionMode),
             )
@@ -432,6 +459,7 @@ class WhiteDnsSettingsStore(
                 AdvancedSettingsProfile(
                     id = item.optString("id"),
                     name = item.optString("name", "Advanced Settings"),
+                    configPreset = item.optString("configPreset", defaultProfile.configPreset),
                     listenIp = item.optString("listenIp", defaultProfile.listenIp),
                     listenPort = item.optString("listenPort", defaultProfile.listenPort),
                     httpProxyEnabled = item.optBoolean("httpProxyEnabled", defaultProfile.httpProxyEnabled),
@@ -580,6 +608,7 @@ class WhiteDnsSettingsStore(
                     JSONObject()
                         .put("id", profile.id)
                         .put("name", profile.name)
+                        .put("configPreset", profile.configPreset)
                         .put("listenIp", profile.listenIp)
                         .put("listenPort", profile.listenPort)
                         .put("httpProxyEnabled", profile.httpProxyEnabled)
@@ -717,6 +746,15 @@ class WhiteDnsSettingsStore(
         const val KeySelectedAdvancedProfileId = "selected_advanced_profile_id"
         const val KeyAdvancedProfiles = "advanced_profiles"
         const val KeyServerMode = "server_mode"
+        const val KeyConfigPreset = "config_preset"
+        const val KeyTransportMode = "transport_mode"
+        const val KeyDeliveryMode = "delivery_mode"
+        const val KeyQnameMode = "qname_mode"
+        const val KeyResolverTlsServerName = "resolver_tls_server_name"
+        const val KeyResolverTlsPin = "resolver_tls_pin"
+        const val KeyResolverDoTPort = "resolver_dot_port"
+        const val KeyResolverDoHPort = "resolver_doh_port"
+        const val KeyResolverDoHPath = "resolver_doh_path"
         const val KeyCustomServerDomain = "custom_server_domain"
         const val KeyCustomServerEncryptionKey = "custom_server_encryption_key"
         const val KeyCustomServerEncryptionMethod = "custom_server_encryption_method"
@@ -748,6 +786,7 @@ class WhiteDnsSettingsStore(
         const val KeyMtuTestRetriesLogs = "mtu_test_retries_logs"
         const val KeyMtuTestTimeoutLogs = "mtu_test_timeout_logs"
         const val KeyMtuTestParallelismLogs = "mtu_test_parallelism_logs"
+        const val KeyScanResolverParallelism = "scan_resolver_parallelism"
         const val KeyRxTxWorkers = "rx_tx_workers"
         const val KeyTunnelProcessWorkers = "tunnel_process_workers"
         const val KeyTunnelPacketTimeoutSeconds = "tunnel_packet_timeout_seconds"
@@ -772,6 +811,7 @@ class WhiteDnsSettingsStore(
         const val KeyLocalDnsPort = "local_dns_port"
         const val KeyStartupMode = "startup_mode"
         const val KeyPingWatchdogSeconds = "ping_watchdog_seconds"
+        const val KeyFastConnectEnabled = "fast_connect_enabled"
         const val KeyTrafficWarmupEnabled = "traffic_warmup_enabled"
         const val KeyTrafficWarmupProbeCount = "traffic_warmup_probe_count"
         const val KeyTrafficKeepaliveIntervalSeconds = "traffic_keepalive_interval_seconds"

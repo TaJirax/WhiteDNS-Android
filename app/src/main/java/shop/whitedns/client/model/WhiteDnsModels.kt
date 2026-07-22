@@ -14,12 +14,13 @@ data class Choice<T>(
     val label: String,
 )
 
-data class StormDnsServerProfile(
+data class CottenDnsServerProfile(
     val id: String,
     val label: String,
     val domain: String,
     val encryptionKey: String,
     val encryptionMethod: Int,
+    val serverType: String = ConnectionProfile.ServerTypeCottenDns,
 )
 
 data class ConnectionProfile(
@@ -29,11 +30,32 @@ data class ConnectionProfile(
     val customServerDomain: String = "",
     val customServerEncryptionKey: String = "",
     val customServerEncryptionMethod: Int = 1,
+    // CottenDns is the only bundled engine. The compatibility server type keeps
+    // CottenDns's legacy wire mode available for older compatible servers.
+    val serverType: String = ServerTypeCottenDns,
     val resolverProfileId: String = "",
     val connectionMode: String = "proxy",
 ) : Serializable {
     companion object {
         const val DefaultId = "default"
+        const val ServerTypeCottenDns = "cottendns"
+        const val ServerTypeCompatibility = "compatibility"
+
+        fun normalizeServerType(value: String?): String {
+            // Storm DNS and Master DNS are the same legacy wire generation; the app
+            // models them jointly as "compatibility". Recognize every legacy alias a
+            // profile, exported payload, or older-app link might carry so a
+            // Storm/Master connection is never silently misclassified as native
+            // CottenDns (which would apply the wrong wire mode and break the tunnel).
+            return when (value?.trim()?.lowercase()) {
+                ServerTypeCompatibility,
+                "storm", "stormdns", "storm-dns", "storm_dns",
+                "master", "masterdns", "master-dns", "master_dns",
+                "master-storm", "masterstorm", "legacy",
+                -> ServerTypeCompatibility
+                else -> ServerTypeCottenDns
+            }
+        }
 
         fun defaultProfile(): ConnectionProfile {
             return ConnectionProfile(
@@ -51,6 +73,7 @@ data class ConnectionProfile(
                 customServerDomain = settings.customServerDomain,
                 customServerEncryptionKey = settings.customServerEncryptionKey,
                 customServerEncryptionMethod = settings.customServerEncryptionMethod,
+                serverType = settings.serverType,
                 resolverProfileId = settings.selectedResolverProfileId,
                 connectionMode = settings.connectionMode,
             )
@@ -82,6 +105,7 @@ data class ResolverProfile(
 data class AdvancedSettingsProfile(
     val id: String,
     val name: String,
+    val configPreset: String,
     val listenIp: String,
     val listenPort: String,
     val httpProxyEnabled: Boolean,
@@ -156,6 +180,7 @@ data class AdvancedSettingsProfile(
             return AdvancedSettingsProfile(
                 id = id,
                 name = name,
+                configPreset = settings.configPreset,
                 listenIp = settings.listenIp,
                 listenPort = settings.listenPort,
                 httpProxyEnabled = settings.httpProxyEnabled,
@@ -235,6 +260,26 @@ data class WhiteDnsSettings(
     val customServerDomain: String = "",
     val customServerEncryptionKey: String = "",
     val customServerEncryptionMethod: Int = 1,
+    val serverType: String = ConnectionProfile.ServerTypeCottenDns,
+    val configPreset: String = "default",
+    // CottenDns delivery/transport overrides. "preset" derives the value from the
+    // active preset; any other value overrides it. Compatibility mode still forces
+    // the safe TXT/UDP subset regardless of these.
+    val transportMode: String = "preset",
+    val deliveryMode: String = "preset",
+    // QNAME reshaping override. "preset" defers to the preset; "off" keeps the
+    // classic 63-char labels; "moderate"/"aggressive" shorten labels for a lower
+    // fingerprint. Forced off in Storm/Master compatibility mode.
+    val qnameMode: String = "preset",
+    // Encrypted-resolver settings, used only when transportMode is "dot"/"doh".
+    // resolverTlsServerName blank means "use the server profile's domain", which
+    // is what the server's own certificate is issued for, so it is the right
+    // default and most people never touch these.
+    val resolverTlsServerName: String = "",
+    val resolverTlsPin: String = "",
+    val resolverDoTPort: String = "853",
+    val resolverDoHPort: String = "443",
+    val resolverDoHPath: String = "/dns-query",
     val connectionMode: String = "proxy",
     val protocolType: String = "SOCKS5",
     val themeMode: String = WhiteDnsThemeMode.System,
@@ -247,7 +292,7 @@ data class WhiteDnsSettings(
     val socks5Authentication: Boolean = false,
     val socksUsername: String = "master_dns_vpn",
     val socksPassword: String = "master_dns_vpn",
-    val balancingStrategy: Int = 3,
+    val balancingStrategy: Int = 5,
     val uploadDuplication: String = "3",
     val downloadDuplication: String = "7",
     val uploadCompression: Int = 2,
@@ -258,11 +303,16 @@ data class WhiteDnsSettings(
     val maxUploadMtu: String = "140",
     val maxDownloadMtu: String = "3000",
     val mtuTestRetriesResolvers: String = "3",
-    val mtuTestTimeoutResolvers: String = "2.5",
+    val mtuTestTimeoutResolvers: String = "2.0",
     val mtuTestParallelismResolvers: String = "100",
     val mtuTestRetriesLogs: String = "5",
-    val mtuTestTimeoutLogs: String = "2.5",
+    val mtuTestTimeoutLogs: String = "2.0",
     val mtuTestParallelismLogs: String = "32",
+    val fastConnectEnabled: Boolean = false,
+    // Bulk-scanner resolver parallelism: how many resolvers each scan worker
+    // process probes at the same time. Independent from the connect-time MTU
+    // scan (mtuTestParallelismResolvers) and from Parallel Test.
+    val scanResolverParallelism: String = "25",
     val rxTxWorkers: String = "4",
     val tunnelProcessWorkers: String = "4",
     val tunnelPacketTimeoutSeconds: String = "10.0",
@@ -301,6 +351,15 @@ data class WhiteDnsSettings(
 ) : Serializable
 
 data class ResolvedWhiteDnsSettings(
+    val configPreset: String,
+    val transportMode: String,
+    val deliveryMode: String,
+    val qnameMode: String,
+    val resolverTlsServerName: String,
+    val resolverTlsPin: String,
+    val resolverDoTPort: Int,
+    val resolverDoHPort: Int,
+    val resolverDoHPath: String,
     val connectionMode: String,
     val protocolType: String,
     val resolverEntries: List<String>,
@@ -327,6 +386,8 @@ data class ResolvedWhiteDnsSettings(
     val mtuTestRetriesLogs: Int,
     val mtuTestTimeoutLogs: Double,
     val mtuTestParallelismLogs: Int,
+    val fastConnectEnabled: Boolean,
+    val scanResolverParallelism: Int,
     val rxTxWorkers: Int,
     val tunnelProcessWorkers: Int,
     val tunnelPacketTimeoutSeconds: Double,
@@ -537,7 +598,7 @@ data class WhiteDnsScanState(
 data class WhiteDnsUiState(
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
     val settings: WhiteDnsSettings = WhiteDnsSettings(),
-    val serverPool: List<StormDnsServerProfile> = emptyList(),
+    val serverPool: List<CottenDnsServerProfile> = emptyList(),
     val networkIpAddress: String = "127.0.0.1",
     val batteryOptimizationIgnored: Boolean = true,
     val notificationsEnabled: Boolean = true,
@@ -595,11 +656,53 @@ object WhiteDnsOptions {
         Choice(5, "AES-256-GCM"),
     )
 
+    val configPresets = listOf(
+        Choice("default", "Default"),
+        Choice("speed", "Speed"),
+        Choice("survival", "Survival"),
+        Choice("tcp-survival", "TCP Survival"),
+        Choice("master-storm", "Master / Storm DNS (compatible)"),
+    )
+
+    // CottenDns delivery/transport override options. "preset" defers to the
+    // active preset; the rest are explicit user choices (ignored in Storm/Master
+    // compatibility mode, which is always forced to TXT/UDP).
+    // DoT/DoH are opt-in disguise transports: "Auto" never escalates into them.
+    // Picking one is still safe on a hostile network — if the TLS port is blocked
+    // the engine falls back to UDP and then TCP/53 on its own. They require the
+    // matching listener to be enabled on the server.
+    val transportModes = listOf(
+        Choice("preset", "From preset"),
+        Choice("auto", "Auto (UDP + TCP/53 fallback)"),
+        Choice("udp", "UDP/53 only"),
+        Choice("tcp", "TCP/53 only"),
+        Choice("dot", "DoT (TLS, falls back to UDP/TCP)"),
+        Choice("doh", "DoH (HTTPS, falls back to UDP/TCP)"),
+    )
+
+    val deliveryModes = listOf(
+        Choice("preset", "From preset"),
+        Choice("txt", "TXT only"),
+        Choice("txt-cname", "TXT + CNAME"),
+        Choice("txt-https", "TXT + HTTPS"),
+        Choice("all", "All (TXT / CNAME / NULL / HTTPS)"),
+    )
+
+    // QNAME reshaping: shorter DNS labels lower the fingerprint at some capacity
+    // cost. Ignored in Storm/Master compatibility mode (always 63-char labels).
+    val qnameModes = listOf(
+        Choice("preset", "From preset"),
+        Choice("off", "Off (max capacity, 63)"),
+        Choice("moderate", "Moderate (42)"),
+        Choice("aggressive", "Aggressive (32)"),
+    )
+
     val balancingStrategies = listOf(
         Choice(1, "Random"),
         Choice(2, "Round Robin"),
         Choice(3, "Least Loss"),
         Choice(4, "Lowest Latency"),
+        Choice(5, "MTU Weighted"),
     )
 
     val compressionTypes = listOf(
@@ -758,12 +861,101 @@ fun WhiteDnsSettings.syncSelectedConnectionProfileFields(): WhiteDnsSettings {
         customServerDomain = selected.customServerDomain,
         customServerEncryptionKey = selected.customServerEncryptionKey,
         customServerEncryptionMethod = selected.customServerEncryptionMethod,
+        serverType = ConnectionProfile.normalizeServerType(selected.serverType),
         connectionMode = selectedConnectionMode,
         themeMode = selectedThemeMode,
         languageCode = selectedLanguageCode,
         splitTunnelMode = normalizeSplitTunnelMode(splitTunnelMode),
         splitTunnelPackages = normalizePackageNames(splitTunnelPackages),
     )
+}
+
+fun WhiteDnsSettings.applyCottenDnsConfigPreset(preset: String): WhiteDnsSettings {
+    val normalizedPreset = when (preset.trim().lowercase()) {
+        "speed" -> "speed"
+        "survival" -> "survival"
+        "tcp", "tcp-survival", "tcp_survival" -> "tcp-survival"
+        "master", "storm", "master-storm", "master_storm" -> "master-storm"
+        else -> "default"
+    }
+    val defaults = WhiteDnsSettings()
+    return when (normalizedPreset) {
+        // Master/Storm DNS: use the original app's client preset (the app default
+        // tuning that shipped for MasterDNS/StormDNS servers). The renderer also
+        // omits the CottenDns optimization suite and forces TXT/UDP/63-label wire
+        // for this path, so legacy servers behave exactly as in the original app.
+        "master-storm" -> copy(
+            configPreset = "master-storm",
+            balancingStrategy = defaults.balancingStrategy,
+            uploadDuplication = defaults.uploadDuplication,
+            downloadDuplication = defaults.downloadDuplication,
+            uploadCompression = defaults.uploadCompression,
+            downloadCompression = defaults.downloadCompression,
+            minUploadMtu = defaults.minUploadMtu,
+            minDownloadMtu = defaults.minDownloadMtu,
+            maxUploadMtu = defaults.maxUploadMtu,
+            maxDownloadMtu = defaults.maxDownloadMtu,
+            mtuTestRetriesResolvers = defaults.mtuTestRetriesResolvers,
+            mtuTestTimeoutResolvers = defaults.mtuTestTimeoutResolvers,
+            mtuTestParallelismResolvers = defaults.mtuTestParallelismResolvers,
+            mtuTestRetriesLogs = defaults.mtuTestRetriesLogs,
+            mtuTestTimeoutLogs = defaults.mtuTestTimeoutLogs,
+        )
+        "speed" -> copy(
+            configPreset = "speed",
+            balancingStrategy = 5,
+            uploadDuplication = "1",
+            downloadDuplication = "3",
+            uploadCompression = 2,
+            downloadCompression = 2,
+            mtuTestRetriesResolvers = "2",
+            mtuTestTimeoutResolvers = "1.5",
+            mtuTestParallelismResolvers = "100",
+            mtuTestRetriesLogs = "3",
+            mtuTestTimeoutLogs = "1.5",
+        )
+        "survival" -> copy(
+            configPreset = "survival",
+            balancingStrategy = 3,
+            uploadDuplication = "2",
+            downloadDuplication = "6",
+            uploadCompression = 2,
+            downloadCompression = 2,
+            minUploadMtu = "80",
+            maxUploadMtu = "180",
+            minDownloadMtu = "700",
+            maxDownloadMtu = "2500",
+            mtuTestTimeoutResolvers = "2.5",
+            mtuTestParallelismResolvers = "64",
+        )
+        "tcp-survival" -> copy(
+            configPreset = "tcp-survival",
+            balancingStrategy = 5,
+            uploadDuplication = "1",
+            downloadDuplication = "2",
+            uploadCompression = 2,
+            downloadCompression = 2,
+            mtuTestTimeoutResolvers = "3.0",
+            mtuTestParallelismResolvers = "32",
+        )
+        else -> copy(
+            configPreset = "default",
+            balancingStrategy = defaults.balancingStrategy,
+            uploadDuplication = defaults.uploadDuplication,
+            downloadDuplication = defaults.downloadDuplication,
+            uploadCompression = defaults.uploadCompression,
+            downloadCompression = defaults.downloadCompression,
+            minUploadMtu = defaults.minUploadMtu,
+            minDownloadMtu = defaults.minDownloadMtu,
+            maxUploadMtu = defaults.maxUploadMtu,
+            maxDownloadMtu = defaults.maxDownloadMtu,
+            mtuTestRetriesResolvers = defaults.mtuTestRetriesResolvers,
+            mtuTestTimeoutResolvers = defaults.mtuTestTimeoutResolvers,
+            mtuTestParallelismResolvers = defaults.mtuTestParallelismResolvers,
+            mtuTestRetriesLogs = defaults.mtuTestRetriesLogs,
+            mtuTestTimeoutLogs = defaults.mtuTestTimeoutLogs,
+        )
+    }.syncSelectedConnectionProfileFields()
 }
 
 fun WhiteDnsSettings.runtimeConnectionSettings(): WhiteDnsSettings {
@@ -791,6 +983,7 @@ fun WhiteDnsSettings.runtimeConnectionSettings(): WhiteDnsSettings {
 fun WhiteDnsSettings.applyAdvancedProfile(profile: AdvancedSettingsProfile): WhiteDnsSettings {
     return copy(
         selectedAdvancedProfileId = profile.id,
+        configPreset = profile.configPreset,
         listenIp = profile.listenIp,
         listenPort = profile.listenPort,
         httpProxyEnabled = profile.httpProxyEnabled,
@@ -850,6 +1043,24 @@ fun WhiteDnsSettings.selectAdvancedProfile(profileId: String): WhiteDnsSettings 
     val selectedProfile = normalizedAdvancedProfiles().firstOrNull { it.id == profileId }
         ?: AdvancedSettingsProfile.defaultProfile()
     return applyAdvancedProfile(selectedProfile)
+}
+
+// The CottenDns wire settings are deliberately global rather than per-profile,
+// so AdvancedSettingsProfile does not carry them. The settings dialog still
+// edits them on its draft, which means a save has to copy them across
+// explicitly -- going through AdvancedSettingsProfile alone silently drops
+// them and the fields snap back to "From preset".
+fun WhiteDnsSettings.copyCottenDnsWireSettingsFrom(source: WhiteDnsSettings): WhiteDnsSettings {
+    return copy(
+        transportMode = source.transportMode,
+        deliveryMode = source.deliveryMode,
+        qnameMode = source.qnameMode,
+        resolverTlsServerName = source.resolverTlsServerName,
+        resolverTlsPin = source.resolverTlsPin,
+        resolverDoTPort = source.resolverDoTPort,
+        resolverDoHPort = source.resolverDoHPort,
+        resolverDoHPath = source.resolverDoHPath,
+    )
 }
 
 fun WhiteDnsSettings.saveSelectedAdvancedProfile(): WhiteDnsSettings {
@@ -1272,6 +1483,7 @@ fun WhiteDnsSettings.resetAdvancedSettings(): WhiteDnsSettings {
     val defaults = WhiteDnsSettings()
     return copy(
         selectedAdvancedProfileId = AdvancedSettingsProfile.DefaultId,
+        configPreset = defaults.configPreset,
         listenIp = defaults.listenIp,
         listenPort = defaults.listenPort,
         httpProxyEnabled = defaults.httpProxyEnabled,
@@ -1463,6 +1675,17 @@ private fun normalizeIpAddress(raw: String): String? {
         return normalizeIpv4Address(text)
     }
 
+    // A bare IPv6 literal always has at least two colons ("::" or several 16-bit
+    // groups). Exactly one colon means this is an "ip:port" host — never an
+    // address — so bail and let the caller split off the port. This also stops
+    // InetAddress.getByName() below from doing a name-service lookup on an
+    // "ip:port" string, which on Android throws NetworkOnMainThreadException, can
+    // block on the DNS timeout off the main thread, or (behind a captive/broken
+    // resolver) resolve to a bogus address that would silently replace the IP.
+    if (text.count { it == ':' } < 2) {
+        return null
+    }
+
     if (!ResolverIpv6Chars.matches(text)) {
         return null
     }
@@ -1596,6 +1819,28 @@ fun WhiteDnsSettings.resolve(): ResolvedWhiteDnsSettings {
         .coerceAtLeast(resolvedMinDownloadMtu)
 
     return ResolvedWhiteDnsSettings(
+        configPreset = when (configPreset) {
+            "default", "speed", "survival", "tcp-survival", "master-storm" -> configPreset
+            else -> "default"
+        },
+        transportMode = when (transportMode.trim().lowercase()) {
+            "auto", "udp", "tcp", "dot", "doh" -> transportMode.trim().lowercase()
+            else -> "preset"
+        },
+        deliveryMode = when (deliveryMode.trim().lowercase()) {
+            "txt", "txt-cname", "txt-https", "all" -> deliveryMode.trim().lowercase()
+            else -> "preset"
+        },
+        qnameMode = when (qnameMode.trim().lowercase()) {
+            "off", "moderate", "aggressive" -> qnameMode.trim().lowercase()
+            else -> "preset"
+        },
+        resolverTlsServerName = resolverTlsServerName.trim().trimEnd('.').lowercase(),
+        resolverTlsPin = resolverTlsPin.trim(),
+        resolverDoTPort = boundedInt(resolverDoTPort, 853, 1, 65535),
+        resolverDoHPort = boundedInt(resolverDoHPort, 443, 1, 65535),
+        resolverDoHPath = resolverDoHPath.trim().ifEmpty { "/dns-query" }
+            .let { if (it.startsWith("/")) it else "/$it" },
         connectionMode = when (connectionMode) {
             "proxy", "vpn" -> connectionMode
             else -> "proxy"
@@ -1609,7 +1854,7 @@ fun WhiteDnsSettings.resolve(): ResolvedWhiteDnsSettings {
         socks5Authentication = socks5Authentication,
         socksUsername = socksUsername.take(255),
         socksPassword = socksPassword.take(255),
-        balancingStrategy = listOf(1, 2, 3, 4).firstOrNull { it == balancingStrategy } ?: 3,
+        balancingStrategy = listOf(1, 2, 3, 4, 5).firstOrNull { it == balancingStrategy } ?: 5,
         uploadDuplication = boundedInt(uploadDuplication, defaultValue = 3, minValue = 1, maxValue = 30),
         downloadDuplication = boundedInt(downloadDuplication, defaultValue = 7, minValue = 1, maxValue = 30),
         uploadCompression = uploadCompression.coerceIn(0, 3),
@@ -1620,11 +1865,13 @@ fun WhiteDnsSettings.resolve(): ResolvedWhiteDnsSettings {
         maxUploadMtu = resolvedMaxUploadMtu,
         maxDownloadMtu = resolvedMaxDownloadMtu,
         mtuTestRetriesResolvers = boundedInt(mtuTestRetriesResolvers, defaultValue = 3, minValue = 1, maxValue = 100),
-        mtuTestTimeoutResolvers = positiveDouble(mtuTestTimeoutResolvers, defaultValue = 2.5),
+        mtuTestTimeoutResolvers = positiveDouble(mtuTestTimeoutResolvers, defaultValue = 2.0),
         mtuTestParallelismResolvers = boundedInt(mtuTestParallelismResolvers, defaultValue = 100, minValue = 1, maxValue = 1024),
         mtuTestRetriesLogs = boundedInt(mtuTestRetriesLogs, defaultValue = 5, minValue = 1, maxValue = 100),
-        mtuTestTimeoutLogs = positiveDouble(mtuTestTimeoutLogs, defaultValue = 2.5),
+        mtuTestTimeoutLogs = positiveDouble(mtuTestTimeoutLogs, defaultValue = 2.0),
         mtuTestParallelismLogs = boundedInt(mtuTestParallelismLogs, defaultValue = 32, minValue = 1, maxValue = 1024),
+        fastConnectEnabled = fastConnectEnabled,
+        scanResolverParallelism = boundedInt(scanResolverParallelism, defaultValue = 25, minValue = 1, maxValue = 150),
         rxTxWorkers = resolvedRxTxWorkers,
         tunnelProcessWorkers = resolvedTunnelProcessWorkers,
         tunnelPacketTimeoutSeconds = boundedDouble(

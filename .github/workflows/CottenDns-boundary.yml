@@ -1,0 +1,45 @@
+name: CottenDns Engine Boundary
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+      - unlabeled
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  upstream-guard:
+    name: Guard upstream engine changes
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout WhiteDNS
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Check vendored CottenDns engine boundary
+        env:
+          HAS_UPSTREAM_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'allow-cottendns-engine') }}
+        run: |
+          set -euo pipefail
+          base_ref="${{ github.event.pull_request.base.sha }}"
+          head_ref="${{ github.event.pull_request.head.sha }}"
+
+          if scripts/check-CottenDns-boundary.sh "${base_ref}" "${head_ref}"; then
+            exit 0
+          fi
+
+          if [[ "${HAS_UPSTREAM_LABEL}" == "true" ]]; then
+            echo "Vendored CottenDns engine changes are intentionally labeled."
+            exit 0
+          fi
+
+          exit 1

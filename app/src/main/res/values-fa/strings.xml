@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">وایت‌دی‌ان‌اس</string>
+    <string name="app_name">وایت‌دی‌ان‌اس C</string>
 
     <!-- Navigation -->
     <string name="cd_tab_profiles">تب پروفایل‌ها - مدیریت پروفایل‌های اتصال و ریزالور</string>

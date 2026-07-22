@@ -145,6 +145,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -173,16 +174,18 @@ import shop.whitedns.client.model.WhiteDnsSettings
 import shop.whitedns.client.model.WhiteDnsUiState
 import shop.whitedns.client.model.applyAdvancedProfile
 import shop.whitedns.client.model.applyAutoTunePreset
+import shop.whitedns.client.model.applyCottenDnsConfigPreset
 import shop.whitedns.client.model.applyResolverProfileToSelectedConnection
+import shop.whitedns.client.model.copyCottenDnsWireSettingsFrom
 import shop.whitedns.client.model.deleteConnectionProfile
 import shop.whitedns.client.model.deleteDuplicateConnectionProfiles
 import shop.whitedns.client.model.deleteAdvancedProfile
 import shop.whitedns.client.model.deleteResolverProfile
 import shop.whitedns.client.model.duplicateConnectionProfileCount
 import shop.whitedns.client.model.exportAllResolverProfilesText
-import shop.whitedns.client.model.exportAllStormDnsProfileLinks
-import shop.whitedns.client.model.exportStormDnsProfileLink
-import shop.whitedns.client.model.importStormDnsProfileLinks
+import shop.whitedns.client.model.exportAllCottenDnsProfileLinks
+import shop.whitedns.client.model.exportCottenDnsProfileLink
+import shop.whitedns.client.model.importCottenDnsProfileLinks
 import shop.whitedns.client.model.importAdvancedSettingsProfileFromToml
 import shop.whitedns.client.model.matchesAdvancedProfile
 import shop.whitedns.client.model.moveConnectionProfileToIndex
@@ -207,7 +210,7 @@ import shop.whitedns.client.model.validateResolverText
 import shop.whitedns.client.model.WhiteDnsAutoTunePresets
 import shop.whitedns.client.model.WhiteDnsParallelTest
 import shop.whitedns.client.model.syncSelectedConnectionProfileFields
-import shop.whitedns.client.storm.StormDnsConfigRenderer
+import shop.whitedns.client.cottendns.CottenDnsConfigRenderer
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.DecodeHintType
@@ -310,10 +313,11 @@ private enum class WhiteDnsTab(
 
 private const val ScanWorkerMin = 1
 private const val ScanWorkerMax = 32
-private const val MtuParallelismMin = 50
-private const val MtuParallelismMax = 1000
-private const val MtuParallelismStep = 50
+private const val MtuParallelismMin = 5
+private const val MtuParallelismMax = 150
+private const val MtuParallelismStep = 5
 private const val MtuParallelismDefault = 100
+private const val ScanResolverParallelismDefault = 25
 
 private enum class CompactActionTone {
     Default,
@@ -469,20 +473,21 @@ private fun ConnectTabContent(
     val showNotificationBanner = resolvedSettings.connectionMode == "vpn" && !uiState.notificationsEnabled
     val showBatteryBanner = !uiState.batteryOptimizationIgnored &&
         !settings.batteryOptimizationWarningDismissed
+    val parallelTestEnabled = settings.autoTuneEnabled && !settings.fastConnectEnabled
     val shouldCollapseParallelTestSelection =
-        settings.autoTuneEnabled &&
+        parallelTestEnabled &&
             resolvedSettings.connectionMode == "vpn" &&
             uiState.connectionStatus == ConnectionStatus.CONNECTED &&
             uiState.autoTuneTrialResults.any { it.selected }
 
     LaunchedEffect(
         shouldCollapseParallelTestSelection,
-        settings.autoTuneEnabled,
+        parallelTestEnabled,
         uiState.connectionStatus,
     ) {
         when {
             shouldCollapseParallelTestSelection -> parallelTestSelectionExpanded = false
-            !settings.autoTuneEnabled || uiState.connectionStatus == ConnectionStatus.DISCONNECTED ->
+            !parallelTestEnabled || uiState.connectionStatus == ConnectionStatus.DISCONNECTED ->
                 parallelTestSelectionExpanded = true
         }
     }
@@ -630,9 +635,10 @@ private fun ConnectTabContent(
                     val parallelTestControlsEnabled = uiState.connectionStatus == ConnectionStatus.DISCONNECTED
                     ToggleRow(
                         label = WhiteDnsL10n.parallelTest,
-                        enabled = settings.autoTuneEnabled,
+                        enabled = parallelTestEnabled,
                         interactiveEnabled = parallelTestControlsEnabled,
                         onToggle = {
+                            val nextParallelTestEnabled = !parallelTestEnabled
                             val selectedIds = WhiteDnsParallelTest.normalizeConfigIds(
                                 configIds = settings.parallelTestSelectedConfigIds,
                                 advancedProfiles = advancedProfiles,
@@ -640,14 +646,37 @@ private fun ConnectTabContent(
                             )
                             onSettingsChange(
                                 settings.copy(
-                                    autoTuneEnabled = !settings.autoTuneEnabled,
+                                    autoTuneEnabled = nextParallelTestEnabled,
+                                    fastConnectEnabled = if (nextParallelTestEnabled) {
+                                        false
+                                    } else {
+                                        settings.fastConnectEnabled
+                                    },
                                     parallelTestSelectedConfigIds = selectedIds,
                                 ),
                             )
                         },
                     )
+                    ToggleRow(
+                        label = WhiteDnsL10n.fastConnect,
+                        enabled = settings.fastConnectEnabled,
+                        interactiveEnabled = parallelTestControlsEnabled,
+                        onToggle = {
+                            val nextFastConnectEnabled = !settings.fastConnectEnabled
+                            onSettingsChange(
+                                settings.copy(
+                                    fastConnectEnabled = nextFastConnectEnabled,
+                                    autoTuneEnabled = if (nextFastConnectEnabled) {
+                                        false
+                                    } else {
+                                        settings.autoTuneEnabled
+                                    },
+                                ),
+                            )
+                        },
+                    )
                     AnimatedVisibility(
-                        visible = settings.autoTuneEnabled,
+                        visible = parallelTestEnabled,
                         enter = fadeIn(animationSpec = tween(180)) + expandVertically(animationSpec = tween(180)),
                         exit = fadeOut(animationSpec = tween(140)) + shrinkVertically(animationSpec = tween(140)),
                     ) {
@@ -902,7 +931,7 @@ private fun ConnectTabContent(
                 showQr = false,
                 linkResult = remember(settings, selectedConnectionProfile, showConnectionTomlDialog) {
                     runCatching {
-                        StormDnsConfigRenderer.renderClientToml(
+                        CottenDnsConfigRenderer.renderClientToml(
                             connectionProfile = selectedConnectionProfile,
                             settings = settings,
                         )
@@ -960,13 +989,17 @@ private fun ConnectTabContent(
                 initialName = editingProfile?.name ?: advancedSaveAsInitialName(selectedAdvancedProfile, WhiteDnsL10n.homeSelectorCustomAdvanced, WhiteDnsL10n.profileNameCopySuffix),
                 initialSettings = settings,
                 onDismiss = { showAdvancedEditDialog = false },
-                onSave = { profile ->
+                onSave = { profile, draftSettings ->
                     val nextProfile = if (editingProfile == null) {
                         profile
                     } else {
                         profile.copy(id = editingProfile.id)
                     }
-                    onSettingsChange(settings.upsertAdvancedProfile(nextProfile))
+                    onSettingsChange(
+                        settings
+                            .copyCottenDnsWireSettingsFrom(draftSettings)
+                            .upsertAdvancedProfile(nextProfile),
+                    )
                     showAdvancedEditDialog = false
                 },
             )
@@ -988,8 +1021,12 @@ private fun ConnectTabContent(
                     initialName = result.label,
                     initialSettings = initialSettings,
                     onDismiss = { autoTuneSaveResult = null },
-                    onSave = { profile ->
-                        onSettingsChange(settings.upsertAdvancedProfile(profile))
+                    onSave = { profile, draftSettings ->
+                        onSettingsChange(
+                            settings
+                                .copyCottenDnsWireSettingsFrom(draftSettings)
+                                .upsertAdvancedProfile(profile),
+                        )
                         autoTuneSaveResult = null
                     },
                 )
@@ -1719,6 +1756,17 @@ private fun ScanTabContent(
             ScanNote(
                 text = WhiteDnsL10n.scanWorkerWarning,
             )
+            MtuParallelismSlider(
+                parallelism = uiState.settings.scanResolverParallelism.toMtuParallelismSliderValue(),
+                enabled = !scanState.isRunning,
+                onParallelismChange = { parallelism ->
+                    onSettingsChange(
+                        uiState.settings.copy(scanResolverParallelism = parallelism.toString()),
+                    )
+                },
+                label = WhiteDnsL10n.settingScanResolverParallel,
+                note = WhiteDnsL10n.settingScanResolverParallelNote,
+            )
             WhiteDnsDropdownField(
                 label = WhiteDnsL10n.scanProfileLabel,
                 value = selectedScanConnectionProfile.id,
@@ -2079,6 +2127,8 @@ private fun MtuParallelismSlider(
     parallelism: Int,
     enabled: Boolean,
     onParallelismChange: (Int) -> Unit,
+    label: String = WhiteDnsL10n.settingResolverParallel,
+    note: String = WhiteDnsL10n.settingResolverParallelNote,
 ) {
     val context = LocalContext.current
     var sliderValue by remember(parallelism) { mutableStateOf(parallelism.toMtuParallelismSliderValue().toFloat()) }
@@ -2089,7 +2139,7 @@ private fun MtuParallelismSlider(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            FieldLabel(WhiteDnsL10n.settingResolverParallel)
+            FieldLabel(label)
             Text(
                 text = displayedParallelism.toString(),
                 style = MaterialTheme.typography.bodyMedium.copy(
@@ -2126,7 +2176,7 @@ private fun MtuParallelismSlider(
             ),
         )
         Text(
-            text = WhiteDnsL10n.settingResolverParallelNote,
+            text = note,
             style = MaterialTheme.typography.bodySmall.copy(
                 fontSize = 11.sp,
                 lineHeight = 16.sp,
@@ -2802,6 +2852,13 @@ private fun AdvancedSettingsFields(
     showProxySettings: Boolean,
     onSettingsChange: (WhiteDnsSettings) -> Unit,
 ) {
+    GroupLabel("CottenDns")
+    CottenDnsFeaturePresetGroup(
+        settings = settings,
+        onSettingsChange = onSettingsChange,
+    )
+
+    SectionDivider()
     GroupLabel(WhiteDnsL10n.groupMtu)
     MtuSettingsGroup(
         settings = settings,
@@ -3515,9 +3572,10 @@ private fun ConnectionProfilesSettings(
     onServerTestClick: (String?) -> Unit,
     onSettingsChange: (WhiteDnsSettings) -> Unit,
 ) {
-    val profiles = settings.normalizedConnectionProfiles()
-    val selectedProfile = settings.selectedConnectionProfile()
-    val customProfiles = profiles.filter { it.serverMode == "custom" }
+    // Derive lists once per settings change instead of on every recomposition.
+    val profiles = remember(settings) { settings.normalizedConnectionProfiles() }
+    val selectedProfile = remember(settings) { settings.selectedConnectionProfile() }
+    val customProfiles = remember(profiles) { profiles.filter { it.serverMode == "custom" } }
     val serverTestScores = remember(serverTestState.results) { buildServerTestScores(serverTestState.results) }
     val serverTestResultsById = remember(serverTestState.results) {
         serverTestState.results.associateBy { it.serverId }
@@ -3545,7 +3603,7 @@ private fun ConnectionProfilesSettings(
     val qrScanner = rememberQrProfileImportLauncher(
         onDecoded = { decodedLink ->
             runCatching {
-                settings.importStormDnsProfileLinks(decodedLink)
+                settings.importCottenDnsProfileLinks(decodedLink)
             }.onSuccess { importedSettings ->
                 importNoticeIsError = false
                 importNotice = importSuccessLabel
@@ -3794,7 +3852,7 @@ private fun ConnectionProfilesSettings(
             onDismiss = { showImportDialog = false },
             onImport = { links ->
                 runCatching {
-                    settings.importStormDnsProfileLinks(links)
+                    settings.importCottenDnsProfileLinks(links)
                 }.onSuccess { importedSettings ->
                     onSettingsChange(importedSettings)
                     showImportDialog = false
@@ -3808,7 +3866,7 @@ private fun ConnectionProfilesSettings(
             title = WhiteDnsL10n.profileDialogExportConnection,
             fieldLabel = WhiteDnsL10n.profileFieldProfileLinkSingle,
             linkResult = remember(settings, profile) {
-                runCatching { settings.exportStormDnsProfileLink(profile) }
+                runCatching { settings.exportCottenDnsProfileLink(profile) }
             },
             onDismiss = { exportProfile = null },
             onShare = { link ->
@@ -3822,7 +3880,7 @@ private fun ConnectionProfilesSettings(
             title = WhiteDnsL10n.profileDialogExportAllConnections,
             fieldLabel = WhiteDnsL10n.profileFieldProfileLinksLabel,
             linkResult = remember(settings, showExportAllDialog) {
-                runCatching { settings.exportAllStormDnsProfileLinks() }
+                runCatching { settings.exportAllCottenDnsProfileLinks() }
             },
             onDismiss = { showExportAllDialog = false },
             onShare = { links ->
@@ -4294,8 +4352,12 @@ private fun SettingProfilesSettings(
             initialName = advancedSaveAsInitialName(selectedProfile, WhiteDnsL10n.homeSelectorCustomAdvanced, WhiteDnsL10n.profileNameCopySuffix),
             initialSettings = settings,
             onDismiss = { showCreateDialog = false },
-            onSave = { profile ->
-                onSettingsChange(settings.upsertAdvancedProfile(profile))
+            onSave = { profile, draftSettings ->
+                onSettingsChange(
+                    settings
+                        .copyCottenDnsWireSettingsFrom(draftSettings)
+                        .upsertAdvancedProfile(profile),
+                )
                 showCreateDialog = false
             },
         )
@@ -4321,8 +4383,12 @@ private fun SettingProfilesSettings(
             initialName = profile.name,
             initialSettings = settings.applyAdvancedProfile(profile),
             onDismiss = { editProfile = null },
-            onSave = { updatedProfile ->
-                onSettingsChange(settings.upsertAdvancedProfile(updatedProfile.copy(id = profile.id)))
+            onSave = { updatedProfile, draftSettings ->
+                onSettingsChange(
+                    settings
+                        .copyCottenDnsWireSettingsFrom(draftSettings)
+                        .upsertAdvancedProfile(updatedProfile.copy(id = profile.id)),
+                )
                 editProfile = null
             },
         )
@@ -4336,7 +4402,7 @@ private fun SettingProfilesSettings(
             showQr = false,
             linkResult = remember(settings, profile) {
                 runCatching {
-                    StormDnsConfigRenderer.renderAdvancedSettingsToml(settings.applyAdvancedProfile(profile))
+                    CottenDnsConfigRenderer.renderAdvancedSettingsToml(settings.applyAdvancedProfile(profile))
                 }
             },
             onDismiss = { exportProfile = null },
@@ -4368,7 +4434,9 @@ private fun AdvancedSettingsProfileDialog(
     initialName: String,
     initialSettings: WhiteDnsSettings,
     onDismiss: () -> Unit,
-    onSave: (AdvancedSettingsProfile) -> Unit,
+    // The draft is handed back alongside the profile because the CottenDns wire
+    // settings live on WhiteDnsSettings, not on AdvancedSettingsProfile.
+    onSave: (AdvancedSettingsProfile, WhiteDnsSettings) -> Unit,
 ) {
     var name by remember(profile?.id) { mutableStateOf(initialName) }
     var draftSettings by remember(profile?.id) { mutableStateOf(initialSettings) }
@@ -4436,6 +4504,7 @@ private fun AdvancedSettingsProfileDialog(
                                 id = profile?.id.orEmpty(),
                                 name = name.trim(),
                             ),
+                            draftSettings,
                         )
                     },
                 )
@@ -4873,7 +4942,7 @@ private fun ConnectionProfileImportDialog(
                     profileLinks = it
                     importError = null
                 },
-                placeholder = "stormdns://...\nstormdns://...",
+                placeholder = "CottenDns://...\nCottenDns://...",
                 singleLine = false,
                 minLines = 5,
                 maxLines = 9,
@@ -4931,7 +5000,7 @@ private fun ConnectionProfileExportDialog(
     linkResult: Result<String>,
     onDismiss: () -> Unit,
     onShare: (String) -> Unit,
-    placeholder: String = "stormdns://...",
+    placeholder: String = "CottenDns://...",
     showQr: Boolean = true,
 ) {
     val context = LocalContext.current
@@ -5297,6 +5366,9 @@ private fun ConnectionProfileDialog(
     var encryptionMethod by remember(profile?.id) {
         mutableStateOf(profile?.customServerEncryptionMethod ?: 1)
     }
+    var serverType by remember(profile?.id) {
+        mutableStateOf(ConnectionProfile.normalizeServerType(profile?.serverType))
+    }
     val canSave = name.isNotBlank() && domain.isNotBlank() && encryptionKey.isNotBlank()
 
     Dialog(onDismissRequest = onDismiss) {
@@ -5322,13 +5394,18 @@ private fun ConnectionProfileDialog(
                 label = WhiteDnsL10n.profileFieldName,
                 value = name,
                 onValueChange = { name = it },
-                placeholder = WhiteDnsL10n.profileMyStormDnsPlaceholder,
+                placeholder = WhiteDnsL10n.profileMyCottenDnsPlaceholder,
             )
             WhiteDnsTextField(
                 label = WhiteDnsL10n.profileFieldDomain,
                 value = domain,
-                onValueChange = { domain = it.trim() },
+                onValueChange = { domain = it },
                 placeholder = WhiteDnsL10n.profileDomainPlaceholder,
+            )
+            Text(
+                text = "For multiple tunnel domains, separate them with commas (e.g. a.example.com, b.example.com).",
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp, color = WhiteDnsPalette.Muted),
+                modifier = Modifier.padding(top = 2.dp, bottom = 2.dp),
             )
             WhiteDnsTextField(
                 label = WhiteDnsL10n.profileFieldEncryptionKey,
@@ -5341,6 +5418,24 @@ private fun ConnectionProfileDialog(
                 value = encryptionMethod,
                 options = localizedEncryptionMethods(),
                 onValueChange = { encryptionMethod = it },
+            )
+            WhiteDnsDropdownField(
+                label = WhiteDnsL10n.profileFieldServerType,
+                value = serverType,
+                options = localizedServerTypes(),
+                onValueChange = { serverType = it },
+            )
+            Text(
+                text = if (ConnectionProfile.normalizeServerType(serverType) == ConnectionProfile.ServerTypeCottenDns) {
+                    "CottenDns: 2-byte session IDs, TCP/53 fallback, rotated TXT/CNAME/NULL/HTTPS delivery, adaptive + domain-diverse duplication, and rate limiting."
+                } else {
+                    "Storm / Master DNS: legacy 1-byte session IDs over TXT/UDP for older MasterDNS/StormDNS servers. QNAME reshaping is off for safety; DNS hardening still applies."
+                },
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontSize = 10.sp,
+                    color = WhiteDnsPalette.Muted,
+                ),
+                modifier = Modifier.padding(top = 4.dp),
             )
             Spacer(modifier = Modifier.height(WhiteDnsSpacing.md))
             Row(
@@ -5368,6 +5463,7 @@ private fun ConnectionProfileDialog(
                                 customServerDomain = domain.trim().trimEnd('.'),
                                 customServerEncryptionKey = encryptionKey.trim(),
                                 customServerEncryptionMethod = encryptionMethod,
+                                serverType = serverType,
                                 resolverProfileId = profile?.resolverProfileId.orEmpty(),
                                 connectionMode = profile?.connectionMode ?: "proxy",
                             ),
@@ -5936,6 +6032,219 @@ private fun CompactActionButton(
     }
 }
 
+@Composable
+private fun CottenDnsFeaturePresetGroup(
+    settings: WhiteDnsSettings,
+    onSettingsChange: (WhiteDnsSettings) -> Unit,
+) {
+    val presetSummary = cottenDnsPresetSummary(settings.configPreset)
+    WhiteDnsDropdownField(
+        label = "CottenDns Preset",
+        value = settings.configPreset,
+        options = WhiteDnsOptions.configPresets,
+        onValueChange = { preset -> onSettingsChange(settings.applyCottenDnsConfigPreset(preset)) },
+    )
+    WhiteDnsDropdownField(
+        label = "Transport method",
+        value = settings.transportMode,
+        options = WhiteDnsOptions.transportModes,
+        onValueChange = { mode -> onSettingsChange(settings.copy(transportMode = mode)) },
+    )
+    WhiteDnsDropdownField(
+        label = "Delivery method",
+        value = settings.deliveryMode,
+        options = WhiteDnsOptions.deliveryModes,
+        onValueChange = { mode -> onSettingsChange(settings.copy(deliveryMode = mode)) },
+    )
+    WhiteDnsDropdownField(
+        label = "QNAME reshaping",
+        value = settings.qnameMode,
+        options = WhiteDnsOptions.qnameModes,
+        onValueChange = { mode -> onSettingsChange(settings.copy(qnameMode = mode)) },
+    )
+    Text(
+        text = "These three override the preset. Storm / Master DNS mode always forces TXT over UDP with 63-char labels.",
+        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp, color = WhiteDnsPalette.Muted),
+    )
+    // Only shown for the encrypted transports. Everyone else never sees these
+    // four fields, which is what keeps this section short for the common case.
+    CottenDnsEncryptedResolverFields(settings, onSettingsChange)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(WhiteDnsPalette.SurfaceAlt)
+            .border(1.5.dp, WhiteDnsPalette.Border, RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        CottenDnsFeatureLine("Transport", presetSummary.transport)
+        CottenDnsFeatureLine("Delivery", presetSummary.delivery)
+        CottenDnsFeatureLine("MTU", presetSummary.mtu)
+        CottenDnsFeatureLine("Hardening", "query-id randomization, EDNS cookie, injected NXDOMAIN ignore")
+    }
+}
+
+// Settings for the DoT/DoH transports. Rendered only when one of them is
+// selected: they are meaningless otherwise, and hiding them keeps the transport
+// section the same length it has always been for UDP/TCP users.
+//
+// Every field is optional. Left blank, the hostname follows the server profile's
+// domain — which is what the server's own certificate is issued for — so the
+// common setup needs nothing here at all.
+@Composable
+private fun CottenDnsEncryptedResolverFields(
+    settings: WhiteDnsSettings,
+    onSettingsChange: (WhiteDnsSettings) -> Unit,
+) {
+    val isDoH = settings.transportMode == "doh"
+    val isDoT = settings.transportMode == "dot"
+    if (!isDoH && !isDoT) {
+        return
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(WhiteDnsPalette.SurfaceAlt)
+            .border(1.5.dp, WhiteDnsPalette.Border, RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            text = if (isDoH) "DNS over HTTPS" else "DNS over TLS",
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 11.sp,
+                color = WhiteDnsPalette.Ink,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 0.6.sp,
+            ),
+        )
+        Text(
+            text = "Works as-is with public resolvers like Cloudflare or Google. Fill these in only when you point at your own encrypted DNS server.",
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp, color = WhiteDnsPalette.Muted),
+        )
+
+        WhiteDnsTextField(
+            label = "Server hostname",
+            value = settings.resolverTlsServerName,
+            onValueChange = { onSettingsChange(settings.copy(resolverTlsServerName = it)) },
+            placeholder = "Leave blank for public resolvers",
+            rawValue = true,
+        )
+        if (isDoT) {
+            WhiteDnsTextField(
+                label = "Port",
+                value = settings.resolverDoTPort,
+                onValueChange = { onSettingsChange(settings.copy(resolverDoTPort = it)) },
+                placeholder = "853",
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                rawValue = true,
+            )
+        } else {
+            WhiteDnsTextField(
+                label = "Port",
+                value = settings.resolverDoHPort,
+                onValueChange = { onSettingsChange(settings.copy(resolverDoHPort = it)) },
+                placeholder = "443",
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                rawValue = true,
+            )
+            WhiteDnsTextField(
+                label = "Query path",
+                value = settings.resolverDoHPath,
+                onValueChange = { onSettingsChange(settings.copy(resolverDoHPath = it)) },
+                placeholder = "/dns-query",
+                rawValue = true,
+            )
+        }
+        WhiteDnsTextField(
+            label = "Certificate pin",
+            value = settings.resolverTlsPin,
+            onValueChange = { onSettingsChange(settings.copy(resolverTlsPin = it)) },
+            placeholder = "Only for a self-signed server",
+            rawValue = true,
+        )
+        Text(
+            text = "A pin trusts one certificate and nothing else. Set it when the server uses its own self-signed certificate instead of a public one.",
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp, color = WhiteDnsPalette.Muted),
+        )
+        Text(
+            text = "If the encrypted port is blocked, the app falls back to UDP and then TCP on port 53.",
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp, color = WhiteDnsPalette.Muted),
+        )
+    }
+}
+
+@Composable
+private fun CottenDnsFeatureLine(
+    label: String,
+    value: String,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.width(74.dp),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 10.sp,
+                color = WhiteDnsPalette.Muted,
+                fontWeight = FontWeight.Medium,
+            ),
+        )
+        Text(
+            text = value,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 10.sp,
+                lineHeight = 14.sp,
+                color = WhiteDnsPalette.Description,
+            ),
+        )
+    }
+}
+
+private data class CottenDnsPresetSummary(
+    val transport: String,
+    val delivery: String,
+    val mtu: String,
+)
+
+private fun cottenDnsPresetSummary(configPreset: String): CottenDnsPresetSummary {
+    return when (configPreset) {
+        "speed" -> CottenDnsPresetSummary(
+            transport = "UDP/53 with TCP/53 fallback",
+            delivery = "TXT + HTTPS rotation",
+            mtu = "MTU-weighted balancing, 4 probe samples, 25% max loss",
+        )
+        "survival" -> CottenDnsPresetSummary(
+            transport = "UDP/53 with TCP/53 fallback",
+            delivery = "TXT + CNAME + HTTPS + A rotation",
+            mtu = "least-loss balancing, smaller QNAME/EDNS shape, stricter 20% max loss",
+        )
+        "tcp-survival" -> CottenDnsPresetSummary(
+            transport = "forced DNS-over-TCP/53",
+            delivery = "TXT + HTTPS over persistent TCP/53",
+            mtu = "MTU-weighted balancing, lower resolver parallelism for TCP fallback",
+        )
+        "master-storm" -> CottenDnsPresetSummary(
+            transport = "UDP/53 only (no TCP; legacy MasterDNS/StormDNS)",
+            delivery = "TXT only (legacy servers answer TXT)",
+            mtu = "least-loss balancing, extra download duplication for reliability",
+        )
+        else -> CottenDnsPresetSummary(
+            transport = "UDP/53 with TCP/53 fallback",
+            delivery = "TXT + CNAME + NULL + HTTPS rotation",
+            mtu = "MTU-weighted balancing, adaptive grouping, 6 probe samples",
+        )
+    }
+}
 @Composable
 private fun MtuSettingsGroup(
     settings: WhiteDnsSettings,
@@ -7527,6 +7836,7 @@ private fun ResolverRuntimeSummary(
                 label = WhiteDnsL10n.resolverValidResolvers,
                 value = resolverState.validResolvers.size.toString(),
                 onClick = { selectedDialog = ResolverRuntimeDialogType.VALID },
+                showValidIcon = true,
             )
         }
         AnimatedVisibility(
@@ -7616,6 +7926,7 @@ private fun ResolverRuntimeValue(
     value: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    showValidIcon: Boolean = false,
 ) {
     val context = LocalContext.current
     Column(
@@ -7629,17 +7940,30 @@ private fun ResolverRuntimeValue(
             .clickable(role = Role.Button, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 9.dp),
     ) {
-        Text(
-            text = label,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.bodyMedium.copy(
-                fontSize = 9.sp,
-                color = WhiteDnsPalette.Muted,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 0.6.sp,
-            ),
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            if (showValidIcon) {
+                Icon(
+                    imageVector = Icons.Rounded.Check,
+                    contentDescription = null,
+                    tint = Color(0xFF34C759),
+                    modifier = Modifier.size(12.dp),
+                )
+            }
+            Text(
+                text = label,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 9.sp,
+                    color = WhiteDnsPalette.Muted,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.6.sp,
+                ),
+            )
+        }
         Spacer(modifier = Modifier.height(WhiteDnsSpacing.xs))
         Text(
             text = value,
@@ -8625,7 +8949,8 @@ private fun ConnectionLogsBlock(
     expanded: Boolean = false,
 ) {
     val logs = uiState.connectionLogs
-    val visibleLogs = if (expanded) logs else logs.take(10)
+    val logLimit = if (expanded) ExpandedConnectionLogLimit else CollapsedConnectionLogLimit
+    val visibleLogs = remember(logs, logLimit) { logs.take(logLimit) }
     val context = LocalContext.current
     val logsClipboardLabel = WhiteDnsL10n.whiteDnsLogsLabel
     val diagnosticsClipboardLabel = WhiteDnsL10n.whiteDnsDiagnosticsLabel
@@ -8706,6 +9031,9 @@ private fun ConnectionLogsBlock(
         }
     }
 }
+
+private const val CollapsedConnectionLogLimit = 8
+private const val ExpandedConnectionLogLimit = 24
 
 @Composable
 private fun LogActionButton(
@@ -9500,6 +9828,7 @@ private fun localizedBalancingStrategies(): List<Choice<Int>> = listOf(
     Choice(2, WhiteDnsL10n.balancingStrategyRoundRobin),
     Choice(3, WhiteDnsL10n.balancingStrategyLeastLoss),
     Choice(4, WhiteDnsL10n.balancingStrategyLowestLatency),
+    Choice(5, "MTU Weighted"),
 )
 
 @Composable
@@ -9525,6 +9854,13 @@ private fun localizedEncryptionMethods(): List<Choice<Int>> = listOf(
     Choice(3, WhiteDnsL10n.encryptionMethodAes128),
     Choice(4, WhiteDnsL10n.encryptionMethodAes192),
     Choice(5, WhiteDnsL10n.encryptionMethodAes256),
+)
+
+// CottenDns is the only bundled engine. Compatibility mode asks CottenDns to use
+// its legacy wire format for older compatible servers.
+private fun localizedServerTypes(): List<Choice<String>> = listOf(
+    Choice(ConnectionProfile.ServerTypeCottenDns, "CottenDns"),
+    Choice(ConnectionProfile.ServerTypeCompatibility, "Storm / Master DNS"),
 )
 
 @Composable

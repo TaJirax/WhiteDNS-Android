@@ -186,6 +186,7 @@ private val LocalWhiteDnsPalette = staticCompositionLocalOf<WhiteDnsPaletteColor
 internal val LocalWhiteDnsStrings = staticCompositionLocalOf<WhiteDnsStrings> { EnglishStrings }
 
 object WhiteDnsL10n {
+    val profileFieldServerType: String @Composable get() = LocalWhiteDnsStrings.current.profileFieldServerType
     val tabProfiles: String @Composable get() = LocalWhiteDnsStrings.current.tabProfiles
     val tabConnect: String @Composable get() = LocalWhiteDnsStrings.current.tabConnect
     val tabScan: String @Composable get() = LocalWhiteDnsStrings.current.tabScan
@@ -221,6 +222,7 @@ object WhiteDnsL10n {
     val bannerVpnWarningTitle: String @Composable get() = LocalWhiteDnsStrings.current.bannerVpnWarningTitle
     val bannerVpnWarningBody: String @Composable get() = LocalWhiteDnsStrings.current.bannerVpnWarningBody
     val parallelTest: String @Composable get() = LocalWhiteDnsStrings.current.parallelTest
+    val fastConnect: String @Composable get() = LocalWhiteDnsStrings.current.fastConnect
     val profileTabConnection: String @Composable get() = LocalWhiteDnsStrings.current.profileTabConnection
     val profileTabResolver: String @Composable get() = LocalWhiteDnsStrings.current.profileTabResolver
     val profileTabSetting: String @Composable get() = LocalWhiteDnsStrings.current.profileTabSetting
@@ -421,6 +423,8 @@ object WhiteDnsL10n {
     val settingResolverTimeout: String @Composable get() = LocalWhiteDnsStrings.current.settingResolverTimeout
     val settingResolverParallel: String @Composable get() = LocalWhiteDnsStrings.current.settingResolverParallel
     val settingResolverParallelNote: String @Composable get() = LocalWhiteDnsStrings.current.settingResolverParallelNote
+    val settingScanResolverParallel: String @Composable get() = LocalWhiteDnsStrings.current.settingScanResolverParallel
+    val settingScanResolverParallelNote: String @Composable get() = LocalWhiteDnsStrings.current.settingScanResolverParallelNote
     val settingLogsRetries: String @Composable get() = LocalWhiteDnsStrings.current.settingLogsRetries
     val settingLogsTimeout: String @Composable get() = LocalWhiteDnsStrings.current.settingLogsTimeout
     val settingLogsParallel: String @Composable get() = LocalWhiteDnsStrings.current.settingLogsParallel
@@ -597,7 +601,7 @@ object WhiteDnsL10n {
     val profileFieldEncryptionMethod: String @Composable get() = LocalWhiteDnsStrings.current.profileFieldEncryptionMethod
     val profileDomainPlaceholder: String @Composable get() = LocalWhiteDnsStrings.current.profileDomainPlaceholder
     val profileEncryptionKeyPlaceholder: String @Composable get() = LocalWhiteDnsStrings.current.profileEncryptionKeyPlaceholder
-    val profileMyStormDnsPlaceholder: String @Composable get() = LocalWhiteDnsStrings.current.profileMyStormDnsPlaceholder
+    val profileMyCottenDnsPlaceholder: String @Composable get() = LocalWhiteDnsStrings.current.profileMyCottenDnsPlaceholder
     val profileDomainFallback: String @Composable get() = LocalWhiteDnsStrings.current.profileDomainFallback
     val profileStatusActive: String @Composable get() = LocalWhiteDnsStrings.current.profileStatusActive
     val profileStatusSelected: String @Composable get() = LocalWhiteDnsStrings.current.profileStatusSelected

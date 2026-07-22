@@ -1,8 +1,8 @@
 # Third-Party Notices
 
-## MasterDNS Client / MasterDnsVPN
+## CottenDns Client / CottenDnsVPN
 
-Source: https://github.com/masterking32/MasterDnsVPN
+Source: https://github.com/masterking32/CottenDnsVPN
 License: MIT
 
 MIT License
@@ -27,9 +27,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## StormDNS
+## CottenDns
 
-Source: https://github.com/nullroute1970/StormDNS
+Source: https://github.com/nullroute1970/CottenDns
 License: MIT
 
 MIT License

@@ -42,7 +42,8 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
 
-                <data android:scheme="stormdns" />
+                <data android:scheme="CottenDns" />
+                <data android:scheme="cottendns" />
             </intent-filter>
         </activity>
 

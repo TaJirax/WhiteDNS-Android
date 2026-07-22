@@ -240,7 +240,7 @@ object WhiteDnsScannerResultStore {
     }
 
     private fun resultDirectory(context: Context): File {
-        return File(File(context.noBackupFilesDir, "stormdns"), "scan")
+        return File(File(context.noBackupFilesDir, "CottenDns"), "scan")
     }
 
     private fun stripScanResolverPort(resolver: String): String {

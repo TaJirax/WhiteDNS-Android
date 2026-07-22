@@ -5,14 +5,14 @@ import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
 import shop.whitedns.client.model.ConnectionProfile
-import shop.whitedns.client.model.StormDnsServerProfile
+import shop.whitedns.client.model.CottenDnsServerProfile
 import shop.whitedns.client.model.WhiteDnsSettings
 import shop.whitedns.client.model.runtimeConnectionSettings
 import shop.whitedns.client.model.syncSelectedConnectionProfileFields
 
 data class RuntimeLaunchRequest(
     val id: String,
-    val serverProfile: StormDnsServerProfile,
+    val serverProfile: CottenDnsServerProfile,
     val settings: WhiteDnsSettings,
 )
 
@@ -24,7 +24,7 @@ object RuntimeLaunchRequestStore {
     fun save(
         context: Context,
         requestId: String,
-        serverProfile: StormDnsServerProfile,
+        serverProfile: CottenDnsServerProfile,
         settings: WhiteDnsSettings,
     ): RuntimeLaunchRequest {
         require(requestId.isSafeRequestId()) { "Invalid runtime launch request ID" }
@@ -80,26 +80,32 @@ object RuntimeLaunchRequestStore {
         )
     }
 
-    private fun encodeServerProfile(profile: StormDnsServerProfile): JSONObject {
+    private fun encodeServerProfile(profile: CottenDnsServerProfile): JSONObject {
         return JSONObject()
             .put("id", profile.id)
             .put("label", profile.label)
             .put("domain", profile.domain)
             .put("encryptionKey", profile.encryptionKey)
             .put("encryptionMethod", profile.encryptionMethod)
+            .put("serverType", profile.serverType)
     }
 
-    private fun decodeServerProfile(json: JSONObject): StormDnsServerProfile {
-        return StormDnsServerProfile(
+    private fun decodeServerProfile(json: JSONObject): CottenDnsServerProfile {
+        return CottenDnsServerProfile(
             id = json.optString("id"),
             label = json.optString("label"),
             domain = json.optString("domain"),
             encryptionKey = json.optString("encryptionKey"),
             encryptionMethod = json.optInt("encryptionMethod", 1),
+            // Normalize on read so a persisted legacy alias (storm/master/…) is
+            // restored as canonical compatibility, never silently as native cotten.
+            serverType = ConnectionProfile.normalizeServerType(
+                json.optString("serverType", ConnectionProfile.ServerTypeCottenDns),
+            ),
         )
     }
 
-    private fun encodeSettings(settings: WhiteDnsSettings): JSONObject {
+    internal fun encodeSettings(settings: WhiteDnsSettings): JSONObject {
         val splitTunnelPackages = JSONArray()
         settings.splitTunnelPackages.forEach { packageName ->
             splitTunnelPackages.put(packageName)
@@ -110,6 +116,10 @@ object RuntimeLaunchRequestStore {
             .put("customServerDomain", settings.customServerDomain)
             .put("customServerEncryptionKey", settings.customServerEncryptionKey)
             .put("customServerEncryptionMethod", settings.customServerEncryptionMethod)
+            .put("configPreset", settings.configPreset)
+            .put("transportMode", settings.transportMode)
+            .put("deliveryMode", settings.deliveryMode)
+            .put("qnameMode", settings.qnameMode)
             .put("connectionMode", settings.connectionMode)
             .put("protocolType", settings.protocolType)
             .put("resolverText", settings.resolverText)
@@ -136,6 +146,8 @@ object RuntimeLaunchRequestStore {
             .put("mtuTestRetriesLogs", settings.mtuTestRetriesLogs)
             .put("mtuTestTimeoutLogs", settings.mtuTestTimeoutLogs)
             .put("mtuTestParallelismLogs", settings.mtuTestParallelismLogs)
+            .put("fastConnectEnabled", settings.fastConnectEnabled)
+            .put("scanResolverParallelism", settings.scanResolverParallelism)
             .put("rxTxWorkers", settings.rxTxWorkers)
             .put("tunnelProcessWorkers", settings.tunnelProcessWorkers)
             .put("tunnelPacketTimeoutSeconds", settings.tunnelPacketTimeoutSeconds)
@@ -170,7 +182,7 @@ object RuntimeLaunchRequestStore {
             .put("logLevel", settings.logLevel)
     }
 
-    private fun decodeSettings(json: JSONObject): WhiteDnsSettings {
+    internal fun decodeSettings(json: JSONObject): WhiteDnsSettings {
         val selectedConnectionProfileId = json.optString("selectedConnectionProfileId", ConnectionProfile.DefaultId)
         val settings = WhiteDnsSettings(
             selectedConnectionProfileId = selectedConnectionProfileId,
@@ -189,6 +201,10 @@ object RuntimeLaunchRequestStore {
             customServerDomain = json.optString("customServerDomain"),
             customServerEncryptionKey = json.optString("customServerEncryptionKey"),
             customServerEncryptionMethod = json.optInt("customServerEncryptionMethod", 1),
+            configPreset = json.optString("configPreset", "default"),
+            transportMode = json.optString("transportMode", "preset"),
+            deliveryMode = json.optString("deliveryMode", "preset"),
+            qnameMode = json.optString("qnameMode", "preset"),
             connectionMode = json.optString("connectionMode", "proxy"),
             protocolType = json.optString("protocolType", "SOCKS5"),
             resolverText = json.optString("resolverText"),
@@ -215,6 +231,8 @@ object RuntimeLaunchRequestStore {
             mtuTestRetriesLogs = json.optString("mtuTestRetriesLogs", "5"),
             mtuTestTimeoutLogs = json.optString("mtuTestTimeoutLogs", "2.0"),
             mtuTestParallelismLogs = json.optString("mtuTestParallelismLogs", "32"),
+            fastConnectEnabled = json.optBoolean("fastConnectEnabled", false),
+            scanResolverParallelism = json.optString("scanResolverParallelism", "25"),
             rxTxWorkers = json.optString("rxTxWorkers", "4"),
             tunnelProcessWorkers = json.optString("tunnelProcessWorkers", "4"),
             tunnelPacketTimeoutSeconds = json.optString("tunnelPacketTimeoutSeconds", "10.0"),

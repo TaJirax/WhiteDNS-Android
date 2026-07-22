@@ -8,6 +8,9 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
@@ -19,6 +22,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -32,8 +36,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import shop.whitedns.client.MainActivity
 import shop.whitedns.client.R
+import shop.whitedns.client.model.ConnectionProfile
 import shop.whitedns.client.model.ResolvedWhiteDnsSettings
-import shop.whitedns.client.model.StormDnsServerProfile
+import shop.whitedns.client.model.CottenDnsServerProfile
 import shop.whitedns.client.model.WhiteDnsOptions
 import shop.whitedns.client.model.WhiteDnsSettings
 import shop.whitedns.client.model.WhiteDnsSettingsStore
@@ -45,8 +50,8 @@ import shop.whitedns.client.runtime.RuntimeLaunchRequestStore
 import shop.whitedns.client.runtime.WhiteDnsRuntimeStateStore
 import shop.whitedns.client.runtime.WhiteDnsTrafficWarmup
 import shop.whitedns.client.runtime.formatTrafficNotificationText
-import shop.whitedns.client.runtime.parseStormDnsTrafficStatsLine
-import shop.whitedns.client.storm.StormDnsProcessManager
+import shop.whitedns.client.runtime.parseCottenDnsTrafficStatsLine
+import shop.whitedns.client.cottendns.CottenDnsProcessManager
 
 class WhiteDnsVpnService : VpnService() {
 
@@ -54,17 +59,45 @@ class WhiteDnsVpnService : VpnService() {
     private var foregroundStarted = false
     private var startJob: Job? = null
     private var keepaliveJob: Job? = null
+    private var networkRestartJob: Job? = null
     private var runtimeReady = false
     private var lastTrafficNotificationUpdateMillis = 0L
     private var currentSessionId = ""
     @Volatile
     private var stopping = false
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val stormDnsProcessManager by lazy {
-        StormDnsProcessManager(applicationContext)
+    private val CottenDnsProcessManager by lazy {
+        CottenDnsProcessManager(applicationContext)
     }
     private val tun2SocksProcessManager by lazy {
         Tun2SocksProcessManager(applicationContext)
+    }
+    private val connectivityManager by lazy {
+        getSystemService(ConnectivityManager::class.java)
+    }
+    @Volatile
+    private var defaultNetworkSignature = ""
+    private val defaultNetworkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            scheduleNetworkHandover(network, null, "available")
+        }
+
+        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+            scheduleNetworkHandover(network, capabilities, "capabilities changed")
+        }
+
+        override fun onLost(network: Network) {
+            scheduleNetworkHandover(network, null, "lost")
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        runCatching {
+            connectivityManager.registerDefaultNetworkCallback(defaultNetworkCallback)
+        }.onFailure { error ->
+            Log.w(Tag, "Unable to monitor default-network changes", error)
+        }
     }
 
     override fun onBind(intent: Intent): IBinder? {
@@ -82,7 +115,7 @@ class WhiteDnsVpnService : VpnService() {
             }
             else -> {
                 try {
-                    enterForeground("Preparing StormDNS")
+                    enterForeground("Preparing CottenDns")
                     startVpn(intent)
                     START_REDELIVER_INTENT
                 } catch (error: Exception) {
@@ -98,6 +131,8 @@ class WhiteDnsVpnService : VpnService() {
 
     override fun onDestroy() {
         startJob?.cancel()
+        networkRestartJob?.cancel()
+        runCatching { connectivityManager.unregisterNetworkCallback(defaultNetworkCallback) }
         stopVpn()
         exitForeground()
         serviceScope.cancel()
@@ -196,81 +231,145 @@ class WhiteDnsVpnService : VpnService() {
         startJob = serviceScope.launch {
             previousJob?.cancelAndJoin()
             currentSessionId = sessionId
-            try {
-                val launchRequest = RuntimeLaunchRequestStore.load(applicationContext, sessionId)
-                    ?: throw IllegalStateException("Runtime launch request is missing")
-                val settings = launchRequest.settings.runtimeConnectionSettings()
-                val resolvedSettings = settings.resolve()
-                if (resolvedSettings.connectionMode != "vpn") {
-                    throw IllegalStateException("VPN mode is not enabled")
-                }
-                if (resolvedSettings.resolverEntries.isEmpty()) {
-                    throw IllegalStateException("Resolvers are required to connect")
-                }
-                val serverProfile = launchRequest.serverProfile
+            stopping = false
+            var startedOnce = false
+            var restartDelayMillis = RestartInitialDelayMillis
+            while (isActive && !stopping) {
+                try {
+                    val launchRequest = RuntimeLaunchRequestStore.load(applicationContext, sessionId)
+                        ?: throw IllegalStateException("Runtime launch request is missing")
+                    val settings = launchRequest.settings.runtimeConnectionSettings()
+                    val resolvedSettings = settings.resolve()
+                    if (resolvedSettings.connectionMode != "vpn") {
+                        throw IllegalStateException("VPN mode is not enabled")
+                    }
+                    if (resolvedSettings.resolverEntries.isEmpty()) {
+                        throw IllegalStateException("Resolvers are required to connect")
+                    }
+                    val serverProfile = launchRequest.serverProfile
 
-                stopVpn()
-                WhiteDnsProxyService.stop(applicationContext)
-                waitForLocalPortToClose(resolvedSettings.listenPort)
-                stopping = false
-                runtimeReady = false
-                lastTrafficNotificationUpdateMillis = 0L
-                WhiteDnsRuntimeStateStore.markStarting(
-                    context = applicationContext,
-                    settings = settings,
-                    sessionId = sessionId,
-                    message = "Starting full-device VPN",
-                )
-                logInfo("Using custom StormDNS server")
-                logInfo("Starting internal SOCKS bridge")
-                startStormDnsAndVpn(sessionId, serverProfile, settings, resolvedSettings)
-            } catch (error: CancellationException) {
-                stopVpn()
-                throw error
-            } catch (error: Exception) {
-                failAndStopVpn("Failed to start WhiteDNS VPN", error)
+                    stopVpn()
+                    stopping = false
+                    WhiteDnsProxyService.stop(applicationContext)
+                    waitForLocalPortToClose(resolvedSettings.listenPort)
+                    runtimeReady = false
+                    lastTrafficNotificationUpdateMillis = 0L
+                    WhiteDnsRuntimeStateStore.markStarting(
+                        context = applicationContext,
+                        settings = settings,
+                        sessionId = sessionId,
+                        message = if (startedOnce) "Reconnecting full-device VPN" else "Starting full-device VPN",
+                    )
+                    logInfo("Using custom CottenDns server")
+                    logInfo("Starting internal SOCKS bridge")
+                    startCottenDnsAndVpn(sessionId, serverProfile, settings, resolvedSettings)
+                    startedOnce = true
+                    restartDelayMillis = RestartInitialDelayMillis
+                    monitorCottenDnsProcess()
+                } catch (error: CancellationException) {
+                    stopVpn()
+                    throw error
+                } catch (error: Exception) {
+                    val shouldRetry = startedOnce && isActive && !stopping
+                    stopVpn()
+                    if (!shouldRetry) {
+                        failAndStopVpn("Failed to start WhiteDNS VPN", error)
+                        return@launch
+                    }
+                    stopping = false
+                    updateForegroundNotification("VPN reconnecting")
+                    logWarning(
+                        "CottenDns stopped unexpectedly: ${error.message ?: error::class.java.simpleName}. " +
+                            "Restarting in ${restartDelayMillis / 1_000}s",
+                    )
+                    delay(restartDelayMillis)
+                    restartDelayMillis = (restartDelayMillis * 2).coerceAtMost(RestartMaxDelayMillis)
+                }
             }
         }
     }
 
-    private suspend fun startStormDnsAndVpn(
+    private suspend fun startCottenDnsAndVpn(
         sessionId: String,
-        serverProfile: StormDnsServerProfile,
+        serverProfile: CottenDnsServerProfile,
         settings: WhiteDnsSettings,
         resolvedSettings: ResolvedWhiteDnsSettings,
     ) {
         val startupFailure = AtomicReference<String?>(null)
-        stormDnsProcessManager.start(serverProfile, settings) { line ->
+        val lastStartupActivityMillis = AtomicLong(System.currentTimeMillis())
+        CottenDnsProcessManager.start(serverProfile, settings) { line ->
+            lastStartupActivityMillis.set(System.currentTimeMillis())
             logInfo(line)
-            detectStormDnsStartupFailure(line)?.let { failure ->
+            detectCottenDnsStartupFailure(line)?.let { failure ->
                 startupFailure.compareAndSet(null, failure)
             }
         }
         waitForProxyPort(
             listenPort = resolvedSettings.listenPort,
             startupFailure = { startupFailure.get() },
+            lastActivityMillis = { lastStartupActivityMillis.get() },
         )
         logInfo("SOCKS proxy is ready")
         startVpnRouting(sessionId, settings, resolvedSettings)
-        monitorStormDnsProcess()
+    }
+
+    private fun scheduleNetworkHandover(
+        network: Network,
+        capabilities: NetworkCapabilities?,
+        reason: String,
+    ) {
+        if (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true) {
+            return
+        }
+        val transports = buildString {
+            if (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) append("wifi,")
+            if (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true) append("cellular,")
+            if (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true) append("ethernet,")
+            if (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true) append("vpn,")
+        }
+        val signature = "$network|$reason|$transports"
+        if (signature == defaultNetworkSignature) {
+            return
+        }
+        defaultNetworkSignature = signature
+        if (!runtimeReady || stopping) {
+            return
+        }
+
+        networkRestartJob?.cancel()
+        networkRestartJob = serviceScope.launch {
+            delay(NetworkHandoverDebounceMillis)
+            if (!runtimeReady || stopping || !isActive) {
+                return@launch
+            }
+            logWarning("Default network $reason; restarting the DNS tunnel on the new route")
+            CottenDnsProcessManager.stop()
+        }
     }
 
     private suspend fun waitForProxyPort(
         listenPort: Int,
         startupFailure: () -> String?,
+        lastActivityMillis: () -> Long,
     ) {
         while (true) {
             startupFailure()?.let { failure ->
-                throw IllegalStateException("StormDNS startup failed: $failure")
+                throw IllegalStateException("CottenDns startup failed: $failure")
             }
-            if (!stormDnsProcessManager.isRunning()) {
-                val exitCode = stormDnsProcessManager.exitCodeOrNull()
+            val now = System.currentTimeMillis()
+            if (!CottenDnsProcessManager.isRunning()) {
+                val exitCode = CottenDnsProcessManager.exitCodeOrNull()
                 throw IllegalStateException(
-                    "StormDNS process exited before SOCKS was ready${exitCode?.let { " (exit code $it)" }.orEmpty()}",
+                    "CottenDns process exited before SOCKS was ready${exitCode?.let { " (exit code $it)" }.orEmpty()}",
                 )
             }
             if (canConnectToLocalPort(listenPort)) {
                 return
+            }
+            if (now - lastActivityMillis() >= ProxyStartupIdleTimeoutMillis) {
+                throw IllegalStateException(
+                    "Timed out waiting for CottenDns SOCKS listener on port $listenPort after startup logs stopped",
+                )
             }
             delay(500)
         }
@@ -295,7 +394,7 @@ class WhiteDnsVpnService : VpnService() {
         }.getOrDefault(false)
     }
 
-    private fun detectStormDnsStartupFailure(line: String): String? {
+    private fun detectCottenDnsStartupFailure(line: String): String? {
         val normalized = line.lowercase()
         return when {
             "no valid connections found after mtu testing" in normalized ||
@@ -306,12 +405,12 @@ class WhiteDnsVpnService : VpnService() {
         }
     }
 
-    private suspend fun monitorStormDnsProcess() {
+    private suspend fun monitorCottenDnsProcess() {
         while (true) {
-            if (!stormDnsProcessManager.isRunning()) {
-                val exitCode = stormDnsProcessManager.exitCodeOrNull()
+            if (!CottenDnsProcessManager.isRunning()) {
+                val exitCode = CottenDnsProcessManager.exitCodeOrNull()
                 throw IllegalStateException(
-                    "StormDNS process exited while VPN was active${exitCode?.let { " (exit code $it)" }.orEmpty()}",
+                    "CottenDns process exited while VPN was active${exitCode?.let { " (exit code $it)" }.orEmpty()}",
                 )
             }
             delay(1_000)
@@ -341,9 +440,17 @@ class WhiteDnsVpnService : VpnService() {
                 .setSession("WhiteDNS")
                 .setMtu(VpnMtu)
                 .addAddress(TunIpv4Address, TunIpv4PrefixLength)
+                // IPv6 sinkhole: this is an IPv4-only DNS tunnel, so IPv6 must be
+                // pulled into the tun (and dropped) instead of leaking out the
+                // physical interface. Dual-stack apps fall back to IPv4 via Happy
+                // Eyeballs, so IPv4 connectivity is unaffected.
+                // ponytail: failure-based sinkhole (tun2proxy resets v6 connects);
+                // strip AAAA at the resolver if the fallback latency ever matters.
+                .addAddress(TunIpv6Address, TunIpv6PrefixLength)
                 .addDnsServer(TunDnsServer)
                 .addRoute(TunDnsServer, 32)
                 .addRoute("0.0.0.0", 0)
+                .addRoute("::", 0)
                 .apply {
                     configureSplitTunnelApplications(
                         splitTunnelMode = resolvedSettings.splitTunnelMode,
@@ -371,10 +478,8 @@ class WhiteDnsVpnService : VpnService() {
                     if (stopping) {
                         Log.i(Tag, "tun2proxy stopped with code $exitCode")
                     } else {
-                        val message = "tun2proxy exited with code $exitCode"
-                        serviceScope.launch {
-                            failAndStopVpn(message)
-                        }
+                        logWarning("tun2proxy exited with code $exitCode; restarting the VPN runtime")
+                        CottenDnsProcessManager.stop()
                     }
                 },
             )
@@ -389,12 +494,14 @@ class WhiteDnsVpnService : VpnService() {
             reportReady("Full-device VPN routing started")
             startTrafficKeepalive(resolvedSettings)
         } catch (error: Exception) {
-            failAndStopVpn("Failed to start WhiteDNS VPN", error)
+            throw error
         }
     }
 
     private fun stopVpn() {
         stopping = true
+        networkRestartJob?.cancel()
+        networkRestartJob = null
         runtimeReady = false
         lastTrafficNotificationUpdateMillis = 0L
         stopTrafficKeepalive()
@@ -417,9 +524,9 @@ class WhiteDnsVpnService : VpnService() {
             Log.w(Tag, "Failed to close VPN interface", error)
         }
         runCatching {
-            stormDnsProcessManager.stop()
+            CottenDnsProcessManager.stop()
         }.onFailure { error ->
-            Log.w(Tag, "Failed to stop StormDNS", error)
+            Log.w(Tag, "Failed to stop CottenDns", error)
         }
         WhiteDnsRuntimeStateStore.markStopped(
             context = applicationContext,
@@ -512,7 +619,8 @@ class WhiteDnsVpnService : VpnService() {
     }
 
     private fun Builder.excludeWhiteDnsApp() {
-        tryAddDisallowedApplication(packageName, "Unable to exclude WhiteDNS app from VPN")
+        requireDisallowedApplication(packageName, "Unable to exclude WhiteDNS app from VPN")
+        logInfo("WhiteDNS app traffic bypasses VPN routing")
     }
 
     private fun Builder.tryAddAllowedApplication(appPackage: String): Boolean {
@@ -522,6 +630,17 @@ class WhiteDnsVpnService : VpnService() {
         }.getOrElse { error ->
             logWarning("Unable to route $appPackage through VPN: ${error.message ?: error::class.java.simpleName}")
             false
+        }
+    }
+
+    private fun Builder.requireDisallowedApplication(appPackage: String, message: String) {
+        runCatching {
+            addDisallowedApplication(appPackage)
+        }.onFailure { error ->
+            throw IllegalStateException(
+                "$message: ${error.message ?: error::class.java.simpleName}",
+                error,
+            )
         }
     }
 
@@ -563,7 +682,7 @@ class WhiteDnsVpnService : VpnService() {
         if (!runtimeReady) {
             return
         }
-        val stats = parseStormDnsTrafficStatsLine(message) ?: return
+        val stats = parseCottenDnsTrafficStatsLine(message) ?: return
         val now = System.currentTimeMillis()
         if (now - lastTrafficNotificationUpdateMillis < TrafficNotificationUpdateIntervalMillis) {
             return
@@ -638,26 +757,32 @@ class WhiteDnsVpnService : VpnService() {
         private const val ExtraSessionId = "shop.whitedns.client.vpn.extra.SESSION_ID"
         const val TunIpv4Address = "172.19.0.1"
         private const val TunIpv4PrefixLength = 30
+        private const val TunIpv6Address = "fd00:2:fd00:1:1:1:1:1"
+        private const val TunIpv6PrefixLength = 128
         private const val TunDnsServer = "172.19.0.2"
         private const val VpnMtu = 1500
         private const val Tun2proxyStopGracePeriodMillis = 5_000L
+        private const val ProxyStartupIdleTimeoutMillis = 120_000L
         private const val PreviousRuntimeStopTimeoutMillis = 3_000L
         private const val PreviousRuntimeStopPollMillis = 100L
         private const val TrafficNotificationUpdateIntervalMillis = 1_000L
         private const val TrafficWarmupProbeSpacingMillis = 300L
+        private const val NetworkHandoverDebounceMillis = 1_500L
+        private const val RestartInitialDelayMillis = 2_000L
+        private const val RestartMaxDelayMillis = 30_000L
         private const val NotificationId = 3101
         private const val NotificationChannelId = "whitedns_vpn"
 
         fun start(
             context: Context,
             sessionId: String,
-            serverProfile: StormDnsServerProfile? = null,
+            serverProfile: CottenDnsServerProfile? = null,
             settings: WhiteDnsSettings? = null,
         ) {
             val launchSettings = settings ?: WhiteDnsSettingsStore(context).load()
             val launchServerProfile = serverProfile
                 ?: selectServerProfile(launchSettings)
-                ?: throw IllegalStateException("No StormDNS server profile configured")
+                ?: throw IllegalStateException("No CottenDns server profile configured")
             RuntimeLaunchRequestStore.save(
                 context = context,
                 requestId = sessionId,
@@ -670,7 +795,7 @@ class WhiteDnsVpnService : VpnService() {
             ContextCompat.startForegroundService(context, intent)
         }
 
-        private fun selectServerProfile(settings: WhiteDnsSettings): StormDnsServerProfile? {
+        private fun selectServerProfile(settings: WhiteDnsSettings): CottenDnsServerProfile? {
             val connectionProfile = settings.selectedConnectionProfile()
             val domain = connectionProfile.customServerDomain
                 .trim()
@@ -679,12 +804,13 @@ class WhiteDnsVpnService : VpnService() {
             if (domain.isBlank() || encryptionKey.isBlank()) {
                 return null
             }
-            return StormDnsServerProfile(
+            return CottenDnsServerProfile(
                 id = "custom",
-                label = "Custom StormDNS Server",
+                label = "Custom CottenDns Server",
                 domain = domain,
                 encryptionKey = encryptionKey,
                 encryptionMethod = connectionProfile.customServerEncryptionMethod.coerceIn(0, 5),
+                serverType = ConnectionProfile.normalizeServerType(connectionProfile.serverType),
             )
         }
 

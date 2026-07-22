@@ -1,0 +1,100 @@
+name: CI Build
+
+# Builds the vendored CottenDns native client from third_party/CottenDns, runs
+# unit tests, and produces an installable debug APK on every push and pull
+# request so changes can be built and tested from CI without a local Android
+# toolchain.
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  ANDROID_API: "26"
+  GRADLE_ANDROID_NDK_VERSION: "26.3.11579264"
+  CottenDns_ANDROID_NDK_VERSION: "29.0.14206865"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build debug APK and run tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout WhiteDNS
+        uses: actions/checkout@v4
+
+      - name: Verify vendored CottenDns engine
+        run: |
+          set -euo pipefail
+          test -f third_party/CottenDns/go.mod
+          test -f third_party/CottenDns/cmd/client/main.go
+          if git ls-files --stage third_party/CottenDns | awk '{print $1}' | grep -qx '160000'; then
+            echo "::error::third_party/CottenDns is still a submodule. Vendor the CottenDns engine source in this repository."
+            exit 1
+          fi
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          set -euo pipefail
+          command -v sdkmanager
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;${GRADLE_ANDROID_NDK_VERSION}" \
+            "ndk;${CottenDns_ANDROID_NDK_VERSION}"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: third_party/CottenDns/go.mod
+          cache-dependency-path: third_party/CottenDns/go.sum
+
+      - name: Build vendored CottenDns native clients
+        run: |
+          set -euo pipefail
+          make CottenDns \
+            NDK_HOST=linux-x86_64 \
+            NDK_ROOT="${ANDROID_HOME}/ndk/${CottenDns_ANDROID_NDK_VERSION}"
+
+      - name: Run unit tests
+        run: ./gradlew --no-daemon testDebugUnitTest
+
+      - name: Build debug APKs
+        run: ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Upload debug APKs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: whitedns-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+
+      - name: Upload unit test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: app/build/reports/tests/testDebugUnitTest
+          if-no-files-found: ignore

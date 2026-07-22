@@ -35,6 +35,13 @@ private fun parseAdvancedSettingsProfileFromToml(
         }
     }
 
+    applyIfPresent("CONFIG_PRESET") { value ->
+        val preset = value.stringValue("CONFIG_PRESET").lowercase(Locale.US)
+        if (preset !in setOf("default", "speed", "survival", "tcp-survival")) {
+            value.fail("CONFIG_PRESET must be one of default, speed, survival, tcp-survival")
+        }
+        settings.copy(configPreset = preset)
+    }
     applyIfPresent("LISTEN_IP") { value ->
         val listenIp = value.stringValue("LISTEN_IP").trim()
         if (listenIp.isBlank()) {
@@ -75,7 +82,7 @@ private fun parseAdvancedSettingsProfileFromToml(
         settings.copy(localDnsPort = value.intValue("LOCAL_DNS_PORT", 1, 65535).toString())
     }
     applyIfPresent("RESOLVER_BALANCING_STRATEGY") { value ->
-        settings.copy(balancingStrategy = value.enumIntValue("RESOLVER_BALANCING_STRATEGY", setOf(1, 2, 3, 4)))
+        settings.copy(balancingStrategy = value.enumIntValue("RESOLVER_BALANCING_STRATEGY", setOf(1, 2, 3, 4, 5)))
     }
     applyIfPresent("UPLOAD_PACKET_DUPLICATION_COUNT") { value ->
         settings.copy(uploadDuplication = value.intValue("UPLOAD_PACKET_DUPLICATION_COUNT", 1, 30).toString())

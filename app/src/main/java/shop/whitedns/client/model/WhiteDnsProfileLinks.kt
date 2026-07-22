@@ -3,17 +3,32 @@ package shop.whitedns.client.model
 import java.util.Base64
 import org.json.JSONObject
 
-private const val StormDnsProfileScheme = "stormdns"
-private const val StormDnsProfileSchema = "whitedns.profile"
-private const val StormDnsProfileVersion = 1
+private const val CottenDnsProfileScheme = "CottenDns"
+// Legacy schemes import as Storm/Master DNS (compatibility) profiles.
+private val CompatibilityProfileSchemes = listOf("stormdns", "masterdns")
+private val SupportedProfileSchemes =
+    listOf(CottenDnsProfileScheme, "cottendns") + CompatibilityProfileSchemes
 
-fun WhiteDnsSettings.exportStormDnsProfileLink(profile: ConnectionProfile = selectedConnectionProfile()): String {
+// Server type implied by the link scheme, used when the payload omits server_type.
+private fun schemeServerType(rawLink: String): String {
+    val lower = rawLink.trim().lowercase()
+    return if (CompatibilityProfileSchemes.any { lower.startsWith("$it://") }) {
+        ConnectionProfile.ServerTypeCompatibility
+    } else {
+        ConnectionProfile.ServerTypeCottenDns
+    }
+}
+private const val CottenDnsProfileSchema = "whitedns.profile"
+private const val CottenDnsProfileVersion = 1
+
+fun WhiteDnsSettings.exportCottenDnsProfileLink(profile: ConnectionProfile = selectedConnectionProfile()): String {
     val normalizedProfile = profile.copy(
         name = profile.name.ifBlank { profile.customServerDomain.ifBlank { "WhiteDNS Profile" } },
         serverMode = "custom",
         customServerDomain = profile.customServerDomain.trim().trimEnd('.'),
         customServerEncryptionKey = profile.customServerEncryptionKey.trim(),
         customServerEncryptionMethod = profile.customServerEncryptionMethod.coerceIn(0, 5),
+        serverType = ConnectionProfile.normalizeServerType(profile.serverType),
     )
     if (normalizedProfile.customServerDomain.isBlank() || normalizedProfile.customServerEncryptionKey.isBlank()) {
         throw IllegalArgumentException("Custom server domain and encryption key are required to export")
@@ -26,32 +41,34 @@ fun WhiteDnsSettings.exportStormDnsProfileLink(profile: ConnectionProfile = sele
             JSONObject()
                 .put("domain", normalizedProfile.customServerDomain)
                 .put("encryption_key", normalizedProfile.customServerEncryptionKey)
-                .put("encryption_method", normalizedProfile.customServerEncryptionMethod),
+                .put("encryption_method", normalizedProfile.customServerEncryptionMethod)
+                .put("server_type", normalizedProfile.serverType),
         )
 
     val root = JSONObject()
-        .put("schema", StormDnsProfileSchema)
-        .put("version", StormDnsProfileVersion)
+        .put("schema", CottenDnsProfileSchema)
+        .put("version", CottenDnsProfileVersion)
         .put("profile", profileJson)
 
-    return "$StormDnsProfileScheme://${encodeProfilePayload(root)}"
+    val scheme = CottenDnsProfileScheme
+    return "$scheme://${encodeProfilePayload(root)}"
 }
 
-fun WhiteDnsSettings.exportAllStormDnsProfileLinks(): String {
+fun WhiteDnsSettings.exportAllCottenDnsProfileLinks(): String {
     val links = normalizedConnectionProfiles()
         .filter { profile ->
             profile.serverMode == "custom" &&
                 profile.customServerDomain.isNotBlank() &&
                 profile.customServerEncryptionKey.isNotBlank()
         }
-        .map { profile -> exportStormDnsProfileLink(profile) }
+        .map { profile -> exportCottenDnsProfileLink(profile) }
     if (links.isEmpty()) {
         throw IllegalArgumentException("No custom profiles are available to export")
     }
     return links.joinToString(separator = "\n")
 }
 
-fun WhiteDnsSettings.importStormDnsProfileLinks(
+fun WhiteDnsSettings.importCottenDnsProfileLinks(
     rawLinks: String,
     nowMillis: Long = System.currentTimeMillis(),
 ): WhiteDnsSettings {
@@ -64,13 +81,13 @@ fun WhiteDnsSettings.importStormDnsProfileLinks(
         }
         .toList()
     if (links.isEmpty()) {
-        throw IllegalArgumentException("Enter at least one stormdns:// profile link")
+        throw IllegalArgumentException("Enter at least one cottendns:// / stormdns:// / masterdns:// profile link")
     }
 
     var nextSettings = this
     links.forEachIndexed { index, (lineNumber, link) ->
         nextSettings = runCatching {
-            nextSettings.importStormDnsProfileLink(
+            nextSettings.importCottenDnsProfileLink(
                 rawLink = link,
                 nowMillis = nowMillis + index,
             )
@@ -81,17 +98,17 @@ fun WhiteDnsSettings.importStormDnsProfileLinks(
     return nextSettings
 }
 
-fun WhiteDnsSettings.importStormDnsProfileLink(
+fun WhiteDnsSettings.importCottenDnsProfileLink(
     rawLink: String,
     nowMillis: Long = System.currentTimeMillis(),
 ): WhiteDnsSettings {
     val root = decodeProfilePayload(rawLink)
     val schema = root.requiredString("schema")
-    if (schema != StormDnsProfileSchema) {
+    if (schema != CottenDnsProfileSchema) {
         throw IllegalArgumentException("Unsupported profile schema")
     }
-    val version = root.optionalInt("version") ?: StormDnsProfileVersion
-    if (version != StormDnsProfileVersion) {
+    val version = root.optionalInt("version") ?: CottenDnsProfileVersion
+    if (version != CottenDnsProfileVersion) {
         throw IllegalArgumentException("Unsupported profile version")
     }
 
@@ -114,6 +131,11 @@ fun WhiteDnsSettings.importStormDnsProfileLink(
     if (encryptionMethod !in 0..5) {
         throw IllegalArgumentException("Server encryption method must be between 0 and 5")
     }
+    // Prefer an explicit server_type in the payload; otherwise infer it from the
+    // link scheme (stormdns:// / masterdns:// -> compatibility, cottendns:// -> native).
+    val serverType = ConnectionProfile.normalizeServerType(
+        serverJson.optionalString("server_type") ?: schemeServerType(rawLink),
+    )
     val importedProfile = ConnectionProfile(
         id = profileId,
         name = profileName,
@@ -121,6 +143,7 @@ fun WhiteDnsSettings.importStormDnsProfileLink(
         customServerDomain = domain,
         customServerEncryptionKey = encryptionKey,
         customServerEncryptionMethod = encryptionMethod,
+        serverType = serverType,
         resolverProfileId = "",
         connectionMode = connectionMode,
     )
@@ -143,11 +166,10 @@ private fun encodeProfilePayload(root: JSONObject): String {
 
 private fun decodeProfilePayload(rawLink: String): JSONObject {
     val link = rawLink.trim()
-    val prefix = "$StormDnsProfileScheme://"
-    if (!link.startsWith(prefix)) {
-        throw IllegalArgumentException("Profile link must start with stormdns://")
-    }
-    val payload = link.removePrefix(prefix).trim()
+    val scheme = SupportedProfileSchemes.firstOrNull { link.startsWith("$it://", ignoreCase = true) }
+        ?: throw IllegalArgumentException("Profile link must start with cottendns://, stormdns://, or masterdns://")
+    // Strip "scheme://" by length so mixed-case schemes are handled too.
+    val payload = link.substring(scheme.length + 3).trim()
     if (payload.isBlank()) {
         throw IllegalArgumentException("Profile link is empty")
     }

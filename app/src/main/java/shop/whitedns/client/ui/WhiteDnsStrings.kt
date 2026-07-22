@@ -64,6 +64,7 @@ interface WhiteDnsStrings {
 
     // Connect tab labels
     val parallelTest: String
+    val fastConnect: String
     val connectProgressConnected: String
     val serverTestTitle: String
     val serverTestButton: String
@@ -287,6 +288,8 @@ interface WhiteDnsStrings {
     val settingResolverTimeout: String
     val settingResolverParallel: String
     val settingResolverParallelNote: String
+    val settingScanResolverParallel: String
+    val settingScanResolverParallelNote: String
     val settingLogsRetries: String
     val settingLogsTimeout: String
     val settingLogsParallel: String
@@ -460,9 +463,14 @@ interface WhiteDnsStrings {
     val profileFieldDomain: String
     val profileFieldEncryptionKey: String
     val profileFieldEncryptionMethod: String
+
+    // Server engine generation of the profile's target server. Default getter so
+    // language packs inherit an English fallback without each needing an override.
+    val profileFieldServerType: String get() = "Server Type"
+
     val profileDomainPlaceholder: String
     val profileEncryptionKeyPlaceholder: String
-    val profileMyStormDnsPlaceholder: String
+    val profileMyCottenDnsPlaceholder: String
     val profileDomainFallback: String
     val profileStatusActive: String
     val profileStatusSelected: String
@@ -634,6 +642,7 @@ object EnglishStrings : WhiteDnsStrings {
     override val bannerVpnWarningBody = "Full VPN mode may affect performance. Proxy mode is recommended for most users."
 
     override val parallelTest = "Parallel Test"
+    override val fastConnect = "Fast Connect"
     override val connectProgressConnected = "Connected"
     override val serverTestTitle = "SERVER TEST"
     override val serverTestButton = "TEST SERVERS"
@@ -666,8 +675,8 @@ object EnglishStrings : WhiteDnsStrings {
     override val profileTabSetting = "Setting"
 
     override val settingGuideTitle = "SETTING PROFILE GUIDE"
-    override val settingGuideIntro = "Setting profiles change how the MasterDNS/StormDNS client behaves after you choose a connection and resolver list. Most values are MasterDNS/StormDNS client_config.toml runtime knobs; Android-only helpers are marked by WhiteDNS behavior."
-    override val settingGuideSource = "Based on MasterDNS/StormDNS client_config.toml and WhiteDNS runtime behavior."
+    override val settingGuideIntro = "Setting profiles change how the CottenDns/CottenDns client behaves after you choose a connection and resolver list. Most values are CottenDns/CottenDns client_config.toml runtime knobs; Android-only helpers are marked by WhiteDNS behavior."
+    override val settingGuideSource = "Based on CottenDns/CottenDns client_config.toml and WhiteDNS runtime behavior."
     override val settingGuideEffectLabel = "Effect"
     override val cdSettingGuide = "Open setting profile guide"
     override val settingGuideSections = listOf(
@@ -681,7 +690,7 @@ object EnglishStrings : WhiteDnsStrings {
                 ),
                 SettingsGuideEntry(
                     title = "Max Upload / Max Download",
-                    body = "Upper limits for the largest payload StormDNS will try in each direction during MTU search.",
+                    body = "Upper limits for the largest payload CottenDns will try in each direction during MTU search.",
                     effect = "Higher values can improve throughput when DNS paths allow large packets, but scans take longer and may fail more often on filtered resolvers.",
                 ),
                 SettingsGuideEntry(
@@ -691,7 +700,7 @@ object EnglishStrings : WhiteDnsStrings {
                 ),
                 SettingsGuideEntry(
                     title = "Logs Retries / Timeout / Parallel",
-                    body = "Used when StormDNS starts from cached resolver log entries instead of scanning the whole resolver list.",
+                    body = "Used when CottenDns starts from cached resolver log entries instead of scanning the whole resolver list.",
                     effect = "Higher values make cached startup safer. Lower values reconnect quicker when you trust the previous working resolvers.",
                 ),
             ),
@@ -746,7 +755,7 @@ object EnglishStrings : WhiteDnsStrings {
                 ),
                 SettingsGuideEntry(
                     title = "SOCKS5 Authentication / Username / Password",
-                    body = "Optional username and password for the local SOCKS5 proxy. This protects the local proxy, not the remote StormDNS server.",
+                    body = "Optional username and password for the local SOCKS5 proxy. This protects the local proxy, not the remote CottenDns server.",
                     effect = "Turn it on if the proxy is reachable beyond the phone. Apps must then be configured with the same username and password.",
                 ),
             ),
@@ -761,7 +770,7 @@ object EnglishStrings : WhiteDnsStrings {
                 ),
                 SettingsGuideEntry(
                     title = "Upload Dup / Download Dup",
-                    body = "How many copies StormDNS sends for upload data and download-support packets. Download duplicates are mostly ACK/NACK support packets.",
+                    body = "How many copies CottenDns sends for upload data and download-support packets. Download duplicates are mostly ACK/NACK support packets.",
                     effect = "Higher upload duplication multiplies real upload usage. Higher download duplication costs little upload and can improve download reliability on lossy links.",
                 ),
                 SettingsGuideEntry(
@@ -781,7 +790,7 @@ object EnglishStrings : WhiteDnsStrings {
             entries = listOf(
                 SettingsGuideEntry(
                     title = "Ping Watchdog",
-                    body = "If non-ping traffic is active but no server response arrives for this many seconds, StormDNS restarts the session. Zero disables it.",
+                    body = "If non-ping traffic is active but no server response arrives for this many seconds, CottenDns restarts the session. Zero disables it.",
                     effect = "Helps recover a silent zombie tunnel. Too short can restart healthy but slow sessions.",
                 ),
                 SettingsGuideEntry(
@@ -791,7 +800,7 @@ object EnglishStrings : WhiteDnsStrings {
                 ),
                 SettingsGuideEntry(
                     title = "Log Level",
-                    body = "Controls how much diagnostic information StormDNS prints: DEBUG, INFO, WARN, or ERROR.",
+                    body = "Controls how much diagnostic information CottenDns prints: DEBUG, INFO, WARN, or ERROR.",
                     effect = "DEBUG and INFO help troubleshooting but create noisier logs. WARN or ERROR are quieter for normal use.",
                 ),
             ),
@@ -974,6 +983,8 @@ object EnglishStrings : WhiteDnsStrings {
     override val settingResolverTimeout = "Resolver Timeout"
     override val settingResolverParallel = "Resolver MTU Parallelism"
     override val settingResolverParallelNote = "More parallel MTU tests can make the first connection faster, but may put pressure on the phone."
+    override val settingScanResolverParallel = "Scanner Resolver Parallelism"
+    override val settingScanResolverParallelNote = "How many resolvers each scan worker tests at the same time. Higher is faster but heavier on the phone; it multiplies with the worker count above."
     override val settingLogsRetries = "Logs Retries"
     override val settingLogsTimeout = "Logs Timeout"
     override val settingLogsParallel = "Logs Parallel"
@@ -1134,14 +1145,14 @@ object EnglishStrings : WhiteDnsStrings {
     override val scanStatusIdle = "Idle"
 
     override val groupCustomConnections = "Custom Connections"
-    override val customConnectionsEmpty = "No custom StormDNS connections yet."
+    override val customConnectionsEmpty = "No custom CottenDns connections yet."
     override val profileFieldDomain = "Domain"
     override val profileFieldEncryptionKey = "Encryption Key"
     override val profileFieldEncryptionMethod = "Encryption Method"
     override val profileDomainPlaceholder = "v.example.com"
     override val profileEncryptionKeyPlaceholder = "32-character key"
-    override val profileMyStormDnsPlaceholder = "My StormDNS"
-    override val profileDomainFallback = "Custom StormDNS"
+    override val profileMyCottenDnsPlaceholder = "My CottenDns"
+    override val profileDomainFallback = "Custom CottenDns"
     override val profileStatusActive = "ACTIVE"
     override val profileStatusSelected = "SELECTED"
     override val profileStatusModified = "MODIFIED"
@@ -1298,6 +1309,7 @@ object PersianStrings : WhiteDnsStrings {
     override val bannerVpnWarningBody = "حالت VPN کامل ممکن است عملکرد را تحت‌تأثیر قرار دهد. حالت پروکسی برای اکثر کاربران توصیه می‌شود."
 
     override val parallelTest = "تست موازی"
+    override val fastConnect = "Fast Connect"
     override val connectProgressConnected = "متصل شد"
     override val serverTestTitle = "تست سرور"
     override val serverTestButton = "تست سرورها"
@@ -1330,8 +1342,8 @@ object PersianStrings : WhiteDnsStrings {
     override val profileTabSetting = "تنظیمات"
 
     override val settingGuideTitle = "راهنمای پروفایل تنظیمات"
-    override val settingGuideIntro = "پروفایل تنظیمات مشخص می‌کند کلاینت MasterDNS/StormDNS بعد از انتخاب اتصال و لیست ریزالورها چطور کار کند. بیشتر گزینه‌ها همان تنظیمات runtime در client_config.toml مربوط به MasterDNS/StormDNS هستند؛ بخش‌های مخصوص اندروید بر اساس رفتار WhiteDNS توضیح داده شده‌اند."
-    override val settingGuideSource = "بر اساس client_config.toml در MasterDNS/StormDNS و رفتار اجرایی WhiteDNS."
+    override val settingGuideIntro = "پروفایل تنظیمات مشخص می‌کند کلاینت CottenDns/CottenDns بعد از انتخاب اتصال و لیست ریزالورها چطور کار کند. بیشتر گزینه‌ها همان تنظیمات runtime در client_config.toml مربوط به CottenDns/CottenDns هستند؛ بخش‌های مخصوص اندروید بر اساس رفتار WhiteDNS توضیح داده شده‌اند."
+    override val settingGuideSource = "بر اساس client_config.toml در CottenDns/CottenDns و رفتار اجرایی WhiteDNS."
     override val settingGuideEffectLabel = "اثر"
     override val cdSettingGuide = "باز کردن راهنمای پروفایل تنظیمات"
     override val settingGuideSections = listOf(
@@ -1345,7 +1357,7 @@ object PersianStrings : WhiteDnsStrings {
                 ),
                 SettingsGuideEntry(
                     title = "حداکثر آپلود / حداکثر دانلود",
-                    body = "بالاترین اندازه‌ای که StormDNS در هر جهت برای پیدا کردن MTU امتحان می‌کند.",
+                    body = "بالاترین اندازه‌ای که CottenDns در هر جهت برای پیدا کردن MTU امتحان می‌کند.",
                     effect = "عدد بالاتر می‌تواند روی مسیرهای DNS آزادتر سرعت بهتری بدهد، ولی اسکن طولانی‌تر می‌شود و روی ریزالورهای محدود احتمال خطا بیشتر است.",
                 ),
                 SettingsGuideEntry(
@@ -1355,7 +1367,7 @@ object PersianStrings : WhiteDnsStrings {
                 ),
                 SettingsGuideEntry(
                     title = "تلاش مجدد / تایم‌اوت / موازی‌سازی لاگ‌ها",
-                    body = "وقتی StormDNS به‌جای اسکن کامل از ریزالورهای ذخیره‌شده در لاگ شروع می‌کند، این مقادیر استفاده می‌شوند.",
+                    body = "وقتی CottenDns به‌جای اسکن کامل از ریزالورهای ذخیره‌شده در لاگ شروع می‌کند، این مقادیر استفاده می‌شوند.",
                     effect = "عدد بالاتر شروع از کش را مطمئن‌تر می‌کند. عدد پایین‌تر وقتی به ریزالورهای قبلی اعتماد دارید اتصال مجدد را سریع‌تر می‌کند.",
                 ),
             ),
@@ -1410,7 +1422,7 @@ object PersianStrings : WhiteDnsStrings {
                 ),
                 SettingsGuideEntry(
                     title = "احراز هویت SOCKS5 / نام کاربری / رمز عبور",
-                    body = "نام کاربری و رمز عبور اختیاری برای پروکسی SOCKS5 محلی. این فقط پروکسی محلی را محافظت می‌کند، نه سرور StormDNS را.",
+                    body = "نام کاربری و رمز عبور اختیاری برای پروکسی SOCKS5 محلی. این فقط پروکسی محلی را محافظت می‌کند، نه سرور CottenDns را.",
                     effect = "اگر پروکسی از خارج گوشی قابل دسترسی است آن را روشن کنید. برنامه‌ها باید همان نام کاربری و رمز عبور را داشته باشند.",
                 ),
             ),
@@ -1425,7 +1437,7 @@ object PersianStrings : WhiteDnsStrings {
                 ),
                 SettingsGuideEntry(
                     title = "تکرار آپلود / تکرار دانلود",
-                    body = "تعداد کپی‌هایی که StormDNS برای داده آپلود و بسته‌های پشتیبان دانلود می‌فرستد. تکرار دانلود بیشتر ACK/NACKهای کوچک است.",
+                    body = "تعداد کپی‌هایی که CottenDns برای داده آپلود و بسته‌های پشتیبان دانلود می‌فرستد. تکرار دانلود بیشتر ACK/NACKهای کوچک است.",
                     effect = "تکرار آپلود مصرف واقعی آپلود را چندبرابر می‌کند. تکرار دانلود هزینه آپلود کمی دارد و روی لینک packet loss دار دانلود را پایدارتر می‌کند.",
                 ),
                 SettingsGuideEntry(
@@ -1445,7 +1457,7 @@ object PersianStrings : WhiteDnsStrings {
             entries = listOf(
                 SettingsGuideEntry(
                     title = "نظارت Ping",
-                    body = "اگر ترافیک غیر ping فعال باشد ولی در این تعداد ثانیه هیچ پاسخی از سرور نیاید، StormDNS session را ری‌استارت می‌کند. صفر آن را خاموش می‌کند.",
+                    body = "اگر ترافیک غیر ping فعال باشد ولی در این تعداد ثانیه هیچ پاسخی از سرور نیاید، CottenDns session را ری‌استارت می‌کند. صفر آن را خاموش می‌کند.",
                     effect = "برای بیرون آمدن از حالت تونل خاموش و بی‌پاسخ مفید است. عدد خیلی کوتاه ممکن است session سالم ولی کند را بی‌دلیل ری‌استارت کند.",
                 ),
                 SettingsGuideEntry(
@@ -1455,7 +1467,7 @@ object PersianStrings : WhiteDnsStrings {
                 ),
                 SettingsGuideEntry(
                     title = "سطح لاگ",
-                    body = "میزان اطلاعات تشخیصی StormDNS را کنترل می‌کند: DEBUG، INFO، WARN یا ERROR.",
+                    body = "میزان اطلاعات تشخیصی CottenDns را کنترل می‌کند: DEBUG، INFO، WARN یا ERROR.",
                     effect = "DEBUG و INFO برای عیب‌یابی بهترند ولی لاگ‌ها را شلوغ می‌کنند. WARN یا ERROR برای استفاده عادی آرام‌ترند.",
                 ),
             ),
@@ -1638,6 +1650,8 @@ object PersianStrings : WhiteDnsStrings {
     override val settingResolverTimeout = "تایم‌اوت ریزالور"
     override val settingResolverParallel = "موازی‌سازی MTU ریزالور"
     override val settingResolverParallelNote = "تست‌های موازی بیشتر می‌تواند اتصال اول را سریع‌تر کند، اما ممکن است به گوشی فشار وارد کند."
+    override val settingScanResolverParallel = "موازی‌سازی ریزالور اسکنر"
+    override val settingScanResolverParallelNote = "هر کارگر اسکن هم‌زمان چند ریزالور را تست کند. مقدار بیشتر سریع‌تر است اما فشار بیشتری به گوشی وارد می‌کند و با تعداد کارگرهای بالا ضرب می‌شود."
     override val settingLogsRetries = "تلاش مجدد لاگ‌ها"
     override val settingLogsTimeout = "تایم‌اوت لاگ‌ها"
     override val settingLogsParallel = "موازی لاگ‌ها"
@@ -1798,14 +1812,14 @@ object PersianStrings : WhiteDnsStrings {
     override val scanStatusIdle = "بیکار"
 
     override val groupCustomConnections = "اتصال‌های سفارشی"
-    override val customConnectionsEmpty = "هنوز اتصال StormDNS سفارشی وجود ندارد."
+    override val customConnectionsEmpty = "هنوز اتصال CottenDns سفارشی وجود ندارد."
     override val profileFieldDomain = "دامنه"
     override val profileFieldEncryptionKey = "کلید رمزنگاری"
     override val profileFieldEncryptionMethod = "روش رمزنگاری"
     override val profileDomainPlaceholder = "v.example.com"
     override val profileEncryptionKeyPlaceholder = "کلید ۳۲ کاراکتری"
-    override val profileMyStormDnsPlaceholder = "StormDNS من"
-    override val profileDomainFallback = "StormDNS سفارشی"
+    override val profileMyCottenDnsPlaceholder = "CottenDns من"
+    override val profileDomainFallback = "CottenDns سفارشی"
     override val profileStatusActive = "فعال"
     override val profileStatusSelected = "انتخاب شده"
     override val profileStatusModified = "تغییر یافته"

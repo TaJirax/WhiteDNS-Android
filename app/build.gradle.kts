@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
@@ -5,9 +7,26 @@ plugins {
 
 val whiteDnsVersionCode = providers.gradleProperty("WHITE_DNS_VERSION_CODE")
     .map { it.toInt() }
-    .orElse(12)
+    .orElse(13)
 val whiteDnsVersionName = providers.gradleProperty("WHITE_DNS_VERSION_NAME")
-    .orElse("1.5.1")
+    .orElse("1.5.1c")
+
+// Release signing is read from a gitignored keystore.properties at the repo root
+// (never committed). Absent the file (e.g. a fresh clone), release builds stay
+// unsigned instead of failing, so debug work is unaffected.
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        keystorePropertiesFile.inputStream().use { load(it) }
+    }
+}
+val hasReleaseSigning = keystorePropertiesFile.exists()
+val cottenDnsNativeBinaries = fileTree("src/main/jniLibs") {
+    include("*/libcottendns_client.so")
+}
+val cottenDnsEngineSources = fileTree(rootProject.file("third_party/CottenDns")) {
+    exclude(".gocache/**", "build/**")
+}
 
 android {
     namespace = "shop.whitedns.client"
@@ -15,7 +34,10 @@ android {
     ndkVersion = "26.3.11579264"
 
     defaultConfig {
-        applicationId = "shop.whitedns.client"
+        // Forked app identity: installs side-by-side with the upstream WhiteDNS
+        // (namespace stays shop.whitedns.client so the R class / code package is
+        // unchanged; only the install id and FileProvider authority shift).
+        applicationId = "shop.whitedns.client.c"
         minSdk = 26
         targetSdk = 34
         versionCode = whiteDnsVersionCode.get()
@@ -26,12 +48,26 @@ android {
         }
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
         }
 
         release {
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -67,6 +103,69 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+}
+
+val verifyCottenDnsNativeBinaries by tasks.registering {
+    group = "verification"
+    description = "Fails when packaged CottenDns binaries do not match the checked-out engine source."
+    inputs.files(cottenDnsNativeBinaries)
+    inputs.files(cottenDnsEngineSources)
+
+    doLast {
+        val repositoryDir = rootProject.projectDir
+        fun commandResult(vararg command: String): Pair<Int, String> {
+            val process = ProcessBuilder(*command)
+                .directory(repositoryDir)
+                .redirectErrorStream(true)
+                .start()
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            return process.waitFor() to output.trim()
+        }
+
+        val (revisionExit, expectedRevision) = commandResult("git", "rev-parse", "HEAD")
+        if (revisionExit != 0 || !expectedRevision.matches(Regex("[0-9a-fA-F]{40}"))) {
+            throw GradleException("Unable to determine the Git revision for CottenDns binary verification.")
+        }
+
+        val (dirtyExit, dirtyOutput) = commandResult(
+            "git",
+            "diff",
+            "--quiet",
+            "HEAD",
+            "--",
+            "third_party/CottenDns",
+        )
+        if (dirtyExit != 0) {
+            throw GradleException(
+                "CottenDns engine sources have uncommitted changes. Commit them, then run make CottenDns before building the app." +
+                    dirtyOutput.takeIf(String::isNotBlank)?.let { "\n$it" }.orEmpty(),
+            )
+        }
+
+        val binaries = cottenDnsNativeBinaries.files.sortedBy { it.path }
+        if (binaries.size != 4) {
+            throw GradleException("Expected four CottenDns Android binaries, found ${binaries.size}. Run make CottenDns.")
+        }
+
+        val revisionPattern = Regex("vcs\\.revision=([0-9a-fA-F]{40})")
+        binaries.forEach { binary ->
+            val (versionExit, versionOutput) = commandResult("go", "version", "-m", binary.absolutePath)
+            val binaryRevision = revisionPattern.find(versionOutput)?.groupValues?.get(1)
+            if (versionExit != 0 || !binaryRevision.equals(expectedRevision, ignoreCase = true)) {
+                throw GradleException(
+                    "Stale CottenDns binary: ${binary.relativeTo(projectDir)}. " +
+                        "Expected revision $expectedRevision but found ${binaryRevision ?: "no embedded revision"}. " +
+                        "Run make CottenDns.",
+                )
+            }
+        }
+    }
+}
+
+tasks.matching { task ->
+    task.name.startsWith("merge") && task.name.endsWith("NativeLibs")
+}.configureEach {
+    dependsOn(verifyCottenDnsNativeBinaries)
 }
 
 dependencies {

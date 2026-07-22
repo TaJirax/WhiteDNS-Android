@@ -182,7 +182,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleProfileLinkIntent(intent: Intent?) {
-        if (intent?.action != Intent.ACTION_VIEW || intent.data?.scheme != StormDnsScheme) {
+        if (intent?.action != Intent.ACTION_VIEW || intent.data?.scheme !in ProfileLinkSchemes) {
             return
         }
         if (intent.getBooleanExtra(ExtraProfileImportHandled, false)) {
@@ -194,7 +194,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private companion object {
-        const val StormDnsScheme = "stormdns"
+        // CottenDns shares the CottenDns profile-link payload, so both schemes import.
+        val ProfileLinkSchemes = setOf("CottenDns", "cottendns")
         const val ExtraProfileImportHandled = "shop.whitedns.client.extra.PROFILE_IMPORT_HANDLED"
     }
 }

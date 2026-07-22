@@ -33,14 +33,14 @@ import org.json.JSONArray
 import org.json.JSONObject
 import shop.whitedns.client.MainActivity
 import shop.whitedns.client.R
-import shop.whitedns.client.model.StormDnsServerProfile
+import shop.whitedns.client.model.CottenDnsServerProfile
 import shop.whitedns.client.model.WhiteDnsScanState
 import shop.whitedns.client.model.WhiteDnsScanStatus
 import shop.whitedns.client.model.WhiteDnsSettings
 import shop.whitedns.client.runtime.RuntimeLaunchRequestStore
-import shop.whitedns.client.runtime.parseStormDnsConnectionProgressLine
-import shop.whitedns.client.storm.StormDnsBinaryInstaller
-import shop.whitedns.client.storm.StormDnsConfigRenderer
+import shop.whitedns.client.runtime.parseCottenDnsConnectionProgressLine
+import shop.whitedns.client.cottendns.CottenDnsBinaryInstaller
+import shop.whitedns.client.cottendns.CottenDnsConfigRenderer
 
 class WhiteDnsScanService : Service() {
 
@@ -52,7 +52,7 @@ class WhiteDnsScanService : Service() {
     private val activeProcesses = Collections.synchronizedSet(mutableSetOf<Process>())
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val binaryInstaller by lazy {
-        StormDnsBinaryInstaller(applicationContext)
+        CottenDnsBinaryInstaller(applicationContext)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -137,7 +137,7 @@ class WhiteDnsScanService : Service() {
     private suspend fun runScan(
         sessionId: String,
         sourceName: String,
-        serverProfile: StormDnsServerProfile,
+        serverProfile: CottenDnsServerProfile,
         settings: WhiteDnsSettings,
         resolverFile: File,
         requestedWorkerCount: Int,
@@ -147,7 +147,7 @@ class WhiteDnsScanService : Service() {
         requestedTotalResolvers: Int,
     ) = coroutineScope {
         val binaryFile = binaryInstaller.installExecutable()
-        val scanRoot = File(File(applicationContext.noBackupFilesDir, "stormdns/scan"), sessionId).apply {
+        val scanRoot = File(File(applicationContext.noBackupFilesDir, "CottenDns/scan"), sessionId).apply {
             mkdirs()
         }
         val validResolvers = WhiteDnsScannerResultStore.normalizeResolverEntries(initialValidResolvers)
@@ -306,7 +306,7 @@ class WhiteDnsScanService : Service() {
         if (stopRequested) {
             return
         }
-        parseStormDnsConnectionProgressLine(line)?.let { progress ->
+        parseCottenDnsConnectionProgressLine(line)?.let { progress ->
             synchronized(stateLock) {
                 workerStats[workerIndex].completed = progress.completed
                 workerStats[workerIndex].total = progress.total.takeIf { it > 0 } ?: workerStats[workerIndex].total
@@ -317,8 +317,8 @@ class WhiteDnsScanService : Service() {
             return
         }
 
-        when (val telemetry = parseStormDnsScanLine(line)) {
-            is StormDnsScanTelemetry.Valid -> {
+        when (val telemetry = parseCottenDnsScanLine(line)) {
+            is CottenDnsScanTelemetry.Valid -> {
                 val resolver = WhiteDnsScannerResultStore.normalizeResolverEntry(telemetry.resolver) ?: return
                 var validCount = 0
                 var added = false
@@ -332,7 +332,7 @@ class WhiteDnsScanService : Service() {
                 }
                 publishAggregate(WhiteDnsScanStatus.Running, "Found $validCount valid resolvers", false)
             }
-            is StormDnsScanTelemetry.Rejected -> {
+            is CottenDnsScanTelemetry.Rejected -> {
                 val resolver = WhiteDnsScannerResultStore.normalizeResolverEntry(telemetry.resolver) ?: return
                 synchronized(stateLock) {
                     if (!validResolvers.contains(resolver)) {
@@ -341,7 +341,7 @@ class WhiteDnsScanService : Service() {
                 }
                 publishAggregate(WhiteDnsScanStatus.Running, "Scanning", false)
             }
-            is StormDnsScanTelemetry.Complete -> {
+            is CottenDnsScanTelemetry.Complete -> {
                 synchronized(stateLock) {
                     workerStats[workerIndex].completed = telemetry.total
                     workerStats[workerIndex].total = telemetry.total
@@ -410,14 +410,14 @@ class WhiteDnsScanService : Service() {
     private fun runWorker(
         workerInput: WorkerInput,
         binaryFile: File,
-        serverProfile: StormDnsServerProfile,
+        serverProfile: CottenDnsServerProfile,
         settings: WhiteDnsSettings,
         onOutput: (String) -> Unit,
     ): Boolean {
         val workerDir = workerInput.directory
         val configFile = File(workerDir, "client.toml")
         configFile.writeText(
-            StormDnsConfigRenderer.renderScanClientToml(
+            CottenDnsConfigRenderer.renderScanClientToml(
                 serverProfile = serverProfile,
                 settings = settings,
             ),
@@ -519,7 +519,7 @@ class WhiteDnsScanService : Service() {
         onOutput: (String) -> Unit,
     ): Thread {
         return thread(
-            name = "stormdns-scan-output",
+            name = "CottenDns-scan-output",
             isDaemon = true,
             start = false,
         ) {
@@ -758,7 +758,7 @@ class WhiteDnsScanService : Service() {
         fun start(
             context: Context,
             sessionId: String,
-            serverProfile: StormDnsServerProfile,
+            serverProfile: CottenDnsServerProfile,
             settings: WhiteDnsSettings,
             sourceName: String,
             resolverFile: File,
