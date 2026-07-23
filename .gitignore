@@ -21,6 +21,8 @@ nemigam*
 
 /storm-dns/
 /CottenDns/
+/.engine/CottenDns/
+/.engine/.gocache/
 keystore.properties.example
 .vscode/
 .cxx/

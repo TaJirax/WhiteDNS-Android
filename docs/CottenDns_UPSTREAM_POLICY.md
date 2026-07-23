@@ -1,6 +1,12 @@
 # CottenDns Upstream Policy
 
-WhiteDNS treats `third_party/CottenDns` as a black-box upstream engine.
+WhiteDNS treats CottenDNS as a black-box upstream engine. It is not vendored
+into this repository: `make CottenDns` and CI both check out the upstream
+`WhiteDNS/CottenDns` repository at the commit pinned in
+`.engine/COTTENDNS_ENGINE_SHA` and build it from its own source tree into
+`.engine/CottenDns` (gitignored). See
+[ANDROID_ENGINE_INTEGRATION.md](https://github.com/WhiteDNS/CottenDns/blob/main/docs/ANDROID_ENGINE_INTEGRATION.md)
+in the engine repository for the full CI contract.
 
 The Android app must integrate with CottenDns only through stable runtime boundaries:
 
@@ -28,17 +34,13 @@ Build tooling may know where the upstream client command lives so it can compile
 
 ## Allowed Upstream Changes
 
-Changes under `third_party/CottenDns` are allowed only when they are intentional upstream maintenance, such as:
+Bumping the pinned commit is the only way engine code changes reach this repo:
 
-- Updating the pinned submodule commit.
-- Syncing a reviewed upstream fix.
-- Refreshing native binaries from a documented upstream commit.
-
-Any pull request that changes `third_party/CottenDns` must include the label:
-
-`allow-CottenDns-upstream`
-
-Without that label, CI fails before review to prevent accidental local edits to the upstream engine.
+- Update `.engine/COTTENDNS_ENGINE_SHA` to a reviewed commit from
+  `WhiteDNS/CottenDns`.
+- Do not hand-edit engine source anywhere in this repository; there is none to
+  edit. If a feature needs an engine change, make it upstream in CottenDNS and
+  bump the pin here.
 
 ## Review Checklist
 
@@ -49,4 +51,4 @@ For any pull request touching CottenDns integration:
 - Confirm telemetry parsing is tolerant of unknown or changed output.
 - Confirm optional behavior is gated by executable version/capability detection when needed.
 - Confirm no Android app code imports, parses, or depends on CottenDns Go internals.
-- Confirm `third_party/CottenDns` changes are either absent or intentionally labeled and explained.
+- Confirm any change to `.engine/COTTENDNS_ENGINE_SHA` points at a real, reviewed commit and is called out in the PR description.

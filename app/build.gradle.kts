@@ -24,9 +24,11 @@ val hasReleaseSigning = keystorePropertiesFile.exists()
 val cottenDnsNativeBinaries = fileTree("src/main/jniLibs") {
     include("*/libcottendns_client.so")
 }
-val cottenDnsEngineSources = fileTree(rootProject.file("third_party/CottenDns")) {
-    exclude(".gocache/**", "build/**")
-}
+// CottenDNS is not vendored here: the engine is checked out at a pinned commit
+// (see .engine/COTTENDNS_ENGINE_SHA) and built from its own source by `make
+// CottenDns` / CI. This file is the input that ties the packaged binaries back
+// to that pin.
+val cottenDnsEngineShaFile = rootProject.file(".engine/COTTENDNS_ENGINE_SHA")
 
 android {
     namespace = "shop.whitedns.client"
@@ -107,9 +109,9 @@ android {
 
 val verifyCottenDnsNativeBinaries by tasks.registering {
     group = "verification"
-    description = "Fails when packaged CottenDns binaries do not match the checked-out engine source."
+    description = "Fails when packaged CottenDns binaries do not match the pinned engine commit."
     inputs.files(cottenDnsNativeBinaries)
-    inputs.files(cottenDnsEngineSources)
+    inputs.file(cottenDnsEngineShaFile)
 
     doLast {
         val repositoryDir = rootProject.projectDir
@@ -122,24 +124,12 @@ val verifyCottenDnsNativeBinaries by tasks.registering {
             return process.waitFor() to output.trim()
         }
 
-        val (revisionExit, expectedRevision) = commandResult("git", "rev-parse", "HEAD")
-        if (revisionExit != 0 || !expectedRevision.matches(Regex("[0-9a-fA-F]{40}"))) {
-            throw GradleException("Unable to determine the Git revision for CottenDns binary verification.")
+        if (!cottenDnsEngineShaFile.exists()) {
+            throw GradleException("Missing ${cottenDnsEngineShaFile.relativeTo(projectDir)}. Pin a CottenDNS engine commit before building.")
         }
-
-        val (dirtyExit, dirtyOutput) = commandResult(
-            "git",
-            "diff",
-            "--quiet",
-            "HEAD",
-            "--",
-            "third_party/CottenDns",
-        )
-        if (dirtyExit != 0) {
-            throw GradleException(
-                "CottenDns engine sources have uncommitted changes. Commit them, then run make CottenDns before building the app." +
-                    dirtyOutput.takeIf(String::isNotBlank)?.let { "\n$it" }.orEmpty(),
-            )
+        val expectedRevision = cottenDnsEngineShaFile.readText().trim()
+        if (!expectedRevision.matches(Regex("[0-9a-fA-F]{40}"))) {
+            throw GradleException("${cottenDnsEngineShaFile.relativeTo(projectDir)} does not contain a full 40-character commit SHA: $expectedRevision")
         }
 
         val binaries = cottenDnsNativeBinaries.files.sortedBy { it.path }
@@ -154,7 +144,7 @@ val verifyCottenDnsNativeBinaries by tasks.registering {
             if (versionExit != 0 || !binaryRevision.equals(expectedRevision, ignoreCase = true)) {
                 throw GradleException(
                     "Stale CottenDns binary: ${binary.relativeTo(projectDir)}. " +
-                        "Expected revision $expectedRevision but found ${binaryRevision ?: "no embedded revision"}. " +
+                        "Expected pinned engine revision $expectedRevision but found ${binaryRevision ?: "no embedded revision"}. " +
                         "Run make CottenDns.",
                 )
             }

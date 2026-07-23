@@ -28,15 +28,23 @@ jobs:
       - name: Checkout WhiteDNS
         uses: actions/checkout@v4
 
-      - name: Verify vendored CottenDns engine
+      - name: Read pinned CottenDNS engine SHA
+        id: engine-sha
         run: |
           set -euo pipefail
-          test -f third_party/CottenDns/go.mod
-          test -f third_party/CottenDns/cmd/client/main.go
-          if git ls-files --stage third_party/CottenDns | awk '{print $1}' | grep -qx '160000'; then
-            echo "::error::third_party/CottenDns is still a submodule. Vendor the CottenDns engine source in this repository."
+          sha="$(cat .engine/COTTENDNS_ENGINE_SHA)"
+          if [[ ! "${sha}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::.engine/COTTENDNS_ENGINE_SHA does not contain a full 40-character commit SHA: ${sha}"
             exit 1
           fi
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout CottenDNS engine
+        uses: actions/checkout@v4
+        with:
+          repository: WhiteDNS/CottenDns
+          ref: ${{ steps.engine-sha.outputs.sha }}
+          path: .engine/CottenDns
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -62,15 +70,15 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: third_party/CottenDns/go.mod
-          cache-dependency-path: third_party/CottenDns/go.sum
+          go-version-file: .engine/CottenDns/go.mod
+          cache-dependency-path: .engine/CottenDns/go.sum
 
-      - name: Build vendored CottenDns native clients
+      - name: Build CottenDNS native clients
         run: |
           set -euo pipefail
-          make CottenDns \
-            NDK_HOST=linux-x86_64 \
-            NDK_ROOT="${ANDROID_HOME}/ndk/${CottenDns_ANDROID_NDK_VERSION}"
+          NDK_ROOT="${ANDROID_HOME}/ndk/${CottenDns_ANDROID_NDK_VERSION}" \
+            OUTPUT_DIR="${GITHUB_WORKSPACE}/app/src/main/jniLibs" \
+            bash .engine/CottenDns/scripts/build-android-client.sh all
 
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest

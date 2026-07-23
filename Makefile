@@ -4,53 +4,54 @@ SDK_ROOT ?= $(HOME)/Library/Android/sdk
 NDK_VERSION ?= 29.0.14206865
 NDK_ROOT ?= $(SDK_ROOT)/ndk/$(NDK_VERSION)
 NDK_HOST ?= darwin-x86_64
-NDK_BIN := $(NDK_ROOT)/toolchains/llvm/prebuilt/$(NDK_HOST)/bin
 ANDROID_API ?= 26
 
 GO ?= go
 GRADLE ?= ./gradlew
-CottenDns_DIR := third_party/CottenDns
-CottenDns_CMD := ./cmd/client
-CottenDns_BUILD_DIR := $(CottenDns_DIR)/build/android
-JNI_LIBS_DIR := app/src/main/jniLibs
-GO_CACHE := $(CottenDns_DIR)/.gocache
-CottenDns_LDFLAGS := -s -w -linkmode external -extldflags "-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384"
+GIT ?= git
 
-.PHONY: all debug CottenDns CottenDns-arm64 CottenDns-armv7 CottenDns-x86_64 CottenDns-x86 clean clean-CottenDns clean-app check-ndk debug-outputs
+# CottenDNS is not vendored in this repository. The engine is checked out at a
+# pinned commit and built from its own source tree, so this app and CI always
+# build the exact same engine code instead of a hand-ported copy.
+CottenDns_REPO := https://github.com/WhiteDNS/CottenDns.git
+CottenDns_SHA_FILE := .engine/COTTENDNS_ENGINE_SHA
+CottenDns_DIR := .engine/CottenDns
+JNI_LIBS_DIR := app/src/main/jniLibs
+GO_CACHE := .engine/.gocache
+
+.PHONY: all debug CottenDns clean clean-CottenDns clean-app checkout-CottenDns check-ndk debug-outputs
 
 all: debug
 
 debug: CottenDns
 	$(GRADLE) :app:assembleDebug
 
-CottenDns: CottenDns-arm64 CottenDns-armv7 CottenDns-x86_64 CottenDns-x86
+checkout-CottenDns:
+	@test -f "$(CottenDns_SHA_FILE)" || (echo "Missing $(CottenDns_SHA_FILE); set the pinned CottenDNS engine commit."; exit 1)
+	@sha="$$(cat $(CottenDns_SHA_FILE))"; \
+	if [[ ! "$$sha" =~ ^[0-9a-fA-F]{40}$$ ]]; then \
+		echo "$(CottenDns_SHA_FILE) does not contain a full 40-character commit SHA: $$sha"; exit 1; \
+	fi; \
+	if [[ ! -d "$(CottenDns_DIR)/.git" ]]; then \
+		$(GIT) clone "$(CottenDns_REPO)" "$(CottenDns_DIR)"; \
+	else \
+		$(GIT) -C "$(CottenDns_DIR)" fetch origin; \
+	fi; \
+	$(GIT) -C "$(CottenDns_DIR)" checkout --detach "$$sha"
 
 check-ndk:
-	@test -x "$(NDK_BIN)/aarch64-linux-android$(ANDROID_API)-clang" || (echo "Android NDK not found at $(NDK_ROOT). Install NDK $(NDK_VERSION) or set NDK_ROOT=/path/to/ndk."; exit 1)
+	@test -x "$(NDK_ROOT)/toolchains/llvm/prebuilt/$(NDK_HOST)/bin/aarch64-linux-android$(ANDROID_API)-clang" || (echo "Android NDK not found at $(NDK_ROOT). Install NDK $(NDK_VERSION) or set NDK_ROOT=/path/to/ndk."; exit 1)
 
-CottenDns-arm64: check-ndk
-	@mkdir -p "$(CottenDns_BUILD_DIR)/arm64-v8a" "$(JNI_LIBS_DIR)/arm64-v8a" "$(GO_CACHE)"
-	cd "$(CottenDns_DIR)" && GOCACHE="$$PWD/.gocache" CGO_ENABLED=1 CC="$(NDK_BIN)/aarch64-linux-android$(ANDROID_API)-clang" GOOS=android GOARCH=arm64 $(GO) build -trimpath -ldflags='$(CottenDns_LDFLAGS)' -o "build/android/arm64-v8a/CottenDns-client" "$(CottenDns_CMD)"
-	cp "$(CottenDns_BUILD_DIR)/arm64-v8a/CottenDns-client" "$(JNI_LIBS_DIR)/arm64-v8a/libcottendns_client.so"
-	chmod 755 "$(CottenDns_BUILD_DIR)/arm64-v8a/CottenDns-client" "$(JNI_LIBS_DIR)/arm64-v8a/libcottendns_client.so"
-
-CottenDns-armv7: check-ndk
-	@mkdir -p "$(CottenDns_BUILD_DIR)/armeabi-v7a" "$(JNI_LIBS_DIR)/armeabi-v7a" "$(GO_CACHE)"
-	cd "$(CottenDns_DIR)" && GOCACHE="$$PWD/.gocache" CGO_ENABLED=1 CC="$(NDK_BIN)/armv7a-linux-androideabi$(ANDROID_API)-clang" GOOS=android GOARCH=arm GOARM=7 $(GO) build -trimpath -ldflags='$(CottenDns_LDFLAGS)' -o "build/android/armeabi-v7a/CottenDns-client" "$(CottenDns_CMD)"
-	cp "$(CottenDns_BUILD_DIR)/armeabi-v7a/CottenDns-client" "$(JNI_LIBS_DIR)/armeabi-v7a/libcottendns_client.so"
-	chmod 755 "$(CottenDns_BUILD_DIR)/armeabi-v7a/CottenDns-client" "$(JNI_LIBS_DIR)/armeabi-v7a/libcottendns_client.so"
-
-CottenDns-x86_64: check-ndk
-	@mkdir -p "$(CottenDns_BUILD_DIR)/x86_64" "$(JNI_LIBS_DIR)/x86_64" "$(GO_CACHE)"
-	cd "$(CottenDns_DIR)" && GOCACHE="$$PWD/.gocache" CGO_ENABLED=1 CC="$(NDK_BIN)/x86_64-linux-android$(ANDROID_API)-clang" GOOS=android GOARCH=amd64 $(GO) build -trimpath -ldflags='$(CottenDns_LDFLAGS)' -o "build/android/x86_64/CottenDns-client" "$(CottenDns_CMD)"
-	cp "$(CottenDns_BUILD_DIR)/x86_64/CottenDns-client" "$(JNI_LIBS_DIR)/x86_64/libcottendns_client.so"
-	chmod 755 "$(CottenDns_BUILD_DIR)/x86_64/CottenDns-client" "$(JNI_LIBS_DIR)/x86_64/libcottendns_client.so"
-
-CottenDns-x86: check-ndk
-	@mkdir -p "$(CottenDns_BUILD_DIR)/x86" "$(JNI_LIBS_DIR)/x86" "$(GO_CACHE)"
-	cd "$(CottenDns_DIR)" && GOCACHE="$$PWD/.gocache" CGO_ENABLED=1 CC="$(NDK_BIN)/i686-linux-android$(ANDROID_API)-clang" GOOS=android GOARCH=386 $(GO) build -trimpath -ldflags='$(CottenDns_LDFLAGS)' -o "build/android/x86/CottenDns-client" "$(CottenDns_CMD)"
-	cp "$(CottenDns_BUILD_DIR)/x86/CottenDns-client" "$(JNI_LIBS_DIR)/x86/libcottendns_client.so"
-	chmod 755 "$(CottenDns_BUILD_DIR)/x86/CottenDns-client" "$(JNI_LIBS_DIR)/x86/libcottendns_client.so"
+CottenDns: checkout-CottenDns check-ndk
+	@mkdir -p "$(JNI_LIBS_DIR)" "$(GO_CACHE)"
+	cd "$(CottenDns_DIR)" && \
+		GOCACHE="$$(cd .. && pwd)/.gocache" \
+		NDK_ROOT="$(NDK_ROOT)" \
+		NDK_HOST="$(NDK_HOST)" \
+		ANDROID_API="$(ANDROID_API)" \
+		GO_BIN="$(GO)" \
+		OUTPUT_DIR="$$(cd ../.. && pwd)/$(JNI_LIBS_DIR)" \
+		bash scripts/build-android-client.sh all
 
 debug-outputs:
 	@find app/build/outputs/apk/debug -type f -name '*.apk' -print | sort
@@ -61,4 +62,4 @@ clean-app:
 	$(GRADLE) :app:clean
 
 clean-CottenDns:
-	rm -rf "$(CottenDns_BUILD_DIR)" "$(GO_CACHE)"
+	rm -rf "$(GO_CACHE)"
