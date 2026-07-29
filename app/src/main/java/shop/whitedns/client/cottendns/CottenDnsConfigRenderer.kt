@@ -121,9 +121,9 @@ object CottenDnsConfigRenderer {
             // which can push already-lossy resolvers into timeout-disable on
             // filtered networks. The proven desktop config keeps both off; expose
             // them via the survival preset where the extra redundancy is wanted.
-            val aggressiveDuplication = preset == "survival"
-            appendLine("ADAPTIVE_DUPLICATION = $aggressiveDuplication")
-            appendLine("DUPLICATION_PREFER_DISTINCT_DOMAINS = $aggressiveDuplication")
+            val adaptiveDuplication = preset !in setOf("default", "master-storm")
+            appendLine("ADAPTIVE_DUPLICATION = $adaptiveDuplication")
+            appendLine("DUPLICATION_PREFER_DISTINCT_DOMAINS = $adaptiveDuplication")
             appendLine("ADAPTIVE_DUPLICATION_TARGET_DELIVERY = ${adaptiveDuplicationTarget(preset)}")
             appendLine("DNS_EDNS_COOKIE = true")
             appendLine("EDNS_UDP_SIZE = ${ednsUdpSize(preset)}")
@@ -151,8 +151,15 @@ object CottenDnsConfigRenderer {
     private fun normalizeConfigPreset(configPreset: String): String {
         return when (configPreset.trim().lowercase()) {
             "speed" -> "speed"
+            "udp", "udp-only", "udp_only" -> "udp-only"
             "survival" -> "survival"
             "tcp", "tcp-survival", "tcp_survival" -> "tcp-survival"
+            "iran" -> "iran"
+            "china" -> "china"
+            "russia" -> "russia"
+            "venezuela" -> "venezuela"
+            "cuba" -> "cuba"
+            "africa", "africa-low-bandwidth", "low-bandwidth", "low_bandwidth" -> "low-bandwidth"
             "master", "storm", "master-storm", "master_storm" -> "master-storm"
             else -> "default"
         }
@@ -166,7 +173,8 @@ object CottenDnsConfigRenderer {
             return "default"
         }
         return when (preset) {
-            "speed", "survival", "tcp-survival" -> preset
+            "speed", "udp-only", "survival", "tcp-survival",
+            "iran", "china", "russia", "venezuela", "cuba", "low-bandwidth" -> preset
             else -> "default" // "default" and "master-storm"
         }
     }
@@ -174,21 +182,32 @@ object CottenDnsConfigRenderer {
     private fun resolverTransport(configPreset: String): String {
         return when (configPreset) {
             "tcp-survival" -> "tcp"
-            "master-storm" -> "udp"
+            "udp-only", "master-storm" -> "udp"
             else -> "auto"
         }
     }
 
     private fun adaptiveDuplicationTarget(configPreset: String): String {
-        return if (configPreset == "survival") "0.97" else "0.95"
+        return when (configPreset) {
+            "survival", "iran" -> "0.97"
+            "china", "venezuela" -> "0.96"
+            "cuba", "low-bandwidth" -> "0.94"
+            else -> "0.95"
+        }
     }
 
     private fun ednsUdpSize(configPreset: String): Int {
-        return if (configPreset == "survival") 1232 else 4096
+        return when (configPreset) {
+            "survival", "iran", "china", "russia", "venezuela", "cuba", "low-bandwidth" -> 1232
+            else -> 4096
+        }
     }
 
     private fun qnameLabelLength(configPreset: String): Int {
-        return if (configPreset == "survival") 42 else 63
+        return when (configPreset) {
+            "survival", "iran", "china", "venezuela", "cuba", "low-bandwidth" -> 42
+            else -> 63
+        }
     }
 
     // CottenDns MTU scan. Its distinct feature vs the legacy Master/Storm scan is
@@ -199,13 +218,19 @@ object CottenDnsConfigRenderer {
     private fun mtuProbeSamples(configPreset: String): Int {
         return when (configPreset) {
             "survival" -> 5
+            "speed", "udp-only", "tcp-survival", "china", "russia", "venezuela" -> 4
+            "iran" -> 5
+            "cuba", "low-bandwidth" -> 3
             else -> 1
         }
     }
 
     private fun mtuMaxLoss(configPreset: String): String {
         return when (configPreset) {
-            "survival" -> "0.5"
+            "survival" -> "0.2"
+            "speed", "udp-only", "tcp-survival", "china", "russia" -> "0.25"
+            "iran" -> "0.35"
+            "venezuela", "cuba", "low-bandwidth" -> "0.30"
             else -> "0.0"
         }
     }
@@ -216,7 +241,6 @@ object CottenDnsConfigRenderer {
         // rotating to them causes packet loss and retransmits. Richer rotation is
         // opt-in via the delivery dropdown or the survival preset.
         return when (configPreset) {
-            "speed" -> listOf("TXT", "HTTPS")
             "survival" -> listOf("TXT", "CNAME", "HTTPS", "A")
             "tcp-survival" -> listOf("TXT", "HTTPS")
             else -> listOf("TXT")
@@ -300,8 +324,9 @@ object CottenDnsConfigRenderer {
         appendLine("DOWNLOAD_PACKET_DUPLICATION_COUNT = ${resolved.downloadDuplication}")
         // Setup/control packets are duplicated more than bulk data so stream
         // establishment survives loss (engine clamps into [data-duplication, 8]).
-        appendLine("UPLOAD_SETUP_PACKET_DUPLICATION_COUNT = 4")
-        appendLine("DOWNLOAD_SETUP_PACKET_DUPLICATION_COUNT = 8")
+        val setupDuplication = setupDuplicationFor(resolved.configPreset)
+        appendLine("UPLOAD_SETUP_PACKET_DUPLICATION_COUNT = ${setupDuplication.first}")
+        appendLine("DOWNLOAD_SETUP_PACKET_DUPLICATION_COUNT = ${setupDuplication.second}")
         appendLine("UPLOAD_COMPRESSION_TYPE = ${resolved.uploadCompression}")
         appendLine("DOWNLOAD_COMPRESSION_TYPE = ${resolved.downloadCompression}")
         appendLine("BASE_ENCODE_DATA = ${resolved.baseEncodeData}")
@@ -343,8 +368,10 @@ object CottenDnsConfigRenderer {
         appendLine("STATS_REPORT_INTERVAL_SECONDS = 1.0")
         appendLine("PING_WATCHDOG_TIMEOUT_SECONDS = ${resolved.pingWatchdogSeconds}")
         appendLine("LOG_LEVEL = \"${escape(resolved.logLevel)}\"")
-        appendLine("LOG_TO_FILE = true")
-        appendLine("LOG_DIR = \"logs\"")
+        // Android consumes the stable WD_* stdout telemetry directly. Disabling
+        // per-second engine log files prevents unbounded app-private storage
+        // growth without hiding diagnostics from the UI.
+        appendLine("LOG_TO_FILE = false")
     }
 
     private fun StringBuilder.appendAdvancedSettingsToml(resolved: ResolvedWhiteDnsSettings) {
@@ -363,8 +390,9 @@ object CottenDnsConfigRenderer {
         appendLine("DOWNLOAD_PACKET_DUPLICATION_COUNT = ${resolved.downloadDuplication}")
         // Setup/control packets are duplicated more than bulk data so stream
         // establishment survives loss (engine clamps into [data-duplication, 8]).
-        appendLine("UPLOAD_SETUP_PACKET_DUPLICATION_COUNT = 4")
-        appendLine("DOWNLOAD_SETUP_PACKET_DUPLICATION_COUNT = 8")
+        val setupDuplication = setupDuplicationFor(resolved.configPreset)
+        appendLine("UPLOAD_SETUP_PACKET_DUPLICATION_COUNT = ${setupDuplication.first}")
+        appendLine("DOWNLOAD_SETUP_PACKET_DUPLICATION_COUNT = ${setupDuplication.second}")
         appendLine("UPLOAD_COMPRESSION_TYPE = ${resolved.uploadCompression}")
         appendLine("DOWNLOAD_COMPRESSION_TYPE = ${resolved.downloadCompression}")
         appendLine("BASE_ENCODE_DATA = ${resolved.baseEncodeData}")
@@ -439,6 +467,17 @@ object CottenDnsConfigRenderer {
         } else {
             appendLine("RESOLVER_DOH_PORT = ${resolved.resolverDoHPort}")
             appendLine("RESOLVER_DOH_PATH = \"${escape(resolved.resolverDoHPath)}\"")
+        }
+    }
+
+    private fun setupDuplicationFor(configPreset: String): Pair<Int, Int> {
+        return when (configPreset) {
+            "speed", "udp-only", "russia" -> 2 to 4
+            "survival" -> 4 to 8
+            "tcp-survival", "china" -> 3 to 4
+            "iran", "venezuela" -> 3 to 5
+            "cuba", "low-bandwidth" -> 2 to 3
+            else -> 4 to 8
         }
     }
 

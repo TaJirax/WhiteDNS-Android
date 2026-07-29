@@ -51,6 +51,58 @@ class CottenDnsTrafficStatsTest {
     }
 
     @Test
+    fun parseCottenDnsMachineStatsLineReadsAllNativePathTelemetry() {
+        val stats = parseCottenDnsTrafficStatsLine(
+            "2026/07/29 20:00:00 [CottenDns Client] [INFO] " +
+                "WD_STATS up_bps=101 up_total=202 down_bps=303 down_total=404 " +
+                "loss_pm=125 resolvers=7 transport=\"adaptive UDP=5 TCP=2 DoT=0 DoH=0\" " +
+                "explore=8 restore=9 switch=10 stripe=11 saved=12 " +
+                "queue_tx=13 queue_encoded=14 queue_rx=15 drop_rx=16 drop_tx=17 " +
+                "recoveries=18 stream_dial_fail=19 stream_write_fail=20",
+        )
+
+        requireNotNull(stats)
+        assertEquals(404L, stats.downloadBytes)
+        assertEquals(202L, stats.uploadBytes)
+        assertEquals(303L, stats.downloadSpeedBytesPerSecond)
+        assertEquals(101L, stats.uploadSpeedBytesPerSecond)
+        assertEquals(12.5, stats.lossPercent, 0.001)
+        assertEquals(7, stats.activeResolvers)
+        assertEquals("adaptive UDP=5 TCP=2 DoT=0 DoH=0", stats.transportSummary)
+        assertEquals(8L, stats.explorationCount)
+        assertEquals(9L, stats.restorationCount)
+        assertEquals(10L, stats.transportSwitchCount)
+        assertEquals(11L, stats.stripeCount)
+        assertEquals(12L, stats.redundancySavedCount)
+        assertEquals(13, stats.txQueueDepth)
+        assertEquals(14, stats.encodedTxQueueDepth)
+        assertEquals(15, stats.rxQueueDepth)
+        assertEquals(16L, stats.rxDropCount)
+        assertEquals(17L, stats.txDropCount)
+        assertEquals(18L, stats.recoveryCount)
+        assertEquals(19L, stats.streamDialFailureCount)
+        assertEquals(20L, stats.streamWriteFailureCount)
+    }
+
+    @Test
+    fun parseHumanTrafficStatsLineReadsNewPathSuffix() {
+        val stats = parseCottenDnsTrafficStatsLine(
+            "↑ 1 KB/s (Total: 2 KB) | ↓ 3 KB/s (Total: 4 KB) | " +
+                "loss 2.5% | resolvers 6 | transport adaptive UDP=4 TCP=2 DoT=0 DoH=0 | " +
+                "path-events explore=1 restore=2 switch=3 stripe=4 saved=5 | " +
+                "queues 6/7/8 | drops rx=9 tx=10 | recoveries 11 | stream-fail dial=12 write=13",
+        )
+
+        requireNotNull(stats)
+        assertEquals("adaptive UDP=4 TCP=2 DoT=0 DoH=0", stats.transportSummary)
+        assertEquals(2L, stats.restorationCount)
+        assertEquals(3L, stats.transportSwitchCount)
+        assertEquals(6, stats.txQueueDepth)
+        assertEquals(9L, stats.rxDropCount)
+        assertEquals(13L, stats.streamWriteFailureCount)
+    }
+
+    @Test
     fun trafficAccountingKeepsSessionTotalsAcrossRawCounterResets() {
         val accounting = CottenDnsTrafficAccounting()
 

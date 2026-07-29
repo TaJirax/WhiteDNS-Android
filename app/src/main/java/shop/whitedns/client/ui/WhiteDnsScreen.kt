@@ -6220,18 +6220,53 @@ private fun cottenDnsPresetSummary(configPreset: String): CottenDnsPresetSummary
     return when (configPreset) {
         "speed" -> CottenDnsPresetSummary(
             transport = "UDP/53 with TCP/53 fallback",
-            delivery = "TXT + HTTPS rotation",
+            delivery = "TXT only for maximum payload capacity",
             mtu = "MTU-weighted balancing, 4 probe samples, 25% max loss",
+        )
+        "udp-only" -> CottenDnsPresetSummary(
+            transport = "UDP/53 only; alternate transports are disabled",
+            delivery = "TXT only for maximum payload capacity",
+            mtu = "Speed tuning, 4 probe samples, 25% max loss",
         )
         "survival" -> CottenDnsPresetSummary(
             transport = "UDP/53 with TCP/53 fallback",
             delivery = "TXT + CNAME + HTTPS + A rotation",
-            mtu = "least-loss balancing, smaller QNAME/EDNS shape, stricter 20% max loss",
+            mtu = "Least-loss balancing, smaller QNAME/EDNS shape, 20% max loss",
         )
         "tcp-survival" -> CottenDnsPresetSummary(
             transport = "forced DNS-over-TCP/53",
             delivery = "TXT + HTTPS over persistent TCP/53",
-            mtu = "MTU-weighted balancing, lower resolver parallelism for TCP fallback",
+            mtu = "MTU-weighted balancing, 4 probe samples, 25% max loss",
+        )
+        "iran" -> CottenDnsPresetSummary(
+            transport = "UDP-first per resolver with TCP/53 fallback",
+            delivery = "TXT only with poison protections",
+            mtu = "Smaller DNS shape, 5 probe samples, 35% max loss",
+        )
+        "china" -> CottenDnsPresetSummary(
+            transport = "UDP-first per resolver with TCP/53 fallback",
+            delivery = "TXT only with poison protections",
+            mtu = "Smaller DNS shape, 4 probe samples, 25% max loss",
+        )
+        "russia" -> CottenDnsPresetSummary(
+            transport = "UDP-first per resolver with patient TCP/53 fallback",
+            delivery = "TXT only with poison protections",
+            mtu = "Capacity-first labels, 4 probe samples, 25% max loss",
+        )
+        "venezuela" -> CottenDnsPresetSummary(
+            transport = "UDP-first per resolver with TCP/53 fallback",
+            delivery = "TXT only with poison protections",
+            mtu = "Smaller DNS shape, 4 probe samples, 30% max loss",
+        )
+        "cuba" -> CottenDnsPresetSummary(
+            transport = "Bandwidth-conservative UDP-first fallback",
+            delivery = "TXT only with sparse background probing",
+            mtu = "Smaller DNS shape, 3 probe samples, 30% max loss",
+        )
+        "low-bandwidth" -> CottenDnsPresetSummary(
+            transport = "Bandwidth-conservative UDP-first fallback",
+            delivery = "TXT only with sparse background probing",
+            mtu = "Low parallelism, 3 probe samples, 30% max loss",
         )
         "master-storm" -> CottenDnsPresetSummary(
             transport = "UDP/53 only (no TCP; legacy MasterDNS/StormDNS)",
@@ -6240,8 +6275,8 @@ private fun cottenDnsPresetSummary(configPreset: String): CottenDnsPresetSummary
         )
         else -> CottenDnsPresetSummary(
             transport = "UDP/53 with TCP/53 fallback",
-            delivery = "TXT + CNAME + NULL + HTTPS rotation",
-            mtu = "MTU-weighted balancing, adaptive grouping, 6 probe samples",
+            delivery = "TXT only unless explicitly overridden",
+            mtu = "MTU-weighted balancing with adaptive grouping",
         )
     }
 }
@@ -9303,7 +9338,9 @@ private fun buildDiagnosticsText(
         appendLine("Mode: ${WhiteDnsOptions.connectionModeLabel(resolvedSettings.connectionMode)}")
         appendLine("Profile: ${selectedProfile.name.ifBlank { selectedProfile.id }}")
         appendLine("Server: ${selectedProfile.customServerDomain.ifBlank { "not configured" }}")
-        appendLine("Encryption key: ${selectedProfile.customServerEncryptionKey.ifBlank { "not configured" }}")
+        appendLine("Encryption key: ${if (selectedProfile.customServerEncryptionKey.isBlank()) "not configured" else "configured (redacted)"}")
+        appendLine("CottenDNS preset: ${resolvedSettings.configPreset}")
+        appendLine("Transport override: ${resolvedSettings.transportMode}")
         appendLine("Resolver profile: ${resolverProfile?.name ?: "Manual resolvers"}")
         appendLine("Resolvers: ${resolvedSettings.resolverEntries.size}")
         appendLine("Split tunnel: ${WhiteDnsOptions.splitTunnelModeLabel(resolvedSettings.splitTunnelMode)}")
@@ -9320,6 +9357,29 @@ private fun buildDiagnosticsText(
         appendLine("Connected apps: ${uiState.connectionStats.connectedApps}")
         appendLine("Active resolvers: ${uiState.resolverRuntimeState.activeResolvers.size}")
         appendLine("Valid resolvers: ${uiState.resolverRuntimeState.validResolvers.size}")
+        appendLine("Measured loss: ${String.format(Locale.US, "%.1f%%", uiState.connectionStats.lossPercent)}")
+        appendLine("Transport state: ${uiState.connectionStats.transportSummary.ifBlank { "not reported" }}")
+        appendLine(
+            "Path events: explore=${uiState.connectionStats.transportExplorationCount} " +
+                "restore=${uiState.connectionStats.transportRestorationCount} " +
+                "switch=${uiState.connectionStats.transportSwitchCount} " +
+                "stripe=${uiState.connectionStats.pathStripeCount} " +
+                "saved=${uiState.connectionStats.redundancySavedCount}",
+        )
+        appendLine(
+            "Engine queues: ${uiState.connectionStats.txQueueDepth}/" +
+                "${uiState.connectionStats.encodedTxQueueDepth}/" +
+                "${uiState.connectionStats.rxQueueDepth}",
+        )
+        appendLine(
+            "Engine drops: rx=${uiState.connectionStats.rxDropCount} " +
+                "tx=${uiState.connectionStats.txDropCount}",
+        )
+        appendLine("Transport recoveries: ${uiState.connectionStats.transportRecoveryCount}")
+        appendLine(
+            "Stream failures: dial=${uiState.connectionStats.streamDialFailureCount} " +
+                "write=${uiState.connectionStats.streamWriteFailureCount}",
+        )
         appendLine("Verification: ${verification.status}")
         if (verification.message.isNotBlank()) {
             appendLine("Verification message: ${verification.message}")

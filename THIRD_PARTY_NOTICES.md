@@ -32,7 +32,7 @@ SOFTWARE.
 ## CottenDns
 
 - Source: https://github.com/TaJirax/cottenDNS
-- Vendored commit: `e3c2ea8813890c021d64e5200ac65d8fd851acca`
+- Vendored commit: `1e838861afa73c4d936c4518a34e2d326b654a9f`
 - License: MIT
 
 ```text

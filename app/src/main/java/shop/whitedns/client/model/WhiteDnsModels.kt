@@ -429,6 +429,22 @@ data class ConnectionStats(
     val uploadSpeedBytesPerSecond: Long = 0,
     val peakSpeedBytesPerSecond: Long = 0,
     val connectedApps: Int = 0,
+    val lossPercent: Double = 0.0,
+    val activeResolverCount: Int = 0,
+    val transportSummary: String = "",
+    val transportExplorationCount: Long = 0,
+    val transportRestorationCount: Long = 0,
+    val transportSwitchCount: Long = 0,
+    val pathStripeCount: Long = 0,
+    val redundancySavedCount: Long = 0,
+    val txQueueDepth: Int = 0,
+    val encodedTxQueueDepth: Int = 0,
+    val rxQueueDepth: Int = 0,
+    val rxDropCount: Long = 0,
+    val txDropCount: Long = 0,
+    val transportRecoveryCount: Long = 0,
+    val streamDialFailureCount: Long = 0,
+    val streamWriteFailureCount: Long = 0,
 )
 
 data class ResolverRuntimeState(
@@ -659,8 +675,15 @@ object WhiteDnsOptions {
     val configPresets = listOf(
         Choice("default", "Default"),
         Choice("speed", "Speed"),
+        Choice("udp-only", "UDP Only"),
         Choice("survival", "Survival"),
         Choice("tcp-survival", "TCP Survival"),
+        Choice("iran", "Iran"),
+        Choice("china", "China"),
+        Choice("russia", "Russia"),
+        Choice("venezuela", "Venezuela"),
+        Choice("cuba", "Cuba"),
+        Choice("low-bandwidth", "Low Bandwidth / Africa"),
         Choice("master-storm", "Master / Storm DNS (compatible)"),
     )
 
@@ -873,8 +896,15 @@ fun WhiteDnsSettings.syncSelectedConnectionProfileFields(): WhiteDnsSettings {
 fun WhiteDnsSettings.applyCottenDnsConfigPreset(preset: String): WhiteDnsSettings {
     val normalizedPreset = when (preset.trim().lowercase()) {
         "speed" -> "speed"
+        "udp", "udp-only", "udp_only" -> "udp-only"
         "survival" -> "survival"
         "tcp", "tcp-survival", "tcp_survival" -> "tcp-survival"
+        "iran" -> "iran"
+        "china" -> "china"
+        "russia" -> "russia"
+        "venezuela" -> "venezuela"
+        "cuba" -> "cuba"
+        "africa", "africa-low-bandwidth", "low-bandwidth", "low_bandwidth" -> "low-bandwidth"
         "master", "storm", "master-storm", "master_storm" -> "master-storm"
         else -> "default"
     }
@@ -905,7 +935,7 @@ fun WhiteDnsSettings.applyCottenDnsConfigPreset(preset: String): WhiteDnsSetting
             configPreset = "speed",
             balancingStrategy = 5,
             uploadDuplication = "1",
-            downloadDuplication = "3",
+            downloadDuplication = "1",
             uploadCompression = 2,
             downloadCompression = 2,
             mtuTestRetriesResolvers = "2",
@@ -913,6 +943,21 @@ fun WhiteDnsSettings.applyCottenDnsConfigPreset(preset: String): WhiteDnsSetting
             mtuTestParallelismResolvers = "100",
             mtuTestRetriesLogs = "3",
             mtuTestTimeoutLogs = "1.5",
+            pingWatchdogSeconds = "45",
+        )
+        "udp-only" -> copy(
+            configPreset = "udp-only",
+            balancingStrategy = 5,
+            uploadDuplication = "1",
+            downloadDuplication = "1",
+            uploadCompression = 2,
+            downloadCompression = 2,
+            mtuTestRetriesResolvers = "2",
+            mtuTestTimeoutResolvers = "1.5",
+            mtuTestParallelismResolvers = "100",
+            mtuTestRetriesLogs = "3",
+            mtuTestTimeoutLogs = "1.5",
+            pingWatchdogSeconds = "45",
         )
         "survival" -> copy(
             configPreset = "survival",
@@ -927,6 +972,7 @@ fun WhiteDnsSettings.applyCottenDnsConfigPreset(preset: String): WhiteDnsSetting
             maxDownloadMtu = "2500",
             mtuTestTimeoutResolvers = "2.5",
             mtuTestParallelismResolvers = "64",
+            pingWatchdogSeconds = "15",
         )
         "tcp-survival" -> copy(
             configPreset = "tcp-survival",
@@ -937,6 +983,81 @@ fun WhiteDnsSettings.applyCottenDnsConfigPreset(preset: String): WhiteDnsSetting
             downloadCompression = 2,
             mtuTestTimeoutResolvers = "3.0",
             mtuTestParallelismResolvers = "32",
+            pingWatchdogSeconds = "30",
+        )
+        "iran" -> copy(
+            configPreset = "iran",
+            balancingStrategy = 5,
+            uploadDuplication = "1",
+            downloadDuplication = "1",
+            uploadCompression = 2,
+            downloadCompression = 2,
+            minUploadMtu = "80",
+            maxUploadMtu = "180",
+            minDownloadMtu = "700",
+            maxDownloadMtu = "2500",
+            mtuTestRetriesResolvers = "2",
+            mtuTestTimeoutResolvers = "2.5",
+            mtuTestParallelismResolvers = "48",
+            mtuTestRetriesLogs = "3",
+            mtuTestTimeoutLogs = "1.5",
+            pingWatchdogSeconds = "45",
+        )
+        "china" -> copy(
+            configPreset = "china",
+            balancingStrategy = 5,
+            uploadDuplication = "1",
+            downloadDuplication = "1",
+            uploadCompression = 2,
+            downloadCompression = 2,
+            mtuTestRetriesResolvers = "2",
+            mtuTestTimeoutResolvers = "1.5",
+            mtuTestParallelismResolvers = "100",
+            mtuTestRetriesLogs = "3",
+            mtuTestTimeoutLogs = "1.5",
+            pingWatchdogSeconds = "45",
+        )
+        "russia" -> copy(
+            configPreset = "russia",
+            balancingStrategy = 5,
+            uploadDuplication = "1",
+            downloadDuplication = "1",
+            uploadCompression = 2,
+            downloadCompression = 2,
+            mtuTestRetriesResolvers = "2",
+            mtuTestTimeoutResolvers = "2.5",
+            mtuTestParallelismResolvers = "100",
+            mtuTestRetriesLogs = "3",
+            mtuTestTimeoutLogs = "1.5",
+            pingWatchdogSeconds = "45",
+        )
+        "venezuela" -> copy(
+            configPreset = "venezuela",
+            balancingStrategy = 5,
+            uploadDuplication = "1",
+            downloadDuplication = "1",
+            uploadCompression = 2,
+            downloadCompression = 2,
+            mtuTestRetriesResolvers = "2",
+            mtuTestTimeoutResolvers = "1.5",
+            mtuTestParallelismResolvers = "100",
+            mtuTestRetriesLogs = "3",
+            mtuTestTimeoutLogs = "1.5",
+            pingWatchdogSeconds = "45",
+        )
+        "cuba", "low-bandwidth" -> copy(
+            configPreset = normalizedPreset,
+            balancingStrategy = 5,
+            uploadDuplication = "1",
+            downloadDuplication = "1",
+            uploadCompression = 2,
+            downloadCompression = 2,
+            mtuTestRetriesResolvers = "2",
+            mtuTestTimeoutResolvers = "3.0",
+            mtuTestParallelismResolvers = "24",
+            mtuTestRetriesLogs = "3",
+            mtuTestTimeoutLogs = "1.5",
+            pingWatchdogSeconds = "45",
         )
         else -> copy(
             configPreset = "default",
@@ -1820,7 +1941,9 @@ fun WhiteDnsSettings.resolve(): ResolvedWhiteDnsSettings {
 
     return ResolvedWhiteDnsSettings(
         configPreset = when (configPreset) {
-            "default", "speed", "survival", "tcp-survival", "master-storm" -> configPreset
+            "default", "speed", "udp-only", "survival", "tcp-survival",
+            "iran", "china", "russia", "venezuela", "cuba", "low-bandwidth",
+            "master-storm" -> configPreset
             else -> "default"
         },
         transportMode = when (transportMode.trim().lowercase()) {

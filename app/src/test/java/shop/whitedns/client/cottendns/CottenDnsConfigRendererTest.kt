@@ -7,6 +7,7 @@ import org.junit.Test
 import shop.whitedns.client.model.ConnectionProfile
 import shop.whitedns.client.model.ResolverProfile
 import shop.whitedns.client.model.WhiteDnsSettings
+import shop.whitedns.client.model.applyCottenDnsConfigPreset
 import shop.whitedns.client.model.importAdvancedSettingsProfileFromToml
 
 class CottenDnsConfigRendererTest {
@@ -313,7 +314,8 @@ class CottenDnsConfigRendererTest {
         assertTrue(toml.contains("CONFIG_PRESET = \"tcp-survival\""))
         assertTrue(toml.contains("RESOLVER_TRANSPORT = \"tcp\""))
         assertTrue(toml.contains("QUERY_TYPES = [\"TXT\", \"HTTPS\"]"))
-        assertTrue(toml.contains("MTU_PROBE_SAMPLES = 1"))
+        assertTrue(toml.contains("MTU_PROBE_SAMPLES = 4"))
+        assertTrue(toml.contains("MTU_MAX_LOSS = 0.25"))
     }
 
     @Test
@@ -344,7 +346,7 @@ class CottenDnsConfigRendererTest {
         assertTrue(cottenDnsToml.contains("CONFIG_PRESET = \"survival\""))
         assertTrue(cottenDnsToml.contains("QNAME_LABEL_LENGTH = 42"))
         assertTrue(cottenDnsToml.contains("EDNS_UDP_SIZE = 1232"))
-        assertTrue(cottenDnsToml.contains("MTU_MAX_LOSS = 0.5"))
+        assertTrue(cottenDnsToml.contains("MTU_MAX_LOSS = 0.2"))
         assertTrue(cottenDnsToml.contains("ADAPTIVE_DUPLICATION = true"))
         assertTrue(cottenDnsToml.contains("DUPLICATION_PREFER_DISTINCT_DOMAINS = true"))
         assertTrue(cottenDnsToml.contains("DNS_EDNS_COOKIE = true"))
@@ -365,5 +367,56 @@ class CottenDnsConfigRendererTest {
         assertTrue(compatibilityToml.contains("RESOLVER_RATE_LIMIT_ENABLED = true"))
         assertTrue(compatibilityToml.contains("DNS_RANDOMIZE_QUERY_ID = true"))
         assertTrue(compatibilityToml.contains("RESOLVER_IGNORE_INJECTED_NXDOMAIN = true"))
+    }
+
+    @Test
+    fun renderClientTomlSupportsEveryBundledNativePreset() {
+        val expected = mapOf(
+            "speed" to Triple("auto", "[\"TXT\"]", "0.25"),
+            "udp-only" to Triple("udp", "[\"TXT\"]", "0.25"),
+            "survival" to Triple("auto", "[\"TXT\", \"CNAME\", \"HTTPS\", \"A\"]", "0.2"),
+            "tcp-survival" to Triple("tcp", "[\"TXT\", \"HTTPS\"]", "0.25"),
+            "iran" to Triple("auto", "[\"TXT\"]", "0.35"),
+            "china" to Triple("auto", "[\"TXT\"]", "0.25"),
+            "russia" to Triple("auto", "[\"TXT\"]", "0.25"),
+            "venezuela" to Triple("auto", "[\"TXT\"]", "0.30"),
+            "cuba" to Triple("auto", "[\"TXT\"]", "0.30"),
+            "low-bandwidth" to Triple("auto", "[\"TXT\"]", "0.30"),
+        )
+
+        expected.forEach { (preset, values) ->
+            val toml = CottenDnsConfigRenderer.renderClientToml(
+                serverProfile = encryptedServerProfile(),
+                settings = WhiteDnsSettings().applyCottenDnsConfigPreset(preset),
+            )
+
+            assertTrue(preset, toml.contains("CONFIG_PRESET = \"$preset\""))
+            assertTrue(preset, toml.contains("RESOLVER_TRANSPORT = \"${values.first}\""))
+            assertTrue(preset, toml.contains("QUERY_TYPES = ${values.second}"))
+            assertTrue(preset, toml.contains("MTU_MAX_LOSS = ${values.third}"))
+            assertTrue(preset, toml.contains("ADAPTIVE_DUPLICATION = true"))
+            assertTrue(preset, toml.contains("DUPLICATION_PREFER_DISTINCT_DOMAINS = true"))
+            assertTrue(preset, toml.contains("LOG_TO_FILE = false"))
+            assertTrue(preset, !toml.contains("LOG_DIR ="))
+        }
+    }
+
+    @Test
+    fun explicitWireChoicesOverrideBundledPresetValues() {
+        val toml = CottenDnsConfigRenderer.renderClientToml(
+            serverProfile = encryptedServerProfile(),
+            settings = WhiteDnsSettings()
+                .applyCottenDnsConfigPreset("iran")
+                .copy(
+                    transportMode = "tcp",
+                    deliveryMode = "txt-https",
+                    qnameMode = "aggressive",
+                ),
+        )
+
+        assertTrue(toml.contains("CONFIG_PRESET = \"iran\""))
+        assertTrue(toml.contains("RESOLVER_TRANSPORT = \"tcp\""))
+        assertTrue(toml.contains("QUERY_TYPES = [\"TXT\", \"HTTPS\"]"))
+        assertTrue(toml.contains("QNAME_LABEL_LENGTH = 32"))
     }
 }

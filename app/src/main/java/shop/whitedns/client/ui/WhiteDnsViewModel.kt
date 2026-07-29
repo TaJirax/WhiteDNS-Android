@@ -2650,6 +2650,22 @@ class WhiteDnsViewModel(
                 uploadSpeedBytesPerSecond = stats.uploadSpeedBytesPerSecond,
                 peakSpeedBytesPerSecond = peakSpeed,
                 connectedApps = connectedApps,
+                lossPercent = stats.lossPercent,
+                activeResolverCount = stats.activeResolvers,
+                transportSummary = stats.transportSummary,
+                transportExplorationCount = stats.explorationCount,
+                transportRestorationCount = stats.restorationCount,
+                transportSwitchCount = stats.transportSwitchCount,
+                pathStripeCount = stats.stripeCount,
+                redundancySavedCount = stats.redundancySavedCount,
+                txQueueDepth = stats.txQueueDepth,
+                encodedTxQueueDepth = stats.encodedTxQueueDepth,
+                rxQueueDepth = stats.rxQueueDepth,
+                rxDropCount = stats.rxDropCount,
+                txDropCount = stats.txDropCount,
+                transportRecoveryCount = stats.recoveryCount,
+                streamDialFailureCount = stats.streamDialFailureCount,
+                streamWriteFailureCount = stats.streamWriteFailureCount,
             )
         }
 

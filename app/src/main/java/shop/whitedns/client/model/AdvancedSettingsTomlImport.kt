@@ -37,8 +37,22 @@ private fun parseAdvancedSettingsProfileFromToml(
 
     applyIfPresent("CONFIG_PRESET") { value ->
         val preset = value.stringValue("CONFIG_PRESET").lowercase(Locale.US)
-        if (preset !in setOf("default", "speed", "survival", "tcp-survival")) {
-            value.fail("CONFIG_PRESET must be one of default, speed, survival, tcp-survival")
+        val supportedPresets = setOf(
+            "default",
+            "speed",
+            "udp-only",
+            "survival",
+            "tcp-survival",
+            "iran",
+            "china",
+            "russia",
+            "venezuela",
+            "cuba",
+            "low-bandwidth",
+            "master-storm",
+        )
+        if (preset !in supportedPresets) {
+            value.fail("CONFIG_PRESET must be a supported CottenDNS preset")
         }
         settings.copy(configPreset = preset)
     }

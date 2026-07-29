@@ -662,6 +662,19 @@ class WhiteDnsModelsTest {
     }
 
     @Test
+    fun importAdvancedSettingsProfileAcceptsEveryBundledPreset() {
+        WhiteDnsOptions.configPresets.forEach { choice ->
+            val imported = WhiteDnsSettings().importAdvancedSettingsProfileFromToml(
+                name = "Imported ${choice.value}",
+                toml = """CONFIG_PRESET = "${choice.value}"""",
+            )
+
+            assertEquals(choice.value, imported.configPreset)
+            assertEquals(choice.value, imported.selectedAdvancedProfile().configPreset)
+        }
+    }
+
+    @Test
     fun importAdvancedSettingsProfileFromTomlRejectsInvalidValues() {
         val error = assertThrows(IllegalArgumentException::class.java) {
             WhiteDnsSettings().importAdvancedSettingsProfileFromToml(
@@ -710,6 +723,49 @@ class WhiteDnsModelsTest {
         assertEquals(300, resolvedSettings.minDownloadMtu)
         assertEquals(140, resolvedSettings.maxUploadMtu)
         assertEquals(3000, resolvedSettings.maxDownloadMtu)
+    }
+
+    @Test
+    fun everyBundledCottenDnsPresetCanBeSelectedAndResolved() {
+        val expected = listOf(
+            "default",
+            "speed",
+            "udp-only",
+            "survival",
+            "tcp-survival",
+            "iran",
+            "china",
+            "russia",
+            "venezuela",
+            "cuba",
+            "low-bandwidth",
+            "master-storm",
+        )
+
+        assertEquals(expected, WhiteDnsOptions.configPresets.map { it.value })
+        expected.forEach { preset ->
+            val resolved = WhiteDnsSettings()
+                .applyCottenDnsConfigPreset(preset)
+                .resolve()
+            assertEquals(preset, resolved.configPreset)
+        }
+    }
+
+    @Test
+    fun bundledPresetValuesOverrideTheAppDefaults() {
+        val speed = WhiteDnsSettings().applyCottenDnsConfigPreset("speed").resolve()
+        val iran = WhiteDnsSettings().applyCottenDnsConfigPreset("iran").resolve()
+        val lowBandwidth = WhiteDnsSettings().applyCottenDnsConfigPreset("low-bandwidth").resolve()
+
+        assertEquals(1, speed.uploadDuplication)
+        assertEquals(1, speed.downloadDuplication)
+        assertEquals(45, speed.pingWatchdogSeconds)
+        assertEquals(48, iran.mtuTestParallelismResolvers)
+        assertEquals(80, iran.minUploadMtu)
+        assertEquals(45, iran.pingWatchdogSeconds)
+        assertEquals(24, lowBandwidth.mtuTestParallelismResolvers)
+        assertEquals(3.0, lowBandwidth.mtuTestTimeoutResolvers, 0.0)
+        assertEquals(45, lowBandwidth.pingWatchdogSeconds)
     }
 
     @Test

@@ -16,7 +16,7 @@ Official channel: [https://t.me/whitedns](https://t.me/whitedns)
 
 WhiteDNS is backed by the [MasterDNS Client](https://github.com/masterking32/MasterDnsVPN)
 project and vendors the CottenDNS engine from
-[TaJirax/cottenDNS](https://github.com/TaJirax/cottenDNS) at commit `e3c2ea8813890c021d64e5200ac65d8fd851acca`.
+[TaJirax/cottenDNS](https://github.com/TaJirax/cottenDNS) at commit `1e838861afa73c4d936c4518a34e2d326b654a9f`.
 
 The Android VPN path also packages `tun2proxy`; see [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for third-party license details.
 
@@ -30,6 +30,13 @@ The Android VPN path also packages `tun2proxy`; see [THIRD_PARTY_NOTICES.md](./T
 - Resolver profile management with validation and default resolver assets.
 - Split tunnel options for VPN routing.
 - Runtime connection logs, resolver state, progress, and traffic statistics.
+- Structured CottenDNS path diagnostics: per-transport state, measured loss,
+  exploration/restoration/switch events, queue pressure, drops, recoveries, and
+  stream failures. Encryption keys are always redacted from exported diagnostics.
+- Native speed, UDP-only, survival, TCP-survival, Iran, China, Russia,
+  Venezuela, Cuba, and low-bandwidth presets. Selecting a preset replaces the
+  app defaults; explicit transport, delivery, and QNAME choices override that
+  preset. Existing Storm/Master compatibility presets remain isolated.
 - Foreground service notifications for long-running proxy and VPN sessions.
 - Jetpack Compose UI with Material 3 components.
 
