@@ -129,7 +129,30 @@ type ServerConfig struct {
 	// memory/CPU from being exhausted by session-init floods. The session-ID space
 	// is 16-bit (65535 slots) but that many live sessions is far more load than a
 	// single node should carry, so this defaults to 2048 (the TCP_MAX_CONNS ceiling).
-	MaxActiveSessions                 int      `toml:"MAX_ACTIVE_SESSIONS"`
+	MaxActiveSessions int `toml:"MAX_ACTIVE_SESSIONS"`
+
+	// Client policy ceilings, advertised to the client in SESSION_ACCEPT so it
+	// clamps itself. Without them a single client configured with a huge ARQ
+	// window, an aggressive ping interval, or heavy duplication can take a
+	// disproportionate share of a public server.
+	//
+	// Every one of these defaults to 0, meaning "state no ceiling". When all of
+	// them are 0 the server appends no policy block at all and SESSION_ACCEPT
+	// is byte-for-byte what it was before, so upgrading changes nothing until
+	// an operator opts in. The wire layout matches MasterDnsVPN's, so those
+	// clients honour these ceilings too.
+	MaxAllowedClientPacketDuplication      int     `toml:"MAX_ALLOWED_CLIENT_PACKET_DUPLICATION_COUNT"`
+	MaxAllowedClientSetupPacketDuplication int     `toml:"MAX_ALLOWED_CLIENT_SETUP_PACKET_DUPLICATION_COUNT"`
+	MaxAllowedClientUploadMTU              int     `toml:"MAX_ALLOWED_CLIENT_UPLOAD_MTU"`
+	MaxAllowedClientDownloadMTU            int     `toml:"MAX_ALLOWED_CLIENT_DOWNLOAD_MTU"`
+	MaxAllowedClientRxTxWorkers            int     `toml:"MAX_ALLOWED_CLIENT_RX_TX_WORKERS"`
+	MinAllowedClientPingAggressiveInterval float64 `toml:"MIN_ALLOWED_CLIENT_PING_AGGRESSIVE_INTERVAL_SECONDS"`
+	MaxAllowedClientPacketsPerBatch        int     `toml:"MAX_ALLOWED_CLIENT_PACKETS_PER_BATCH"`
+	MaxAllowedClientARQWindowSize          int     `toml:"MAX_ALLOWED_CLIENT_ARQ_WINDOW_SIZE"`
+	MaxAllowedClientARQDataNackMaxGap      int     `toml:"MAX_ALLOWED_CLIENT_ARQ_DATA_NACK_MAX_GAP"`
+	MinAllowedClientCompressionMinSize     int     `toml:"MIN_ALLOWED_CLIENT_COMPRESSION_MIN_SIZE"`
+	MinAllowedClientARQInitialRTOSeconds   float64 `toml:"MIN_ALLOWED_CLIENT_ARQ_INITIAL_RTO_SECONDS"`
+
 	MaxDNSResponseBytes               int      `toml:"MAX_DNS_RESPONSE_BYTES"`
 	DropLogIntervalSecs               float64  `toml:"DROP_LOG_INTERVAL_SECONDS"`
 	InvalidCookieWindowSecs           float64  `toml:"INVALID_COOKIE_WINDOW_SECONDS"`
@@ -388,8 +411,8 @@ func LoadServerConfigWithOverrides(filename string, overrides ServerConfigOverri
 
 func finalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg.ConfigPreset = normalizeConfigPresetName(cfg.ConfigPreset)
-	if !isKnownConfigPreset(cfg.ConfigPreset) {
-		return cfg, fmt.Errorf("invalid CONFIG_PRESET: %q (valid: default, speed, survival, tcp-survival)", cfg.ConfigPreset)
+	if !isKnownServerConfigPreset(cfg.ConfigPreset) {
+		return cfg, fmt.Errorf("invalid CONFIG_PRESET: %q (valid: %s)", cfg.ConfigPreset, serverConfigPresetNames)
 	}
 
 	cfg.ProtocolType = defaultString(strings.ToUpper(strings.TrimSpace(cfg.ProtocolType)), "SOCKS5")
@@ -459,6 +482,17 @@ func finalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg.MaxPacketSize = clampInt(defaultIntBelow(cfg.MaxPacketSize, 1, 4096), 512, 4096)
 	cfg.MaxStreamsPerSession = clampInt(defaultIntBelow(cfg.MaxStreamsPerSession, 1, 4096), 16, 65535)
 	cfg.MaxActiveSessions = clampInt(defaultIntBelow(cfg.MaxActiveSessions, 1, 2048), 1, 65535)
+	cfg.MaxAllowedClientPacketDuplication = clampOptionalServerInt(cfg.MaxAllowedClientPacketDuplication, 1, 15)
+	cfg.MaxAllowedClientSetupPacketDuplication = clampOptionalServerInt(cfg.MaxAllowedClientSetupPacketDuplication, 1, 15)
+	cfg.MaxAllowedClientUploadMTU = clampOptionalServerInt(cfg.MaxAllowedClientUploadMTU, 10, 255)
+	cfg.MaxAllowedClientDownloadMTU = clampOptionalServerInt(cfg.MaxAllowedClientDownloadMTU, 10, 4096)
+	cfg.MaxAllowedClientRxTxWorkers = clampOptionalServerInt(cfg.MaxAllowedClientRxTxWorkers, 1, 255)
+	cfg.MinAllowedClientPingAggressiveInterval = clampOptionalServerFloat(cfg.MinAllowedClientPingAggressiveInterval, 0.05, 1.0)
+	cfg.MaxAllowedClientPacketsPerBatch = clampOptionalServerInt(cfg.MaxAllowedClientPacketsPerBatch, 1, 255)
+	cfg.MaxAllowedClientARQWindowSize = clampOptionalServerInt(cfg.MaxAllowedClientARQWindowSize, 1, 65535)
+	cfg.MaxAllowedClientARQDataNackMaxGap = clampOptionalServerInt(cfg.MaxAllowedClientARQDataNackMaxGap, 1, 255)
+	cfg.MinAllowedClientCompressionMinSize = clampOptionalServerInt(cfg.MinAllowedClientCompressionMinSize, 1, 65535)
+	cfg.MinAllowedClientARQInitialRTOSeconds = clampOptionalServerFloat(cfg.MinAllowedClientARQInitialRTOSeconds, 0.05, 1.0)
 	cfg.MaxDNSResponseBytes = clampInt(defaultIntBelow(cfg.MaxDNSResponseBytes, 1, 32768), 512, 65535)
 
 	// Encrypted-DNS listener ports. Clamp to valid range; fall back to the
@@ -676,6 +710,20 @@ func finalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg.ARQTerminalAckWaitTimeoutSec = clampFloat(defaultFloatAtMostZero(cfg.ARQTerminalAckWaitTimeoutSec, 60.0), 5.0, 3600.0)
 
 	return cfg, nil
+}
+
+func clampOptionalServerInt(value, minValue, maxValue int) int {
+	if value <= 0 {
+		return 0
+	}
+	return clampInt(value, minValue, maxValue)
+}
+
+func clampOptionalServerFloat(value, minValue, maxValue float64) float64 {
+	if value <= 0 {
+		return 0
+	}
+	return clampFloat(value, minValue, maxValue)
 }
 
 func (c ServerConfig) Address() string {

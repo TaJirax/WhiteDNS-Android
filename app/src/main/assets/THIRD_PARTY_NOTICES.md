@@ -29,7 +29,8 @@ SOFTWARE.
 
 ## CottenDns
 
-Source: https://github.com/nullroute1970/CottenDns
+Source: https://github.com/TaJirax/cottenDNS
+Vendored commit: `e3c2ea8813890c021d64e5200ac65d8fd851acca`
 License: MIT
 
 MIT License

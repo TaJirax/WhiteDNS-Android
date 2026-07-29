@@ -64,18 +64,46 @@ type ClientConfig struct {
 	//                       testing, retry the whole fleet over TCP/53.
 	//   "udp"            — UDP only (legacy).
 	//   "tcp"            — TCP/53 only (for networks that block UDP/53).
-	ResolverTransport                     string  `toml:"RESOLVER_TRANSPORT"`
+	//   "dot"            — DNS-over-TLS (RFC 7858), normally :853.
+	//   "doh"            — DNS-over-HTTPS (RFC 8484), normally :443.
+	//
+	// DoT/DoH are opt-in disguise transports, never something "auto" escalates
+	// into: they exist to make the resolver hop look like ordinary encrypted DNS
+	// where plain 53 is fingerprinted. Selecting one and having it fail is not
+	// fatal — the client falls back to UDP and then TCP/53 on its own, so a
+	// blocked TLS port degrades to the survival path instead of no tunnel.
+	ResolverTransport string `toml:"RESOLVER_TRANSPORT"`
+	// PathControllerMode selects the client-only runtime coordinator:
+	// "unified" shares directional path evidence and one redundancy budget
+	// across duplication/FEC/exploration; "legacy" restores the previous
+	// independent decisions without changing the wire protocol.
+	PathControllerMode string `toml:"PATH_CONTROLLER_MODE"`
+	// ComparablePathStriping lets unified mode distribute successive bulk
+	// packets across mature, near-equal resolver paths while sending one copy.
+	ComparablePathStriping bool `toml:"COMPARABLE_PATH_STRIPING"`
+	// ResolverTransportPaths optionally pins individual resolvers to a transport
+	// policy. Keys may be a resolver IP, resolver label (IP:port), or connection
+	// key; values are auto|udp|tcp|dot|doh. "auto" compares UDP and TCP for that
+	// resolver. Explicit udp/tcp stay fixed; dot/doh keep their plain survival
+	// fallbacks. Unlisted resolvers inherit ResolverTransport.
+	ResolverTransportPaths map[string]string `toml:"RESOLVER_TRANSPORT_PATHS"`
+	// ResolverTransportBackgroundScanIntervalSec controls the low-rate active
+	// path check. One resolver is checked at a time at the current session MTU;
+	// zero is finalized to 30 seconds. This keeps alternate path RTT/loss fresh
+	// without competing with user traffic.
+	ResolverTransportBackgroundScanIntervalSec float64 `toml:"RESOLVER_TRANSPORT_BACKGROUND_SCAN_INTERVAL_SECONDS"`
 	// Encrypted-resolver settings, used only by the dot/doh transports.
 	// ResolverTLSServerName is the SNI + certificate name presented to the
 	// resolver (leave empty to use the resolver IP itself). ResolverTLSPin is an
 	// optional base64 SHA-256 of the server certificate's SubjectPublicKeyInfo:
 	// set it to trust a self-signed server without disabling verification.
-	ResolverTLSServerName                 string  `toml:"RESOLVER_TLS_SERVER_NAME"`
-	ResolverTLSPin                        string  `toml:"RESOLVER_TLS_PIN"`
-	ResolverTLSInsecureSkipVerify         bool    `toml:"RESOLVER_TLS_INSECURE_SKIP_VERIFY"`
-	ResolverDoTPort                       int     `toml:"RESOLVER_DOT_PORT"`
-	ResolverDoHPort                       int     `toml:"RESOLVER_DOH_PORT"`
-	ResolverDoHPath                       string  `toml:"RESOLVER_DOH_PATH"`
+	ResolverTLSServerName         string `toml:"RESOLVER_TLS_SERVER_NAME"`
+	ResolverTLSPin                string `toml:"RESOLVER_TLS_PIN"`
+	ResolverTLSInsecureSkipVerify bool   `toml:"RESOLVER_TLS_INSECURE_SKIP_VERIFY"`
+	ResolverDoTPort               int    `toml:"RESOLVER_DOT_PORT"`
+	ResolverDoHPort               int    `toml:"RESOLVER_DOH_PORT"`
+	ResolverDoHPath               string `toml:"RESOLVER_DOH_PATH"`
+
 	UploadPacketDuplicationCount          int     `toml:"UPLOAD_PACKET_DUPLICATION_COUNT"`
 	DownloadPacketDuplicationCount        int     `toml:"DOWNLOAD_PACKET_DUPLICATION_COUNT"`
 	UploadSetupPacketDuplicationCount     int     `toml:"UPLOAD_SETUP_PACKET_DUPLICATION_COUNT"`
@@ -91,29 +119,30 @@ type ClientConfig struct {
 	AutoDisableMinObservations            int     `toml:"AUTO_DISABLE_MIN_OBSERVATIONS"`
 	AutoDisableCheckIntervalSeconds       float64 `toml:"AUTO_DISABLE_CHECK_INTERVAL_SECONDS"`
 	BaseEncodeData                        bool    `toml:"BASE_ENCODE_DATA"`
-	// LegacySessionID selects the 1-byte on-wire session-ID format used by
-	// MasterDNS/StormDNS/WhiteDNS servers. Default false uses CottenDns's 2-byte
-	// native format. Must match the target server's engine generation.
-	LegacySessionID bool `toml:"LEGACY_SESSION_ID"`
-	// MaxActiveStreams caps concurrent local tunnel streams (0 = unlimited).
-	MaxActiveStreams int `toml:"MAX_ACTIVE_STREAMS"`
-	// LocalHandshakeTimeoutSeconds bounds the local SOCKS5/TCP client handshake.
-	LocalHandshakeTimeoutSeconds float64 `toml:"LOCAL_HANDSHAKE_TIMEOUT_SECONDS"`
-	UploadCompressionType        int     `toml:"UPLOAD_COMPRESSION_TYPE"`
-	DownloadCompressionType      int     `toml:"DOWNLOAD_COMPRESSION_TYPE"`
-	CompressionMinSize           int     `toml:"COMPRESSION_MIN_SIZE"`
-	DataEncryptionMethod         int     `toml:"DATA_ENCRYPTION_METHOD"`
-	EncryptionKey                string  `toml:"ENCRYPTION_KEY"`
-	MinUploadMTU                 int     `toml:"MIN_UPLOAD_MTU"`
-	MinDownloadMTU               int     `toml:"MIN_DOWNLOAD_MTU"`
-	MaxUploadMTU                 int     `toml:"MAX_UPLOAD_MTU"`
-	MaxDownloadMTU               int     `toml:"MAX_DOWNLOAD_MTU"`
-	MTUTestRetriesResolvers      int     `toml:"MTU_TEST_RETRIES_RESOLVERS"`
-	MTUTestRetriesLogs           int     `toml:"MTU_TEST_RETRIES_LOGS"`
-	MTUTestTimeoutResolvers      float64 `toml:"MTU_TEST_TIMEOUT_RESOLVERS"`
-	MTUTestTimeoutLogs           float64 `toml:"MTU_TEST_TIMEOUT_LOGS"`
-	MTUTestParallelismResolvers  int     `toml:"MTU_TEST_PARALLELISM_RESOLVERS"`
-	MTUTestParallelismLogs       int     `toml:"MTU_TEST_PARALLELISM_LOGS"`
+	LegacySessionID                       bool    `toml:"LEGACY_SESSION_ID"`
+	MaxActiveStreams                      int     `toml:"MAX_ACTIVE_STREAMS"`
+	LocalHandshakeTimeoutSeconds          float64 `toml:"LOCAL_HANDSHAKE_TIMEOUT_SECONDS"`
+	UploadCompressionType                 int     `toml:"UPLOAD_COMPRESSION_TYPE"`
+	DownloadCompressionType               int     `toml:"DOWNLOAD_COMPRESSION_TYPE"`
+	CompressionMinSize                    int     `toml:"COMPRESSION_MIN_SIZE"`
+	DataEncryptionMethod                  int     `toml:"DATA_ENCRYPTION_METHOD"`
+	EncryptionKey                         string  `toml:"ENCRYPTION_KEY"`
+	MinUploadMTU                          int     `toml:"MIN_UPLOAD_MTU"`
+	MinDownloadMTU                        int     `toml:"MIN_DOWNLOAD_MTU"`
+	MaxUploadMTU                          int     `toml:"MAX_UPLOAD_MTU"`
+	MaxDownloadMTU                        int     `toml:"MAX_DOWNLOAD_MTU"`
+	MTUTestRetriesResolvers               int     `toml:"MTU_TEST_RETRIES_RESOLVERS"`
+	MTUTestRetriesLogs                    int     `toml:"MTU_TEST_RETRIES_LOGS"`
+	MTUTestTimeoutResolvers               float64 `toml:"MTU_TEST_TIMEOUT_RESOLVERS"`
+	MTUTestTimeoutLogs                    float64 `toml:"MTU_TEST_TIMEOUT_LOGS"`
+	MTUTestParallelismResolvers           int     `toml:"MTU_TEST_PARALLELISM_RESOLVERS"`
+	MTUTestParallelismLogs                int     `toml:"MTU_TEST_PARALLELISM_LOGS"`
+	// MTUBackgroundParallelism is how many resolvers the FastConnect background
+	// sweep probes at once, after the starter pool has released the session. The
+	// initial scan keeps using MTUTestParallelism so connecting stays fast; this
+	// only governs the sweep that continues behind an already-usable tunnel,
+	// which defaults to a single resolver to stay out of the tunnel's way.
+	MTUBackgroundParallelism int `toml:"MTU_BACKGROUND_PARALLELISM"`
 	// Adaptive per-group MTU (loss-aware probing + clustering).
 	// MTUProbeSamples > 1 enables loss-aware probing: each candidate MTU is
 	// probed this many times and accepted only if its measured loss is at or
@@ -139,78 +168,77 @@ type ClientConfig struct {
 	// the minimum number of resolvers that must sustain the raised MTU before it is
 	// adopted, trading a little redundancy for the larger MTU. Default 2.
 	MTUWeightedMinPool int `toml:"MTU_WEIGHTED_MIN_POOL"`
-	// FastConnect allows startup to continue after a small safe pool has passed
-	// MTU probing. The remaining resolvers keep probing in the background and are
-	// folded into the active/reserve pool as they pass.
+	// FastConnect starts once a small safe resolver pool has passed probing.
+	// Remaining resolvers continue probing in the background.
 	FastConnect bool `toml:"FAST_CONNECT"`
 	// Active MTU test parameters resolved from the startup mode at runtime.
 	// Populated by ApplyStartupModeMTU after the mode is known. Not loaded from TOML.
-	MTUTestRetries                       int               `toml:"-"`
-	MTUTestTimeout                       float64           `toml:"-"`
-	MTUTestParallelism                   int               `toml:"-"`
-	RX_TX_Workers                        int               `toml:"RX_TX_WORKERS"`
-	LegacyTunnelReaderWorkers            int               `toml:"TUNNEL_READER_WORKERS"`
-	LegacyTunnelWriterWorkers            int               `toml:"TUNNEL_WRITER_WORKERS"`
-	TunnelProcessWorkers                 int               `toml:"TUNNEL_PROCESS_WORKERS"`
-	TunnelPacketTimeoutSec               float64           `toml:"TUNNEL_PACKET_TIMEOUT_SECONDS"`
-	DispatcherIdlePollIntervalSeconds    float64           `toml:"DISPATCHER_IDLE_POLL_INTERVAL_SECONDS"`
-	PingAggressiveIntervalSeconds        float64           `toml:"PING_AGGRESSIVE_INTERVAL_SECONDS"`
-	PingLazyIntervalSeconds              float64           `toml:"PING_LAZY_INTERVAL_SECONDS"`
-	PingCooldownIntervalSeconds          float64           `toml:"PING_COOLDOWN_INTERVAL_SECONDS"`
-	PingColdIntervalSeconds              float64           `toml:"PING_COLD_INTERVAL_SECONDS"`
-	PingWarmThresholdSeconds             float64           `toml:"PING_WARM_THRESHOLD_SECONDS"`
-	PingCoolThresholdSeconds             float64           `toml:"PING_COOL_THRESHOLD_SECONDS"`
-	PingColdThresholdSeconds             float64           `toml:"PING_COLD_THRESHOLD_SECONDS"`
-	PingWatchdogTimeoutSeconds           float64           `toml:"PING_WATCHDOG_TIMEOUT_SECONDS"`
-	TXChannelSize                        int               `toml:"TX_CHANNEL_SIZE"`
-	RXChannelSize                        int               `toml:"RX_CHANNEL_SIZE"`
-	ResolverUDPConnectionPoolSize        int               `toml:"RESOLVER_UDP_CONNECTION_POOL_SIZE"`
-	StreamQueueInitialCapacity           int               `toml:"STREAM_QUEUE_INITIAL_CAPACITY"`
-	OrphanQueueInitialCapacity           int               `toml:"ORPHAN_QUEUE_INITIAL_CAPACITY"`
-	DNSResponseFragmentStoreCap          int               `toml:"DNS_RESPONSE_FRAGMENT_STORE_CAPACITY"`
-	DNSResponseFragmentTimeoutSeconds    float64           `toml:"DNS_RESPONSE_FRAGMENT_TIMEOUT_SECONDS"`
-	SOCKSUDPAssociateReadTimeoutSeconds  float64           `toml:"SOCKS_UDP_ASSOCIATE_READ_TIMEOUT_SECONDS"`
-	ClientTerminalStreamRetentionSeconds float64           `toml:"CLIENT_TERMINAL_STREAM_RETENTION_SECONDS"`
-	ClientCancelledSetupRetentionSeconds float64           `toml:"CLIENT_CANCELLED_SETUP_RETENTION_SECONDS"`
-	SessionInitRetryBaseSeconds          float64           `toml:"SESSION_INIT_RETRY_BASE_SECONDS"`
-	SessionInitRetryStepSeconds          float64           `toml:"SESSION_INIT_RETRY_STEP_SECONDS"`
-	SessionInitRetryLinearAfter          int               `toml:"SESSION_INIT_RETRY_LINEAR_AFTER"`
-	SessionInitRetryMaxSeconds           float64           `toml:"SESSION_INIT_RETRY_MAX_SECONDS"`
-	SessionInitBusyRetryIntervalSeconds  float64           `toml:"SESSION_INIT_BUSY_RETRY_INTERVAL_SECONDS"`
+	MTUTestRetries                       int     `toml:"-"`
+	MTUTestTimeout                       float64 `toml:"-"`
+	MTUTestParallelism                   int     `toml:"-"`
+	RX_TX_Workers                        int     `toml:"RX_TX_WORKERS"`
+	LegacyTunnelReaderWorkers            int     `toml:"TUNNEL_READER_WORKERS"`
+	LegacyTunnelWriterWorkers            int     `toml:"TUNNEL_WRITER_WORKERS"`
+	TunnelProcessWorkers                 int     `toml:"TUNNEL_PROCESS_WORKERS"`
+	TunnelPacketTimeoutSec               float64 `toml:"TUNNEL_PACKET_TIMEOUT_SECONDS"`
+	DispatcherIdlePollIntervalSeconds    float64 `toml:"DISPATCHER_IDLE_POLL_INTERVAL_SECONDS"`
+	PingAggressiveIntervalSeconds        float64 `toml:"PING_AGGRESSIVE_INTERVAL_SECONDS"`
+	PingLazyIntervalSeconds              float64 `toml:"PING_LAZY_INTERVAL_SECONDS"`
+	PingCooldownIntervalSeconds          float64 `toml:"PING_COOLDOWN_INTERVAL_SECONDS"`
+	PingColdIntervalSeconds              float64 `toml:"PING_COLD_INTERVAL_SECONDS"`
+	PingWarmThresholdSeconds             float64 `toml:"PING_WARM_THRESHOLD_SECONDS"`
+	PingCoolThresholdSeconds             float64 `toml:"PING_COOL_THRESHOLD_SECONDS"`
+	PingColdThresholdSeconds             float64 `toml:"PING_COLD_THRESHOLD_SECONDS"`
+	PingWatchdogTimeoutSeconds           float64 `toml:"PING_WATCHDOG_TIMEOUT_SECONDS"`
+	TXChannelSize                        int     `toml:"TX_CHANNEL_SIZE"`
+	RXChannelSize                        int     `toml:"RX_CHANNEL_SIZE"`
+	ResolverUDPConnectionPoolSize        int     `toml:"RESOLVER_UDP_CONNECTION_POOL_SIZE"`
+	StreamQueueInitialCapacity           int     `toml:"STREAM_QUEUE_INITIAL_CAPACITY"`
+	OrphanQueueInitialCapacity           int     `toml:"ORPHAN_QUEUE_INITIAL_CAPACITY"`
+	DNSResponseFragmentStoreCap          int     `toml:"DNS_RESPONSE_FRAGMENT_STORE_CAPACITY"`
+	DNSResponseFragmentTimeoutSeconds    float64 `toml:"DNS_RESPONSE_FRAGMENT_TIMEOUT_SECONDS"`
+	SOCKSUDPAssociateReadTimeoutSeconds  float64 `toml:"SOCKS_UDP_ASSOCIATE_READ_TIMEOUT_SECONDS"`
+	ClientTerminalStreamRetentionSeconds float64 `toml:"CLIENT_TERMINAL_STREAM_RETENTION_SECONDS"`
+	ClientCancelledSetupRetentionSeconds float64 `toml:"CLIENT_CANCELLED_SETUP_RETENTION_SECONDS"`
+	SessionInitRetryBaseSeconds          float64 `toml:"SESSION_INIT_RETRY_BASE_SECONDS"`
+	SessionInitRetryStepSeconds          float64 `toml:"SESSION_INIT_RETRY_STEP_SECONDS"`
+	SessionInitRetryLinearAfter          int     `toml:"SESSION_INIT_RETRY_LINEAR_AFTER"`
+	SessionInitRetryMaxSeconds           float64 `toml:"SESSION_INIT_RETRY_MAX_SECONDS"`
+	SessionInitBusyRetryIntervalSeconds  float64 `toml:"SESSION_INIT_BUSY_RETRY_INTERVAL_SECONDS"`
 	// SessionInitRacingCount is how many distinct resolvers one SESSION_INIT is
 	// raced across. The server keys sessions by the init signature and reuses
 	// within SESSION_INIT_REUSE_TTL, so the same init arriving via several
 	// resolvers still yields exactly one session. Higher values connect faster
 	// on lossy networks where any single resolver may be dead, at the cost of
 	// that many queries per attempt. 1 disables racing.
-	SessionInitRacingCount int `toml:"SESSION_INIT_RACING_COUNT"`
-	LogLevel                             string            `toml:"LOG_LEVEL"`
-	LogToFile                            bool              `toml:"LOG_TO_FILE"`
-	LogDir                               string            `toml:"LOG_DIR"`
-	LogFileName                          string            `toml:"LOG_FILE_NAME"`
-	StatsReportIntervalSeconds           float64           `toml:"STATS_REPORT_INTERVAL_SECONDS"`
-	StartupMode                          string            `toml:"STARTUP_MODE"`
-	LogScanMaxDays                       int               `toml:"LOG_SCAN_MAX_DAYS"`
-	LogScanMaxResolvers                  int               `toml:"LOG_SCAN_MAX_RESOLVERS"`
-	LogBasedMTUVerify                    bool              `toml:"LOG_BASED_MTU_VERIFY"`
-	MaxPacketsPerBatch                   int               `toml:"MAX_PACKETS_PER_BATCH"`
-	ARQWindowSize                        int               `toml:"ARQ_WINDOW_SIZE"`
-	ARQInitialRTOSeconds                 float64           `toml:"ARQ_INITIAL_RTO_SECONDS"`
-	ARQMaxRTOSeconds                     float64           `toml:"ARQ_MAX_RTO_SECONDS"`
-	ARQControlInitialRTOSeconds          float64           `toml:"ARQ_CONTROL_INITIAL_RTO_SECONDS"`
-	ARQControlMaxRTOSeconds              float64           `toml:"ARQ_CONTROL_MAX_RTO_SECONDS"`
-	ARQMaxControlRetries                 int               `toml:"ARQ_MAX_CONTROL_RETRIES"`
-	ARQInactivityTimeoutSeconds          float64           `toml:"ARQ_INACTIVITY_TIMEOUT_SECONDS"`
-	ARQDataPacketTTLSeconds              float64           `toml:"ARQ_DATA_PACKET_TTL_SECONDS"`
-	ARQControlPacketTTLSeconds           float64           `toml:"ARQ_CONTROL_PACKET_TTL_SECONDS"`
-	ARQMaxDataRetries                    int               `toml:"ARQ_MAX_DATA_RETRIES"`
-	ARQDataNackMaxGap                    int               `toml:"ARQ_DATA_NACK_MAX_GAP"`
-	ARQDataNackInitialDelaySeconds       float64           `toml:"ARQ_DATA_NACK_INITIAL_DELAY_SECONDS"`
-	ARQDataNackRepeatSeconds             float64           `toml:"ARQ_DATA_NACK_REPEAT_SECONDS"`
-	ARQTerminalDrainTimeoutSec           float64           `toml:"ARQ_TERMINAL_DRAIN_TIMEOUT_SECONDS"`
-	ARQTerminalAckWaitTimeoutSec         float64           `toml:"ARQ_TERMINAL_ACK_WAIT_TIMEOUT_SECONDS"`
-	Resolvers                            []ResolverAddress `toml:"-"`
-	ResolverMap                          map[string]int    `toml:"-"`
+	SessionInitRacingCount         int               `toml:"SESSION_INIT_RACING_COUNT"`
+	LogLevel                       string            `toml:"LOG_LEVEL"`
+	LogToFile                      bool              `toml:"LOG_TO_FILE"`
+	LogDir                         string            `toml:"LOG_DIR"`
+	LogFileName                    string            `toml:"LOG_FILE_NAME"`
+	StatsReportIntervalSeconds     float64           `toml:"STATS_REPORT_INTERVAL_SECONDS"`
+	StartupMode                    string            `toml:"STARTUP_MODE"`
+	LogScanMaxDays                 int               `toml:"LOG_SCAN_MAX_DAYS"`
+	LogScanMaxResolvers            int               `toml:"LOG_SCAN_MAX_RESOLVERS"`
+	LogBasedMTUVerify              bool              `toml:"LOG_BASED_MTU_VERIFY"`
+	MaxPacketsPerBatch             int               `toml:"MAX_PACKETS_PER_BATCH"`
+	ARQWindowSize                  int               `toml:"ARQ_WINDOW_SIZE"`
+	ARQInitialRTOSeconds           float64           `toml:"ARQ_INITIAL_RTO_SECONDS"`
+	ARQMaxRTOSeconds               float64           `toml:"ARQ_MAX_RTO_SECONDS"`
+	ARQControlInitialRTOSeconds    float64           `toml:"ARQ_CONTROL_INITIAL_RTO_SECONDS"`
+	ARQControlMaxRTOSeconds        float64           `toml:"ARQ_CONTROL_MAX_RTO_SECONDS"`
+	ARQMaxControlRetries           int               `toml:"ARQ_MAX_CONTROL_RETRIES"`
+	ARQInactivityTimeoutSeconds    float64           `toml:"ARQ_INACTIVITY_TIMEOUT_SECONDS"`
+	ARQDataPacketTTLSeconds        float64           `toml:"ARQ_DATA_PACKET_TTL_SECONDS"`
+	ARQControlPacketTTLSeconds     float64           `toml:"ARQ_CONTROL_PACKET_TTL_SECONDS"`
+	ARQMaxDataRetries              int               `toml:"ARQ_MAX_DATA_RETRIES"`
+	ARQDataNackMaxGap              int               `toml:"ARQ_DATA_NACK_MAX_GAP"`
+	ARQDataNackInitialDelaySeconds float64           `toml:"ARQ_DATA_NACK_INITIAL_DELAY_SECONDS"`
+	ARQDataNackRepeatSeconds       float64           `toml:"ARQ_DATA_NACK_REPEAT_SECONDS"`
+	ARQTerminalDrainTimeoutSec     float64           `toml:"ARQ_TERMINAL_DRAIN_TIMEOUT_SECONDS"`
+	ARQTerminalAckWaitTimeoutSec   float64           `toml:"ARQ_TERMINAL_ACK_WAIT_TIMEOUT_SECONDS"`
+	Resolvers                      []ResolverAddress `toml:"-"`
+	ResolverMap                    map[string]int    `toml:"-"`
 	// QUERY_TYPES is the set of DNS record types the client rotates over when
 	// building tunnel queries (A1, DPI-resistance). Names are case-insensitive,
 	// e.g. ["TXT", "CNAME", "A", "AAAA"]. Empty / unset preserves the historical
@@ -293,26 +321,30 @@ type ClientConfigFlagBinder struct {
 
 func defaultClientConfig() ClientConfig {
 	return ClientConfig{
-		ConfigPreset:                          "default",
-		ProtocolType:                          "SOCKS5",
-		Domains:                               nil,
-		ListenIP:                              "127.0.0.1",
-		ListenPort:                            18000,
-		SOCKS5Auth:                            false,
-		SOCKS5User:                            "master_dns_vpn",
-		SOCKS5Pass:                            "master_dns_vpn",
-		LocalDNSEnabled:                       false,
-		LocalDNSIP:                            "127.0.0.1",
-		LocalDNSPort:                          53,
-		LocalDNSCacheMaxRecords:               10000,
-		LocalDNSCacheTTLSeconds:               14400.0,
-		LocalDNSPendingTimeoutSec:             300.0,
-		LocalDNSCachePersist:                  true,
-		LocalDNSCacheFlushSec:                 60.0,
-		ResolverBalancingStrategy:             3,
-		QNameLabelLength:                      63,
-		ResolverRateLimitEnabled:              true,
-		ResolverTransport:                     "auto",
+		ConfigPreset:              "default",
+		ProtocolType:              "SOCKS5",
+		Domains:                   nil,
+		ListenIP:                  "127.0.0.1",
+		ListenPort:                18000,
+		SOCKS5Auth:                false,
+		SOCKS5User:                "master_dns_vpn",
+		SOCKS5Pass:                "master_dns_vpn",
+		LocalDNSEnabled:           false,
+		LocalDNSIP:                "127.0.0.1",
+		LocalDNSPort:              53,
+		LocalDNSCacheMaxRecords:   10000,
+		LocalDNSCacheTTLSeconds:   14400.0,
+		LocalDNSPendingTimeoutSec: 300.0,
+		LocalDNSCachePersist:      true,
+		LocalDNSCacheFlushSec:     60.0,
+		ResolverBalancingStrategy: 3,
+		QNameLabelLength:          63,
+		ResolverRateLimitEnabled:  true,
+		ResolverTransport:         "auto",
+		PathControllerMode:        "unified",
+		ComparablePathStriping:    true,
+		ResolverTransportPaths:    map[string]string{},
+		ResolverTransportBackgroundScanIntervalSec: 30.0,
 		ResolverDoTPort:                       853,
 		ResolverDoHPort:                       443,
 		ResolverDoHPath:                       "/dns-query",
@@ -329,102 +361,103 @@ func defaultClientConfig() ClientConfig {
 		AutoDisableTimeoutServers:             true,
 		// A resolver is only culled after this many seconds of *uninterrupted*
 		// timeouts (zero successes). 20s was too twitchy for long/lossy sessions:
-		// resolvers that were merely having a rough patch got disabled faster than
-		// recovery could bring them back, ratcheting the pool down to the floor and
-		// collapsing throughput. 90s keeps genuinely-dead resolvers out while
-		// tolerating transient loss.
-		AutoDisableTimeoutWindowSeconds:       90.0,
-		AutoDisableMinObservations:            3,
-		AutoDisableCheckIntervalSeconds:       1.0,
-		BaseEncodeData:                        false,
-		LegacySessionID:                       false,
-		MaxActiveStreams:                      2048,
-		LocalHandshakeTimeoutSeconds:          5.0,
-		UploadCompressionType:                 2,
-		DownloadCompressionType:               2,
-		CompressionMinSize:                    compression.DefaultMinSize,
-		DataEncryptionMethod:                  1,
-		EncryptionKey:                         "",
-		MinUploadMTU:                          100,
-		MinDownloadMTU:                        1000,
-		MaxUploadMTU:                          200,
-		MaxDownloadMTU:                        4000,
-		MTUTestRetriesResolvers:               3,
-		MTUTestRetriesLogs:                    5,
-		MTUTestTimeoutResolvers:               2.0,
-		MTUTestTimeoutLogs:                    2.0,
-		MTUTestParallelismResolvers:           100,
-		MTUTestParallelismLogs:                32,
-		MTUProbeSamples:                       1,
-		MTUMaxLoss:                            0.0,
-		MTUGroupGapRatio:                      0.25,
-		MTUAdaptiveGrouping:                   true,
-		MTUWeightedMinPool:                    2,
-		FastConnect:                           false,
-		DNSRandomizeQueryID:                   true,
-		DNSEDNSCookie:                         true,
-		DNSQNameCaseRandomization:             false,
-		EDNSUDPSize:                           4096,
-		ResolverIgnoreInjectedNXDOMAIN:        true,
-		RX_TX_Workers:                         4,
-		TunnelProcessWorkers:                  4,
-		TunnelPacketTimeoutSec:                10.0,
-		DispatcherIdlePollIntervalSeconds:     0.020,
-		PingAggressiveIntervalSeconds:         0.200,
-		PingLazyIntervalSeconds:               0.750,
-		PingCooldownIntervalSeconds:           2.0,
-		PingColdIntervalSeconds:               15.0,
-		PingWarmThresholdSeconds:              5.0,
-		PingCoolThresholdSeconds:              15.0,
-		PingColdThresholdSeconds:              30.0,
-		PingWatchdogTimeoutSeconds:            300.0,
-		TXChannelSize:                         2048,
-		RXChannelSize:                         2048,
-		ResolverUDPConnectionPoolSize:         256,
-		StreamQueueInitialCapacity:            512,
-		OrphanQueueInitialCapacity:            128,
-		DNSResponseFragmentStoreCap:           1024,
-		DNSResponseFragmentTimeoutSeconds:     60.0,
-		SOCKSUDPAssociateReadTimeoutSeconds:   30.0,
-		ClientTerminalStreamRetentionSeconds:  45.0,
-		ClientCancelledSetupRetentionSeconds:  120.0,
-		SessionInitRetryBaseSeconds:           1.0,
-		SessionInitRetryStepSeconds:           1.0,
-		SessionInitRetryLinearAfter:           5,
-		SessionInitRetryMaxSeconds:            60.0,
-		SessionInitBusyRetryIntervalSeconds:   60.0,
-		SessionInitRacingCount:                3,
-		LogLevel:                              "INFO",
-		LogToFile:                             true,
-		LogDir:                                "logs",
-		LogFileName:                           "cottendns_{time}.log",
-		StatsReportIntervalSeconds:            5.0,
-		StartupMode:                           "logs",
-		LogScanMaxDays:                        30,
-		LogScanMaxResolvers:                   0,
-		LogBasedMTUVerify:                     true,
-		MaxPacketsPerBatch:                    8,
-		ARQWindowSize:                         1000,
-		ARQInitialRTOSeconds:                  0.6,
-		ARQMaxRTOSeconds:                      3.0,
-		ARQControlInitialRTOSeconds:           0.5,
-		ARQControlMaxRTOSeconds:               2.0,
-		ARQMaxControlRetries:                  120,
+		// resolvers having a rough patch got disabled faster than recovery could
+		// bring them back, ratcheting the pool down to the floor and collapsing
+		// throughput. 90s keeps genuinely-dead resolvers out while tolerating
+		// transient loss.
+		AutoDisableTimeoutWindowSeconds:      90.0,
+		AutoDisableMinObservations:           3,
+		AutoDisableCheckIntervalSeconds:      1.0,
+		BaseEncodeData:                       false,
+		LegacySessionID:                      false,
+		MaxActiveStreams:                     2048,
+		LocalHandshakeTimeoutSeconds:         5.0,
+		UploadCompressionType:                2,
+		DownloadCompressionType:              2,
+		CompressionMinSize:                   compression.DefaultMinSize,
+		DataEncryptionMethod:                 1,
+		EncryptionKey:                        "",
+		MinUploadMTU:                         100,
+		MinDownloadMTU:                       1000,
+		MaxUploadMTU:                         200,
+		MaxDownloadMTU:                       4000,
+		MTUTestRetriesResolvers:              3,
+		MTUTestRetriesLogs:                   5,
+		MTUTestTimeoutResolvers:              2.0,
+		MTUTestTimeoutLogs:                   2.0,
+		MTUTestParallelismResolvers:          100,
+		MTUTestParallelismLogs:               32,
+		MTUBackgroundParallelism:             1,
+		MTUProbeSamples:                      1,
+		MTUMaxLoss:                           0.0,
+		MTUGroupGapRatio:                     0.25,
+		MTUAdaptiveGrouping:                  true,
+		MTUWeightedMinPool:                   2,
+		FastConnect:                          false,
+		DNSRandomizeQueryID:                  true,
+		DNSEDNSCookie:                        true,
+		DNSQNameCaseRandomization:            false,
+		EDNSUDPSize:                          4096,
+		ResolverIgnoreInjectedNXDOMAIN:       true,
+		RX_TX_Workers:                        4,
+		TunnelProcessWorkers:                 4,
+		TunnelPacketTimeoutSec:               10.0,
+		DispatcherIdlePollIntervalSeconds:    0.020,
+		PingAggressiveIntervalSeconds:        0.200,
+		PingLazyIntervalSeconds:              0.750,
+		PingCooldownIntervalSeconds:          2.0,
+		PingColdIntervalSeconds:              15.0,
+		PingWarmThresholdSeconds:             5.0,
+		PingCoolThresholdSeconds:             15.0,
+		PingColdThresholdSeconds:             30.0,
+		PingWatchdogTimeoutSeconds:           30.0,
+		TXChannelSize:                        32768,
+		RXChannelSize:                        32768,
+		ResolverUDPConnectionPoolSize:        1024,
+		StreamQueueInitialCapacity:           512, // per local stream, not global — see clamp below
+		OrphanQueueInitialCapacity:           16384,
+		DNSResponseFragmentStoreCap:          16384,
+		DNSResponseFragmentTimeoutSeconds:    60.0,
+		SOCKSUDPAssociateReadTimeoutSeconds:  120.0,
+		ClientTerminalStreamRetentionSeconds: 45.0,
+		ClientCancelledSetupRetentionSeconds: 120.0,
+		SessionInitRetryBaseSeconds:          1.0,
+		SessionInitRetryStepSeconds:          1.0,
+		SessionInitRetryLinearAfter:          5,
+		SessionInitRetryMaxSeconds:           60.0,
+		SessionInitBusyRetryIntervalSeconds:  60.0,
+		SessionInitRacingCount:               3,
+		LogLevel:                             "INFO",
+		LogToFile:                            true,
+		LogDir:                               "logs",
+		LogFileName:                          "cottendns_{time}.log",
+		StatsReportIntervalSeconds:           5.0,
+		StartupMode:                          "resolvers",
+		LogScanMaxDays:                       30,
+		LogScanMaxResolvers:                  0,
+		LogBasedMTUVerify:                    true,
+		MaxPacketsPerBatch:                   8,
+		ARQWindowSize:                        5000,
+		ARQInitialRTOSeconds:                 0.6,
+		ARQMaxRTOSeconds:                     3.0,
+		ARQControlInitialRTOSeconds:          0.5,
+		ARQControlMaxRTOSeconds:              2.0,
+		ARQMaxControlRetries:                 120,
 		// A stalled/half-open stream (server stopped answering, lost FIN) is only
 		// reaped once ARQ declares it inactive, so 1800s (30 min) let dead streams
 		// pile up in active_streams on lossy links, bloating the per-tick reap
 		// scan. 600s still tolerates genuinely idle-but-alive connections (a
 		// slow-but-progressing stream keeps resetting its activity clock and is
 		// never reaped) while draining dead ones ~3x sooner.
-		ARQInactivityTimeoutSeconds:           600.0,
-		ARQDataPacketTTLSeconds:               2400.0,
-		ARQControlPacketTTLSeconds:            1200.0,
-		ARQMaxDataRetries:                     120,
-		ARQDataNackMaxGap:                     64,
-		ARQDataNackInitialDelaySeconds:        0.4,
-		ARQDataNackRepeatSeconds:              0.8,
-		ARQTerminalDrainTimeoutSec:            120.0,
-		ARQTerminalAckWaitTimeoutSec:          90.0,
+		ARQInactivityTimeoutSeconds:    600.0,
+		ARQDataPacketTTLSeconds:        2400.0,
+		ARQControlPacketTTLSeconds:     1200.0,
+		ARQMaxDataRetries:              120,
+		ARQDataNackMaxGap:              64,
+		ARQDataNackInitialDelaySeconds: 0.4,
+		ARQDataNackRepeatSeconds:       0.8,
+		ARQTerminalDrainTimeoutSec:     120.0,
+		ARQTerminalAckWaitTimeoutSec:   90.0,
 	}
 }
 
@@ -436,24 +469,16 @@ func LoadClientConfig(filename string) (ClientConfig, error) {
 	return finalizeClientConfig(cfg)
 }
 
-// ApplyStartupModeMTU resolves the active MTU-test parameters (MTUTestRetries,
-// MTUTestTimeout, MTUTestParallelism) from the per-mode configuration values
-// based on the supplied startup mode. Any value other than "logs" is treated as
-// the resolvers mode.
-func (cfg *ClientConfig) ApplyStartupModeMTU(mode string) {
+// ApplyStartupModeMTU selects the fresh resolver-scan parameters. The mode
+// argument is retained for source compatibility; cached log startup is disabled
+// because resolver reachability and MTU are not reliable across launches.
+func (cfg *ClientConfig) ApplyStartupModeMTU(_ string) {
 	if cfg == nil {
 		return
 	}
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "logs":
-		cfg.MTUTestRetries = cfg.MTUTestRetriesLogs
-		cfg.MTUTestTimeout = cfg.MTUTestTimeoutLogs
-		cfg.MTUTestParallelism = cfg.MTUTestParallelismLogs
-	default:
-		cfg.MTUTestRetries = cfg.MTUTestRetriesResolvers
-		cfg.MTUTestTimeout = cfg.MTUTestTimeoutResolvers
-		cfg.MTUTestParallelism = cfg.MTUTestParallelismResolvers
-	}
+	cfg.MTUTestRetries = cfg.MTUTestRetriesResolvers
+	cfg.MTUTestTimeout = cfg.MTUTestTimeoutResolvers
+	cfg.MTUTestParallelism = cfg.MTUTestParallelismResolvers
 }
 
 func loadClientConfigFile(filename string) (ClientConfig, error) {
@@ -512,8 +537,8 @@ func LoadClientConfigWithOverrides(filename string, overrides ClientConfigOverri
 		return cfg, err
 	}
 
-	// When explicit resolvers are provided (e.g. from log-based startup), override the
-	// file-loaded ones after finalization so the rest of the config is still validated.
+	// Explicit resolvers supplied by an embedding or CLI integration override the
+	// file-loaded list after the rest of the configuration has been validated.
 	if len(overrides.Resolvers) > 0 {
 		cfg.Resolvers = overrides.Resolvers
 		rm := make(map[string]int, len(overrides.Resolvers))
@@ -528,8 +553,8 @@ func LoadClientConfigWithOverrides(filename string, overrides ClientConfigOverri
 
 func finalizeClientConfig(cfg ClientConfig) (ClientConfig, error) {
 	cfg.ConfigPreset = normalizeConfigPresetName(cfg.ConfigPreset)
-	if !isKnownConfigPreset(cfg.ConfigPreset) {
-		return cfg, fmt.Errorf("invalid CONFIG_PRESET: %q (valid: default, speed, survival, tcp-survival)", cfg.ConfigPreset)
+	if !isKnownClientConfigPreset(cfg.ConfigPreset) {
+		return cfg, fmt.Errorf("invalid CONFIG_PRESET: %q (valid: %s)", cfg.ConfigPreset, clientConfigPresetNames)
 	}
 
 	cfg.ProtocolType = strings.ToUpper(strings.TrimSpace(cfg.ProtocolType))
@@ -649,6 +674,40 @@ func finalizeClientConfig(cfg ClientConfig) (ClientConfig, error) {
 	default:
 		return cfg, fmt.Errorf("invalid RESOLVER_TRANSPORT: %q (want auto|udp|tcp|dot|doh)", cfg.ResolverTransport)
 	}
+	switch strings.ToLower(strings.TrimSpace(cfg.PathControllerMode)) {
+	case "", "unified":
+		cfg.PathControllerMode = "unified"
+	case "legacy":
+		cfg.PathControllerMode = "legacy"
+	default:
+		return cfg, fmt.Errorf("invalid PATH_CONTROLLER_MODE: %q (want unified|legacy)", cfg.PathControllerMode)
+	}
+	if cfg.ResolverTransportPaths == nil {
+		cfg.ResolverTransportPaths = map[string]string{}
+	}
+	normalizedTransportPaths := make(map[string]string, len(cfg.ResolverTransportPaths))
+	for rawResolver, rawTransport := range cfg.ResolverTransportPaths {
+		resolver := strings.TrimSpace(rawResolver)
+		if resolver == "" {
+			return cfg, fmt.Errorf("RESOLVER_TRANSPORT_PATHS contains an empty resolver key")
+		}
+		transport := strings.ToLower(strings.TrimSpace(rawTransport))
+		switch transport {
+		case "auto", "udp", "tcp", "dot", "doh":
+		default:
+			return cfg, fmt.Errorf(
+				"invalid RESOLVER_TRANSPORT_PATHS value for %q: %q (want auto|udp|tcp|dot|doh)",
+				resolver, rawTransport,
+			)
+		}
+		normalizedTransportPaths[resolver] = transport
+	}
+	cfg.ResolverTransportPaths = normalizedTransportPaths
+	cfg.ResolverTransportBackgroundScanIntervalSec = clampFloat(
+		defaultFloatAtMostZero(cfg.ResolverTransportBackgroundScanIntervalSec, 30.0),
+		5.0,
+		3600.0,
+	)
 	cfg.ResolverDoTPort = clampInt(defaultIntBelow(cfg.ResolverDoTPort, 1, 853), 1, 65535)
 	cfg.ResolverDoHPort = clampInt(defaultIntBelow(cfg.ResolverDoHPort, 1, 443), 1, 65535)
 	if cfg.ResolverDoHPath == "" || cfg.ResolverDoHPath[0] != '/' {
@@ -671,8 +730,8 @@ func finalizeClientConfig(cfg ClientConfig) (ClientConfig, error) {
 	cfg.AutoDisableTimeoutWindowSeconds = clampFloat(defaultFloatAtMostZero(cfg.AutoDisableTimeoutWindowSeconds, 90.0), 1.0, 86400.0)
 	cfg.AutoDisableMinObservations = clampInt(defaultIntBelow(cfg.AutoDisableMinObservations, 1, 3), 1, 10000)
 	cfg.AutoDisableCheckIntervalSeconds = clampFloat(defaultFloatAtMostZero(cfg.AutoDisableCheckIntervalSeconds, 1.0), 0.25, 600.0)
-	cfg.MaxPacketsPerBatch = clampInt(defaultIntBelow(cfg.MaxPacketsPerBatch, 1, 10), 1, 64)
-	cfg.ARQWindowSize = clampInt(defaultIntBelow(cfg.ARQWindowSize, 1, 600), 1, 6000)
+	cfg.MaxPacketsPerBatch = clampInt(defaultIntBelow(cfg.MaxPacketsPerBatch, 1, 10), 1, 256)
+	cfg.ARQWindowSize = clampInt(defaultIntBelow(cfg.ARQWindowSize, 1, 2000), 1, 20000)
 	cfg.ARQInitialRTOSeconds = clampFloat(defaultFloatAtMostZero(cfg.ARQInitialRTOSeconds, 1.0), 0.05, 60.0)
 	cfg.ARQMaxRTOSeconds = clampFloat(defaultFloatAtMostZero(cfg.ARQMaxRTOSeconds, 8.0), cfg.ARQInitialRTOSeconds, 120.0)
 	cfg.ARQControlInitialRTOSeconds = clampFloat(defaultFloatAtMostZero(cfg.ARQControlInitialRTOSeconds, 1.0), 0.05, 60.0)
@@ -706,6 +765,7 @@ func finalizeClientConfig(cfg ClientConfig) (ClientConfig, error) {
 	cfg.MTUTestTimeoutLogs = defaultFloatAtMostZero(cfg.MTUTestTimeoutLogs, 2.0)
 	cfg.MTUTestParallelismResolvers = defaultIntBelow(cfg.MTUTestParallelismResolvers, 1, 100)
 	cfg.MTUTestParallelismLogs = defaultIntBelow(cfg.MTUTestParallelismLogs, 1, 32)
+	cfg.MTUBackgroundParallelism = clampInt(defaultIntBelow(cfg.MTUBackgroundParallelism, 1, 1), 1, 100)
 	cfg.MTUProbeSamples = defaultIntBelow(cfg.MTUProbeSamples, 1, 1)
 	if cfg.MTUMaxLoss < 0 {
 		cfg.MTUMaxLoss = 0
@@ -727,8 +787,8 @@ func finalizeClientConfig(cfg ClientConfig) (ClientConfig, error) {
 		cfg.RX_TX_Workers = legacyRX_TX_Workers
 	}
 
-	cfg.RX_TX_Workers = clampInt(defaultIntBelow(cfg.RX_TX_Workers, 1, 4), 1, 64)
-	cfg.TunnelProcessWorkers = max(clampInt(defaultIntBelow(cfg.TunnelProcessWorkers, 1, 4), 1, 64), cfg.RX_TX_Workers)
+	cfg.RX_TX_Workers = clampInt(defaultIntBelow(cfg.RX_TX_Workers, 1, 4), 1, 256)
+	cfg.TunnelProcessWorkers = max(clampInt(defaultIntBelow(cfg.TunnelProcessWorkers, 1, 4), 1, 512), cfg.RX_TX_Workers)
 
 	cfg.TunnelPacketTimeoutSec = clampFloat(defaultFloatAtMostZero(cfg.TunnelPacketTimeoutSec, 8.0), 0.5, 120.0)
 	cfg.DispatcherIdlePollIntervalSeconds = clampFloat(defaultFloatAtMostZero(cfg.DispatcherIdlePollIntervalSeconds, 0.020), 0.001, 1.0)
@@ -739,15 +799,18 @@ func finalizeClientConfig(cfg ClientConfig) (ClientConfig, error) {
 	cfg.PingWarmThresholdSeconds = clampFloat(defaultFloatAtMostZero(cfg.PingWarmThresholdSeconds, 5.0), 0.1, 600.0)
 	cfg.PingCoolThresholdSeconds = clampFloat(defaultFloatAtMostZero(cfg.PingCoolThresholdSeconds, 10.0), cfg.PingWarmThresholdSeconds, 1800.0)
 	cfg.PingColdThresholdSeconds = clampFloat(defaultFloatAtMostZero(cfg.PingColdThresholdSeconds, 20.0), cfg.PingCoolThresholdSeconds, 3600.0)
-	cfg.PingWatchdogTimeoutSeconds = clampFloat(defaultFloatAtMostZero(cfg.PingWatchdogTimeoutSeconds, 300.0), 10.0, 3600.0)
-	cfg.TXChannelSize = clampInt(defaultIntBelow(cfg.TXChannelSize, 1, 2048), 64, 65536)
-	cfg.RXChannelSize = clampInt(defaultIntBelow(cfg.RXChannelSize, 1, 2048), 64, 65536)
-	cfg.ResolverUDPConnectionPoolSize = clampInt(defaultIntBelow(cfg.ResolverUDPConnectionPoolSize, 1, 64), 1, 1024)
-	cfg.StreamQueueInitialCapacity = clampInt(defaultIntBelow(cfg.StreamQueueInitialCapacity, 1, 128), 8, 65536)
-	cfg.OrphanQueueInitialCapacity = clampInt(defaultIntBelow(cfg.OrphanQueueInitialCapacity, 1, 32), 4, 4096)
-	cfg.DNSResponseFragmentStoreCap = clampInt(defaultIntBelow(cfg.DNSResponseFragmentStoreCap, 1, 256), 16, 16384)
+	cfg.PingWatchdogTimeoutSeconds = clampFloat(defaultFloatAtMostZero(cfg.PingWatchdogTimeoutSeconds, 30.0), 10.0, 3600.0)
+	cfg.TXChannelSize = clampInt(defaultIntBelow(cfg.TXChannelSize, 1, 32768), 64, 262144)
+	cfg.RXChannelSize = clampInt(defaultIntBelow(cfg.RXChannelSize, 1, 32768), 64, 262144)
+	cfg.ResolverUDPConnectionPoolSize = clampInt(defaultIntBelow(cfg.ResolverUDPConnectionPoolSize, 1, 64), 1, 4096)
+	// Sizes a census map allocated once per local stream: ~2.3 MiB/stream at
+	// 65536 vs ~19 KiB at 512. A browser's worth of streams at the large value
+	// OOMs Android, so both the default and this ceiling stay small.
+	cfg.StreamQueueInitialCapacity = clampInt(defaultIntBelow(cfg.StreamQueueInitialCapacity, 1, 128), 8, 16384)
+	cfg.OrphanQueueInitialCapacity = clampInt(defaultIntBelow(cfg.OrphanQueueInitialCapacity, 1, 32), 4, 65536)
+	cfg.DNSResponseFragmentStoreCap = clampInt(defaultIntBelow(cfg.DNSResponseFragmentStoreCap, 1, 256), 16, 65536)
 	cfg.DNSResponseFragmentTimeoutSeconds = clampFloat(defaultFloatAtMostZero(cfg.DNSResponseFragmentTimeoutSeconds, 10.0), 1.0, 600.0)
-	cfg.SOCKSUDPAssociateReadTimeoutSeconds = clampFloat(defaultFloatAtMostZero(cfg.SOCKSUDPAssociateReadTimeoutSeconds, 30.0), 1.0, 3600.0)
+	cfg.SOCKSUDPAssociateReadTimeoutSeconds = clampFloat(defaultFloatAtMostZero(cfg.SOCKSUDPAssociateReadTimeoutSeconds, 120.0), 1.0, 3600.0)
 	cfg.ClientTerminalStreamRetentionSeconds = clampFloat(defaultFloatAtMostZero(cfg.ClientTerminalStreamRetentionSeconds, 45.0), 1.0, 3600.0)
 	cfg.ClientCancelledSetupRetentionSeconds = clampFloat(defaultFloatAtMostZero(cfg.ClientCancelledSetupRetentionSeconds, 120.0), 1.0, 3600.0)
 	cfg.SessionInitRetryBaseSeconds = clampFloat(defaultFloatAtMostZero(cfg.SessionInitRetryBaseSeconds, 1.0), 0.1, 60.0)
@@ -769,12 +832,12 @@ func finalizeClientConfig(cfg ClientConfig) (ClientConfig, error) {
 	}
 	cfg.StartupMode = strings.ToLower(strings.TrimSpace(cfg.StartupMode))
 	switch cfg.StartupMode {
-	case "", "ask":
-		cfg.StartupMode = "ask"
-	case "resolvers", "logs":
-		// valid
+	case "", "ask", "logs", "resolvers":
+		// "ask" and the former "logs" mode are compatibility aliases. Every
+		// launch now validates the complete current resolver environment.
+		cfg.StartupMode = "resolvers"
 	default:
-		cfg.StartupMode = "ask"
+		cfg.StartupMode = "resolvers"
 	}
 	if cfg.LogScanMaxDays < 0 {
 		cfg.LogScanMaxDays = 0
@@ -949,7 +1012,6 @@ func (c ClientConfig) SOCKSUDPAssociateReadTimeout() time.Duration {
 	return time.Duration(c.SOCKSUDPAssociateReadTimeoutSeconds * float64(time.Second))
 }
 
-// LocalHandshakeTimeout is the bound for a local SOCKS5/TCP client handshake.
 func (c ClientConfig) LocalHandshakeTimeout() time.Duration {
 	return time.Duration(c.LocalHandshakeTimeoutSeconds * float64(time.Second))
 }
@@ -1060,7 +1122,7 @@ func (c ClientStartupPreConfig) ResolvedLogDir() string {
 // decoded. This is intentionally lenient so the startup prompt can always be shown.
 func PeekClientStartupConfig(configPath string) ClientStartupPreConfig {
 	pre := ClientStartupPreConfig{
-		StartupMode:         "ask",
+		StartupMode:         "resolvers",
 		LogDir:              "logs",
 		LogScanMaxDays:      30,
 		LogScanMaxResolvers: 0,
@@ -1077,12 +1139,10 @@ func PeekClientStartupConfig(configPath string) ClientStartupPreConfig {
 
 	pre.StartupMode = strings.ToLower(strings.TrimSpace(pre.StartupMode))
 	switch pre.StartupMode {
-	case "", "ask":
-		pre.StartupMode = "ask"
-	case "resolvers", "logs":
-		// valid
+	case "", "ask", "logs", "resolvers":
+		pre.StartupMode = "resolvers"
 	default:
-		pre.StartupMode = "ask"
+		pre.StartupMode = "resolvers"
 	}
 	if pre.LogScanMaxDays < 0 {
 		pre.LogScanMaxDays = 0

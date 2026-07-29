@@ -13,8 +13,8 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -52,30 +52,32 @@ type Client struct {
 	codec    *security.Codec
 	balancer *Balancer
 
-	connections        []Connection
-	connectionsByKey   map[string]int
-	successMTUChecks   bool
-	udpBufferPool      sync.Pool
-	resolverConnsMu    sync.Mutex
-	resolverConns      map[string]chan pooledUDPConn
-	resolverAddrMu     sync.RWMutex
-	resolverAddrCache  map[string]*net.UDPAddr
-	resolverStatsMu    sync.RWMutex
-	resolverPending    map[resolverSampleKey]resolverSample
-	resolverHealthMu   sync.RWMutex
-	resolverHealth     map[string]*resolverHealthState
-	resolverRecheck    map[string]resolverRecheckState
-	runtimeDisabled    map[string]resolverDisabledState
-	resolverRecheckSem chan struct{}
+	connections         []Connection
+	connectionsByKey    map[string]int
+	successMTUChecks    bool
+	udpBufferPool       sync.Pool
+	resolverConnsMu     sync.Mutex
+	resolverConns       map[string]chan pooledUDPConn
+	resolverAddrMu      sync.RWMutex
+	resolverAddrCache   map[string]*net.UDPAddr
+	resolverStatsMu     sync.RWMutex
+	resolverPending     map[resolverSampleKey]resolverSample
+	resolverCompleted   map[resolverCompletedKey]time.Time
+	resolverTransportMu sync.Mutex
+	resolverTransports  map[string]*resolverTransportState
+	resolverHealthMu    sync.RWMutex
+	resolverHealth      map[string]*resolverHealthState
+	resolverRecheck     map[string]resolverRecheckState
+	runtimeDisabled     map[string]resolverDisabledState
+	resolverRecheckSem  chan struct{}
 	// Unix-nanos of the last speculative "discovery" recheck (re-probing a
 	// never-valid resolver). Trickles discovery so it never bursts bandwidth
 	// away from the user's live traffic; see runResolverRecheckBatch.
 	lastDiscoveryRecheckUnix atomic.Int64
 	nowFn                    func() time.Time
 	recheckConnectionFn      func(conn *Connection) bool
-
-	// WD_RESOLVERS runtime-state emission dedup (WhiteDNS-Android integration):
-	// suppresses repeated identical machine lines between heartbeats.
+	probeConnectionMTUOverFn func(context.Context, *Connection, int, resolverTransport) (mtuConnectionProbeResult, mtuRejectReason)
+	probeSessionMTUOverFn    func(context.Context, *Connection, resolverTransport) (mtuConnectionProbeResult, bool)
 	resolverRuntimeLogMu     sync.Mutex
 	lastResolverRuntimeLog   string
 	lastResolverRuntimeLogAt time.Time
@@ -84,8 +86,12 @@ type Client struct {
 	mtuStateMu        sync.Mutex
 	syncedUploadMTU   int
 	syncedDownloadMTU int
-	syncedUploadChars int
-	safeUploadMTU     int
+	// Preserve the measured path MTU while a server policy clamps the active
+	// session values, so policy withdrawal can restore it without re-probing.
+	discoveredUploadMTU   int
+	discoveredDownloadMTU int
+	syncedUploadChars     int
+	safeUploadMTU         int
 	// mtuGroups holds the resolver clusters from the last MTU scan (Layer 2 of
 	// the adaptive per-group MTU strategy). Informational today: it is computed
 	// and logged but does not yet drive routing or per-group MTU selection.
@@ -145,15 +151,61 @@ type Client struct {
 	// nil when it stated none. Published atomically because it is written on
 	// the init collector goroutine while the send path, stream setup and ping
 	// manager are already reading the values it governs.
-	serverPolicy atomic.Pointer[VpnProto.SessionAcceptClientPolicy]
+	serverPolicy        atomic.Pointer[VpnProto.SessionAcceptClientPolicy]
 	runtimeResetPending atomic.Bool
 	sessionResetSignal  chan struct{}
-	rxDroppedPackets    atomic.Uint64
-	lastRXDropLogUnix   atomic.Int64
+	// transportRecoveryPending asks the main loop to repeat transport discovery
+	// after a live session loses every usable path. The timestamp rate-limits
+	// expensive fleet-wide probes when a network is flapping.
+	transportRecoveryPending atomic.Bool
+	lastTransportRecovery    atomic.Int64
+	transportRecoveryCount   atomic.Uint64
+	// transportRecoveryStreak counts consecutive transport-recovery requests with
+	// no tunnel response in between. A single transient loss stays a lightweight
+	// session restart; only a sustained streak escalates to a full MTU re-probe.
+	// Reset by recordTunnelResponse the moment traffic flows again.
+	transportRecoveryStreak atomic.Int32
+	// scanTelemetryActive makes the MTU probe path emit a WD_SCAN valid/rejected
+	// line the instant each resolver is decided, so the UI's Valid/Rejected
+	// counters advance in real time during a -scan-only run instead of only after
+	// the whole fleet finishes. Set solely around RunResolverScan.
+	scanTelemetryActive atomic.Bool
+	// Tunnel liveness for local-stream admission control: the last time a tunnel
+	// frame was sent and the last time any resolver response came back. When sends
+	// outrun responses past the admission window the tunnel is treated as stalled
+	// and new local SOCKS/TCP streams are refused fast (see stream_admission.go)
+	// rather than piling onto a dead path while recovery runs.
+	lastTunnelSendUnix               atomic.Int64
+	lastTunnelResponseUnix           atomic.Int64
+	lastStreamAdmissionRejectLogUnix atomic.Int64
+	rxDroppedPackets                 atomic.Uint64
+	txAdmissionDrops                 atomic.Uint64
+	streamDialFailures               atomic.Uint64
+	streamWriteFailures              atomic.Uint64
+	// Warm-path discovery is charged against successful foreground sends. One
+	// bounded MTU refresh is allowed per 4096 original frames (roughly a 1-2%
+	// probe budget even for a conservative 64-query scan), or when the tunnel
+	// has been idle long enough that alternate transport state would go stale.
+	runtimeOriginalSends atomic.Uint64
+	warmPathBudgetSends  atomic.Uint64
+	warmPathLastScanUnix atomic.Int64
+	// Transport exploration is globally budgeted across the whole resolver
+	// fleet. Counters are local observability only and add no network traffic.
+	transportExploreBudgetSends atomic.Uint64
+	transportExplorationCount   atomic.Uint64
+	transportSwitchCount        atomic.Uint64
+	pathStripeCursor            atomic.Uint64
+	pathStripeCount             atomic.Uint64
+	pathRedundancySuppressed    atomic.Uint64
+	lastFECReceived             atomic.Int64
+	runtimeReadBufferSize       int
+	lastRXDropLogUnix           atomic.Int64
 	// injectedNXDOMAINCount counts forged NXDOMAIN responses ignored as on-path
 	// DNS poisoning (see RESOLVER_IGNORE_INJECTED_NXDOMAIN). Purely observational.
 	injectedNXDOMAINCount atomic.Uint64
 	lastInjectionLogUnix  atomic.Int64
+	resolverHijackCount   atomic.Uint64
+	lastHijackLogUnix     atomic.Int64
 
 	// Traffic byte counters (per-session, reset on resetRuntimeBindings)
 	txTotalBytes atomic.Uint64
@@ -177,10 +229,14 @@ type Client struct {
 	// RunInitialMTUTests: "auto" escalates UDP->TCP, while the opt-in encrypted
 	// transports (DoT/DoH) fall back to UDP and then TCP/53 if they cannot carry
 	// the tunnel. All query paths (probe, session-init, health, data plane)
-	// dispatch on it. streamData carries the persistent per-resolver connections
-	// used by the data plane whenever the transport is not UDP.
-	transport  atomic.Int32
-	streamData streamDataTransport
+	// dispatch on it. streamData keeps each required persistent transport warm,
+	// allowing one resolver to use TCP while another uses DoT/DoH without a
+	// client-wide restart.
+	transport    atomic.Int32
+	streamDataMu sync.RWMutex
+	streamData   map[resolverTransport]streamDataTransport
+	dohHTTPMu    sync.Mutex
+	dohHTTP      *http.Client
 
 	// pacer applies per-resolver adaptive rate limiting (see resolver_pacer.go).
 	pacer *resolverPacer
@@ -243,13 +299,22 @@ type rawOutboundTask struct {
 	wasPacked  bool
 	item       *clientStreamTXPacket
 	selected   *Stream_client
-	conns      []Connection
+	paths      []resolverRuntimePath
 }
 
 type encodedOutboundDatagram struct {
-	addr      *net.UDPAddr
-	serverKey string
-	packet    []byte
+	addr        *net.UDPAddr
+	serverKey   string
+	packet      []byte
+	priority    int
+	transport   resolverTransport
+	hedge       bool
+	packetType  uint8
+	payloadSize int
+	// replayDepth bounds path-failure recovery. It is deliberately separate
+	// from ARQ retry state: the native frame and session remain unchanged.
+	replayDepth    uint8
+	mayHaveSibling bool
 }
 
 type encodedOutboundTask struct {
@@ -275,6 +340,9 @@ type Connection struct {
 	// when loss-aware probing is enabled (MTU_PROBE_SAMPLES > 1); 0 otherwise.
 	UploadMTULoss   float64
 	DownloadMTULoss float64
+	// networkGroup is precomputed when the resolver map is built so duplicate
+	// placement does not parse IP addresses on the foreground send path.
+	networkGroup string
 	// Backup marks a resolver that passed probing but cannot sustain the chosen
 	// session operating MTU. It is kept as a reserve (failover) rather than used
 	// in the active pool: the balancer only selects it when no primary resolver
@@ -313,89 +381,12 @@ func Bootstrap(configPath string, overrides config.ClientConfigOverrides) (*Clie
 	return c, nil
 }
 
-// BootstrapFromLogs initializes a new Client using working resolvers recovered from
-// previous session logs, skipping the full MTU scan when LOG_BASED_MTU_VERIFY is false.
-// When entries is empty it falls back to the normal Bootstrap path.
-func BootstrapFromLogs(configPath string, entries []ResolverCacheEntry, overrides config.ClientConfigOverrides) (*Client, error) {
-	if len(entries) == 0 {
-		return Bootstrap(configPath, overrides)
-	}
-
-	// Build a deduplicated resolver list from the log entries.
-	seen := make(map[string]struct{}, len(entries))
-	resolvers := make([]config.ResolverAddress, 0, len(entries))
-	for _, e := range entries {
-		epKey := e.IP + "|" + strconv.Itoa(e.Port)
-		if _, exists := seen[epKey]; exists {
-			continue
-		}
-		seen[epKey] = struct{}{}
-		resolvers = append(resolvers, config.ResolverAddress{IP: e.IP, Port: e.Port})
-	}
-	overrides.Resolvers = resolvers
-
-	cfg, err := config.LoadClientConfigWithOverrides(configPath, overrides)
-	if err != nil {
-		return nil, err
-	}
-	cfg.ApplyStartupModeMTU("logs")
-
-	log := logger.New("CottenDns Client", cfg.LogLevel)
-
-	codec, err := security.NewCodec(cfg.DataEncryptionMethod, cfg.EncryptionKey)
-	if err != nil {
-		return nil, fmt.Errorf("client codec setup failed: %w", err)
-	}
-
-	c := New(cfg, log, codec)
-	c.connectionsHavePreknownMTU = true
-	c.logBasedMTUVerify = cfg.LogBasedMTUVerify
-
-	if err := c.BuildConnectionMap(); err != nil {
-		if c.log != nil {
-			c.log.Errorf("<red>%v</red>", err)
-		}
-		return nil, err
-	}
-
-	// Pre-fill MTU values from log entries into the connection map.
-	mtuLookup := buildResolverCacheMTULookup(entries)
-	for i := range c.connections {
-		conn := &c.connections[i]
-		key := makeConnectionKey(conn.Resolver, conn.ResolverPort, conn.Domain)
-		if e, ok := mtuLookup[key]; ok && e.UploadMTU > 0 && e.DownloadMTU > 0 {
-			conn.IsValid = true
-			conn.UploadMTUBytes = e.UploadMTU
-			conn.DownloadMTUBytes = e.DownloadMTU
-			conn.UploadMTUChars = c.encodedCharsForPayload(e.UploadMTU)
-			conn.UploadMTULoss = float64(e.UploadLossPerMille) / 1000
-			conn.DownloadMTULoss = float64(e.DownloadLossPerMille) / 1000
-			// Tiers (primary vs backup) are intentionally NOT restored from the
-			// log; they are re-derived from these per-resolver MTUs by
-			// finalizeMTUSelection during startup, so the operating point always
-			// reflects the resolver set actually present this run.
-		}
-	}
-
-	if cacheLogPath := cfg.ResolvedResolverCacheLogPath(); cacheLogPath != "" {
-		c.openResolverCacheLog(cacheLogPath)
-	}
-
-	return c, nil
-}
-
-// buildResolverCacheMTULookup builds a connection-key → ResolverCacheEntry map.
-// When the same key appears multiple times (different domains), the most recently
-// seen entry wins.
-func buildResolverCacheMTULookup(entries []ResolverCacheEntry) map[string]ResolverCacheEntry {
-	lookup := make(map[string]ResolverCacheEntry, len(entries))
-	for _, e := range entries {
-		key := makeConnectionKey(e.IP, e.Port, e.Domain)
-		if existing, ok := lookup[key]; !ok || e.LastSeen.After(existing.LastSeen) {
-			lookup[key] = e
-		}
-	}
-	return lookup
+// BootstrapFromLogs is retained as a source-compatible entrypoint for older
+// desktop/Android wrappers. Resolver caches are intentionally ignored: hostile
+// network conditions can change between launches, so every start uses the
+// current resolver source and performs fresh authenticated MTU/path validation.
+func BootstrapFromLogs(configPath string, _ []ResolverCacheEntry, overrides config.ClientConfigOverrides) (*Client, error) {
+	return Bootstrap(configPath, overrides)
 }
 
 func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Client {
@@ -403,12 +394,6 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 	// query is built (server-transparent; affects only how the payload is split
 	// into labels and the matching capacity math).
 	DnsParser.SetQNameLabelLength(cfg.QNameLabelLength)
-
-	// Select the on-wire session-ID width to match the target server's engine
-	// generation (1-byte MasterDNS/StormDNS vs 2-byte CottenDns native) before
-	// any packet is built or parsed. A client process serves one profile, so
-	// this process-wide setting is stable for the session.
-	VpnProto.ConfigureLegacySessionID(cfg.LegacySessionID)
 
 	var responseMode uint8
 	if cfg.BaseEncodeData {
@@ -419,6 +404,7 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		balancerStrategy = BalancingHighestMTU
 	}
 
+	runtimeBufferSize := runtimeDNSReadBufferSize(cfg.MaxDownloadMTU)
 	c := &Client{
 		cfg:                      cfg,
 		log:                      log,
@@ -436,15 +422,19 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		dnsCaseRandomize:         cfg.DNSQNameCaseRandomization,
 		dupPreferDistinctDomains: cfg.DuplicationPreferDistinctDomains,
 		responseMode:             responseMode,
+		runtimeReadBufferSize:    runtimeBufferSize,
 		connectionsByKey:         make(map[string]int, len(cfg.Domains)*len(cfg.Resolvers)),
 		udpBufferPool: sync.Pool{
 			New: func() any {
-				return make([]byte, RuntimeUDPReadBufferSize)
+				return make([]byte, runtimeBufferSize)
 			},
 		},
 		resolverConns:                         make(map[string]chan pooledUDPConn),
 		resolverAddrCache:                     make(map[string]*net.UDPAddr),
 		resolverPending:                       make(map[resolverSampleKey]resolverSample),
+		resolverCompleted:                     make(map[resolverCompletedKey]time.Time),
+		resolverTransports:                    make(map[string]*resolverTransportState),
+		streamData:                            make(map[resolverTransport]streamDataTransport),
 		resolverHealth:                        make(map[string]*resolverHealthState),
 		resolverRecheck:                       make(map[string]resolverRecheckState),
 		runtimeDisabled:                       make(map[string]resolverDisabledState),
@@ -520,6 +510,7 @@ func (c *Client) Run(ctx context.Context) error {
 	sessionInitRetryFailures := 0
 
 	defer c.closeResolverCacheLog()
+	defer c.closeSharedDoHHTTPClient()
 
 	// Ensure local DNS cache is loaded from file if persistence is enabled
 	c.ensureLocalDNSCacheLoaded()
@@ -534,9 +525,6 @@ func (c *Client) Run(ctx context.Context) error {
 			if !c.successMTUChecks {
 				var mtuErr error
 				if c.cfg.FastConnect {
-					if c.connectionsHavePreknownMTU && c.log != nil {
-						c.log.Infof("<green>⚡ Fast Connect enabled; using resolver MTU scan even with log-based startup configured.</green>")
-					}
 					c.connectionsHavePreknownMTU = false
 					mtuErr = c.RunInitialMTUTests(ctx)
 				} else if c.connectionsHavePreknownMTU && !c.logBasedMTUVerify {
@@ -599,6 +587,14 @@ func (c *Client) Run(ctx context.Context) error {
 				c.logConnectionProgress("session", 90, "attempt", sessionInitRetryFailures+1)
 				if err := c.InitializeSession(retries); err != nil {
 					sessionInitRetryFailures++
+					lastRecovery := c.lastTransportRecovery.Load()
+					if sessionInitRetryFailures >= runtimeSessionInitFailureLimit &&
+						(lastRecovery == 0 || c.now().Sub(time.Unix(0, lastRecovery)) >= runtimeTransportRecoveryCooldown) {
+						c.transportRecoveryPending.Store(true)
+						c.lastTransportRecovery.Store(c.now().UnixNano())
+						c.transportRecoveryCount.Add(1)
+						c.activatePendingTransportRecovery()
+					}
 					sessionInitRetryDelay = c.nextSessionInitRetryDelay(sessionInitRetryFailures)
 					c.log.Errorf("<red>❌ Session initialization failed: %v</red>", err)
 					c.logConnectionProgress("retry", 90, "attempt", sessionInitRetryFailures)
@@ -639,6 +635,7 @@ func (c *Client) Run(ctx context.Context) error {
 			case <-c.sessionResetSignal:
 				c.StopAsyncRuntime()
 				c.resetSessionState(true)
+				c.activatePendingTransportRecovery()
 				c.clearRuntimeResetRequest()
 				sessionInitRetryFailures++
 				sessionInitRetryDelay = c.nextSessionInitRetryDelay(sessionInitRetryFailures)
@@ -700,6 +697,7 @@ func (c *Client) HandleStreamPacket(packet VpnProto.Packet) error {
 		if arqObj.IsClosed() || !s.TerminalSince().IsZero() {
 			return nil
 		}
+		c.lastFECReceived.Store(c.now().UnixNano())
 		s.ingestFECShard(arqObj, packet.Payload)
 
 	case Enums.PACKET_STREAM_DATA_NACK:

@@ -1,4 +1,4 @@
-﻿// ==============================================================================
+// ==============================================================================
 // CottenDNS
 // Author: tajirax
 // Github: https://github.com/TaJirax/CottenDns
@@ -11,6 +11,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"sync"
@@ -28,7 +29,6 @@ var (
 
 const (
 	sessionInitPayloadSize      = 10
-	sessionAcceptPayloadSize    = 8
 	sessionBusyPayloadSize      = 4
 	sessionCloseBurstMaxTargets = 10
 	sessionCloseBurstRounds     = 3
@@ -66,6 +66,7 @@ func (c *Client) InitializeSession(maxAttempts int) error {
 // Racing turns a slow serial "try one, wait a full timeout, try the next" connect
 // into "ask a few at once, take the first reply", which is a large win on lossy
 // networks where any single resolver may be dead.
+//
 // Operator-tunable via SESSION_INIT_RACING_COUNT; the default preserves the
 // long-standing hardcoded value of 3.
 func (c *Client) sessionInitRaceCount() int {
@@ -93,6 +94,8 @@ func (c *Client) initializeSessionOnce() error {
 	// Buffered to len(conns) so stragglers can always send their result and exit
 	// even after we have already returned on the first ACCEPT (no goroutine leak).
 	results := make(chan initResult, len(conns))
+	raceCtx, cancelRace := context.WithCancel(context.Background())
+	defer cancelRace()
 	for _, conn := range conns {
 		go func(conn Connection) {
 			query, buildErr := c.buildSessionQuery(conn.Domain, Enums.PACKET_SESSION_INIT, initPayload)
@@ -100,7 +103,7 @@ func (c *Client) initializeSessionOnce() error {
 				results <- initResult{}
 				return
 			}
-			packet, exErr := c.exchangeDNSOverConnection(conn, query, timeout)
+			packet, exErr := c.exchangeDNSOverConnectionContext(raceCtx, conn, query, timeout)
 			results <- initResult{packet: packet, ok: exErr == nil}
 		}(conn)
 	}
@@ -114,6 +117,7 @@ func (c *Client) initializeSessionOnce() error {
 		switch {
 		case res.packet.PacketType == Enums.PACKET_SESSION_ACCEPT:
 			if c.applySessionAccept(res.packet, initPayload, verifyCode) {
+				cancelRace()
 				return nil
 			}
 		case c.isSessionBusy(res.packet, verifyCode):
@@ -156,22 +160,16 @@ func (c *Client) exchangeSessionInit(conn Connection, initPayload []byte, verify
 // on success, commits the session state and returns true. Invoked only from the
 // single init collector goroutine, so the state writes are unsynchronized exactly
 // as in the original sequential path.
-//
-// The accept payload carries the server-assigned session ID at the same width as
-// the packet header, so its layout shifts by one byte between the native 2-byte
-// format and the legacy 1-byte MasterDNS/StormDNS format:
-// [sid(1|2)] [cookie] [compression] [verifyCode(4)].
 func (c *Client) applySessionAccept(packet VpnProto.Packet, initPayload []byte, verifyCode [4]byte) bool {
 	sidLen := 2
-	if VpnProto.LegacySessionID() {
+	if packet.LegacySessionID {
 		sidLen = 1
 	}
 	verifyStart := sidLen + 2
 	acceptSize := verifyStart + len(verifyCode)
-	if len(packet.Payload) < acceptSize || !bytes.Equal(packet.Payload[verifyStart:verifyStart+len(verifyCode)], verifyCode[:]) {
+	if len(packet.Payload) < acceptSize || !bytes.Equal(packet.Payload[verifyStart:acceptSize], verifyCode[:]) {
 		return false
 	}
-
 	if sidLen == 1 {
 		c.sessionID = uint16(packet.Payload[0])
 	} else {
@@ -185,7 +183,7 @@ func (c *Client) applySessionAccept(packet VpnProto.Packet, initPayload []byte, 
 	// effective minimum size, and the policy refreshes maxPackedBlocks), and
 	// the send path starts reading those values the moment sessionReady is set
 	// -- so the policy has to be in place first, not merely stored afterwards.
-	c.applyServerClientPolicy(packet.Payload)
+	c.applyServerClientPolicy(packet.Payload, packet.LegacySessionID)
 	c.sessionReady = true
 	c.applySessionCompressionPolicy()
 	c.clearSessionInitBusyUntil()
@@ -214,10 +212,27 @@ func (c *Client) buildSessionInitPayload() ([]byte, bool, [4]byte, error) {
 		payload[0] = mtuProbeBase64Reply
 	}
 	payload[1] = compression.PackPair(c.uploadCompression, c.downloadCompression)
-	binary.BigEndian.PutUint16(payload[2:4], uint16(c.syncedUploadMTU))
-	binary.BigEndian.PutUint16(payload[4:6], uint16(c.syncedDownloadMTU))
+	uploadMTU, downloadMTU := c.sessionInitAdvertisedMTUs()
+	binary.BigEndian.PutUint16(payload[2:4], uint16(uploadMTU))
+	binary.BigEndian.PutUint16(payload[4:6], uint16(downloadMTU))
 	copy(payload[6:10], verifyCode[:])
 	return payload, payload[0] == mtuProbeBase64Reply, verifyCode, nil
+}
+
+// sessionInitAdvertisedMTUs reports measured path capacity, not the previous
+// server's policy-clamped operating values. The accepting server applies its
+// current ceilings to the new session. This lets failover to an unrestricted
+// server recover full throughput immediately without another MTU scan.
+func (c *Client) sessionInitAdvertisedMTUs() (int, int) {
+	uploadMTU := c.discoveredUploadMTU
+	if uploadMTU <= 0 {
+		uploadMTU = c.syncedUploadMTU
+	}
+	downloadMTU := c.discoveredDownloadMTU
+	if downloadMTU <= 0 {
+		downloadMTU = c.syncedDownloadMTU
+	}
+	return uploadMTU, downloadMTU
 }
 
 func (c *Client) nextSessionInitAttempt() (Connection, []byte, [4]byte, error) {
@@ -362,9 +377,10 @@ func (c *Client) buildSessionQuery(domain string, packetType uint8, payload []by
 
 func (c *Client) buildTunnelQuery(domain string, sessionID uint16, packetType uint8, payload []byte) ([]byte, error) {
 	return c.buildTunnelTXTQueryRaw(domain, VpnProto.BuildOptions{
-		SessionID:  sessionID,
-		PacketType: packetType,
-		Payload:    payload,
+		LegacySessionID: c.cfg.LegacySessionID,
+		SessionID:       sessionID,
+		PacketType:      packetType,
+		Payload:         payload,
 	})
 }
 
@@ -458,9 +474,10 @@ func (c *Client) sendSessionCloseRound(targets []Connection, deadline time.Time)
 		go func() {
 			defer wg.Done()
 			query, err := c.buildTunnelTXTQueryRaw(conn.Domain, VpnProto.BuildOptions{
-				SessionID:     c.sessionID,
-				SessionCookie: c.sessionCookie,
-				PacketType:    Enums.PACKET_SESSION_CLOSE,
+				LegacySessionID: c.cfg.LegacySessionID,
+				SessionID:       c.sessionID,
+				SessionCookie:   c.sessionCookie,
+				PacketType:      Enums.PACKET_SESSION_CLOSE,
 			})
 			if err != nil {
 				return
@@ -476,11 +493,12 @@ func (c *Client) applySyncedMTUState(uploadMTU int, downloadMTU int, uploadChars
 	if c == nil {
 		return
 	}
+	c.discoveredUploadMTU = uploadMTU
+	c.discoveredDownloadMTU = downloadMTU
 	c.syncedUploadMTU = uploadMTU
 	c.syncedDownloadMTU = downloadMTU
 	c.syncedUploadChars = uploadChars
-	c.safeUploadMTU = computeSafeUploadMTU(uploadMTU, c.mtuCryptoOverhead)
-	c.maxPackedBlocks = VpnProto.CalculateMaxPackedBlocks(uploadMTU, 80, c.effectiveMaxPacketsPerBatch())
+	c.refreshPolicyDerivedState()
 	c.applySessionCompressionPolicy()
 	if c.log != nil && c.successMTUChecks {
 		c.log.Infof("\U0001F4CF <green>MTU state applied: UP=%d, DOWN=%d</green>", uploadMTU, downloadMTU)

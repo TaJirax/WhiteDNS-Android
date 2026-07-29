@@ -33,11 +33,32 @@ func TestShippedServerTemplateParsesWithFeatureKnobs(t *testing.T) {
 	if !cfg.EncryptionAutoDetect {
 		t.Errorf("ENCRYPTION_AUTO_DETECT should default true in the shipped template")
 	}
+	if cfg.DataEncryptionMethod != 3 {
+		t.Errorf("server DATA_ENCRYPTION_METHOD = %d, want authenticated AES-128-GCM method 3", cfg.DataEncryptionMethod)
+	}
 	if cfg.FECBlockSize <= 0 || cfg.FECParity <= 0 {
 		t.Errorf("FEC defaults not finalized: block=%d parity=%d", cfg.FECBlockSize, cfg.FECParity)
 	}
 	if cfg.FECBlockSize+cfg.FECParity > 256 {
 		t.Errorf("FEC shard total exceeds 256: block=%d parity=%d", cfg.FECBlockSize, cfg.FECParity)
+	}
+	if cfg.MaxPacketSize != 4096 {
+		t.Errorf("MAX_PACKET_SIZE = %d, want DNS-sized 4096-byte ingress buffers", cfg.MaxPacketSize)
+	}
+	if cfg.MaxIngressQueueBytes != 64*1024*1024 {
+		t.Errorf("MAX_INGRESS_QUEUE_BYTES = %d, want 64 MiB", cfg.MaxIngressQueueBytes)
+	}
+}
+
+func TestLegacyServerPacketBufferIsClampedOnUpgrade(t *testing.T) {
+	cfg := defaultServerConfig()
+	cfg.MaxPacketSize = 65535
+	finalized, err := finalizeServerConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finalized.MaxPacketSize != 4096 {
+		t.Fatalf("legacy MAX_PACKET_SIZE was not clamped: got %d want 4096", finalized.MaxPacketSize)
 	}
 }
 

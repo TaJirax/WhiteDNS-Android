@@ -7,6 +7,30 @@ helps** on hostile DNS networks. Honest caveats are called out where they exist.
 
 ---
 
+## External mobile engine boundary
+
+This repository owns the portable engine source only. Mobile repositories pin
+and import a reviewed CottenDNS revision, then own all Android compilation,
+packaging, signing, and release logic. CottenDNS intentionally ships no Android
+build scripts or binary artifacts.
+
+The portable client source includes the engine behavior:
+
+- Fast Connect releases startup after a safe MTU-tested pool is available,
+  throttles the remaining scan to background priority, and promotes newly found
+  high-MTU resolvers without delaying user traffic.
+- Legacy one-byte session framing is selected per client packet. The server
+  keeps auto-detecting both one-byte and native two-byte clients concurrently;
+  no process-global server mode is introduced.
+- Scan-only resolver discovery and the `WD_PROGRESS`, `WD_RESOLVERS`, and
+  `WD_SCAN` machine records are emitted independently of human log level.
+- Local handshake deadlines and active-stream admission prevent stalled app
+  sockets from consuming the engine indefinitely.
+- Generic UDP, fallback to the DNS-specific UDP path, loss recovery, adaptive
+  duplication, and server fairness remain in the same versioned source.
+
+---
+
 ## 0. System model (read this first)
 
 CottenDNS tunnels TCP over DNS. The client exposes a local SOCKS5/TCP
@@ -199,7 +223,18 @@ change its encryption method without the server being reconfigured.
 (3–5 are AEAD). With `ENCRYPTION_AUTO_DETECT` (default true), the server builds a
 codec set and trial-decrypts each inbound frame, **AEAD methods first** (they
 authenticate, so they cannot be mis-detected), falling back to the unauthenticated
-ciphers. The first codec that yields a valid frame is used.
+ciphers. Runtime preference is preserved inside each security class, but it can
+never move XOR, ChaCha20, or plaintext ahead of an AES-GCM candidate.
+
+The unauthenticated legacy methods need an additional rule: a one-byte header
+check alone cannot prove which stream cipher produced a frame. Their decoded
+candidates are therefore checked against live session ID/cookie/layout state.
+Pre-session MTU candidates also have their response mode, requested download
+size, and zero-filled capacity padding validated before a legacy codec may claim
+them. If an old or malformed pre-session frame matches none of those stricter
+rules, the historical structural fallback remains available, preserving old
+MasterDNS/StormDNS admission rather than turning hardening into a compatibility
+break.
 
 **Why it helps.** A client can pick a rarer/stronger cipher (or rotate) and the
 server simply reads it. AEAD-first ordering avoids false positives from the
@@ -360,10 +395,11 @@ length-prefixed, routed through the **exact same** transport-agnostic
 load-shedding, graceful shutdown — so all tunnel logic (sessions, FEC, channels,
 encryption) is shared with UDP, no duplication.
 
-**Client.** Client-wide transport via `RESOLVER_TRANSPORT = auto | udp | tcp`:
-- **`auto` (default)** probes over UDP first; if **zero** resolvers pass MTU
-  testing, it flips to TCP and **re-probes the whole fleet over TCP/53**. On a
-  UDP-working network TCP is never attempted (zero cost).
+**Client.** Resolver-local transport policy via
+`RESOLVER_TRANSPORT = auto | udp | tcp`:
+- **`auto` (default)** measures UDP and TCP/53 for every resolver, then keeps
+  each resolver on its fastest healthy path. A bad UDP path can switch without
+  moving the rest of the fleet.
 - A `queryExchanger` abstraction makes the probe, session-init, and health paths
   transport-agnostic.
 - A persistent **per-resolver TCP connection manager** (`tcp_data.go`) serves the
@@ -529,12 +565,41 @@ preset is malformed before that point.
   always-on FEC.
 - `FEC_AUTO_ENABLED` (true) / `FEC_AUTO_LOSS_THRESHOLD` (0.3) /
   `FEC_AUTO_MAX_PARITY` (0=auto) — loss-triggered FEC.
+- `DOT_LISTENER_ENABLED` (false) / `DOT_LISTEN_PORT` (853) — DNS-over-TLS listener.
+- `DOH_LISTENER_ENABLED` (false) / `DOH_LISTEN_PORT` (443) / `DOH_PATH`
+  (`/dns-query`) — DNS-over-HTTPS listener. Both are only needed to point clients
+  **directly** at this server; public-resolver DoT/DoH needs no server change.
+- `DOH_COEXIST_MODE` (`auto`) — `auto`/`behind` never bind the TLS port (the panel
+  keeps :443 and forwards DoH to `DOH_BEHIND_PORT`); `front` takes :443 and
+  SNI-splices everything else to `DOH_SHARE_BACKEND`.
+- `DOH_BEHIND_PORT` (8453) / `DOH_SHARE_BACKEND` ("") / `DOH_SHARE_PROXY_PROTOCOL`
+  (false) — :443 coexistence with a co-hosted panel.
+- `TLS_CERT_FILE` / `TLS_KEY_FILE` / `ACME_ENABLED` (true) / `ACME_CACHE_DIR` /
+  `ACME_EMAIL` — TLS material, resolved cert/key → ACME → self-signed.
+- `ENCRYPTED_MAX_CONNS` (0 = ¾ of `TCP_MAX_CONNS`) — ceiling on DoT/DoH
+  connections so they cannot starve the plain TCP/53 survival path.
+- `DOH_MAX_INFLIGHT` / `DOH_MAX_INFLIGHT_BYTES` /
+  `DOH_REQUESTS_PER_SECOND_PER_IP` / `DOH_REQUEST_BURST_PER_IP` /
+  `DOH_TRUSTED_PROXY_CIDRS` — DoH-specific flood budgets.
 
 **Client (`client_config.toml`):**
 - `CONFIG_PRESET` (`default`, `speed`, `survival`, `tcp-survival`) — paired
   operational profile; explicit TOML/CLI values still win.
 - `RESOLVER_TRANSPORT` (auto) — `auto` (UDP, fall back to TCP/53 if UDP finds no
-  resolvers) | `udp` | `tcp`.
+  resolvers) | `udp` | `tcp` | `dot` | `doh`. `auto` never escalates into the
+  encrypted transports; picking `dot`/`doh` still falls back to UDP then TCP/53.
+- `RESOLVER_TLS_SERVER_NAME` ("") — SNI/certificate name for `dot`/`doh`. Leave
+  empty for public resolvers: the engine then verifies against the resolver's own
+  identity, and Cloudflare/Google/Quad9 carry their IP as a certificate SAN. Set it
+  only when pointing at your own DoT/DoH server.
+- `RESOLVER_TLS_PIN` ("") — base64 SHA-256 of the server certificate's
+  SubjectPublicKeyInfo. Replaces CA validation, so a self-signed server is trusted
+  exactly and nothing else is; pinning the SPKI survives certificate renewal.
+- `RESOLVER_TLS_INSECURE_SKIP_VERIFY` (false) — last resort; the payload stays
+  AEAD-encrypted regardless, but an unverified hop can be transparently intercepted.
+- `RESOLVER_DOT_PORT` (853) / `RESOLVER_DOH_PORT` (443) / `RESOLVER_DOH_PATH`
+  (`/dns-query`) — where the resolver entry's IP is contacted. Client-wide, not
+  per-resolver.
 - `RESOLVER_RATE_LIMIT_ENABLED` (true) — per-resolver adaptive pacing.
 - `QNAME_LABEL_LENGTH` (63) — QNAME label reshaping (smaller = shorter, jittered
   labels; lower fingerprint, less capacity).
@@ -568,8 +633,724 @@ preset is malformed before that point.
 
 ---
 
+## 17. Encrypted resolver transports (DoT / DoH)
+
+**Problem.** Sections 10 and 12 harden *what* the queries look like, but the
+client→resolver leg is still plaintext DNS on port 53. A censor does not have to
+break the tunnel's encryption to act on it: the volume, timing and shape of
+plaintext DNS on 53 is enough to fingerprint, throttle or poison. On networks that
+treat *any* heavy 53 traffic as suspicious, the tunnel is visible even when its
+payload is not readable.
+
+**What was added.** Two optional resolver transports:
+
+- **DoT** — DNS-over-TLS (RFC 7858), normally port 853.
+- **DoH** — DNS-over-HTTPS (RFC 8484), normally port 443.
+
+Both encrypt the client→resolver hop, so on the wire the tunnel looks like a
+device using an encrypted DNS provider.
+
+**These are a disguise, not a security layer.** The tunnel payload is already
+AEAD-encrypted end to end (section 5). TLS here buys traffic *shape*, not payload
+secrecy — worth being precise about, because it decides how much the certificate
+trust model actually matters.
+
+### 17.1 Opt-in only, but not a commitment
+
+`RESOLVER_TRANSPORT` gains `dot` and `doh`. Two deliberate rules:
+
+- **Nothing ever escalates into them.** `auto` still means UDP → TCP/53 only.
+  These transports disguise a *working* hop rather than rescue a broken one, so
+  entering them is always an explicit operator decision.
+- **Choosing one is still not a commitment.** Blocking 853/443 is a common
+  censorship response, so if the chosen transport cannot carry the tunnel the
+  client walks down on its own. A blocked TLS port degrades to the survival path
+  instead of failing to connect.
+
+```
+dot  ─► UDP ─► TCP/53          udp  ─► (no fallback)
+doh  ─► UDP ─► TCP/53          tcp  ─► (no fallback)
+auto ─► UDP ─► TCP/53
+```
+
+The chain is `resolverTransportChain()` and MTU discovery walks it independently
+for each resolver. The background scanner keeps alternate paths measured after
+startup.
+
+### 17.2 How they are wired into the data path
+
+The active transport is now an enum behind one interface
+(`streamDataTransport`) instead of a `useTCP` boolean, so the dispatcher does not
+grow a branch per transport:
+
+- **DoT reuses the TCP data plane verbatim.** DoT *is* DNS-over-TCP framing
+  inside TLS, so only the dial differs: `tcpDataManager` took a pluggable dialer,
+  and connection pooling, the 2-byte length framing, the read loop and the
+  `rxChannel` hand-off are shared with TCP/53 line for line.
+- **DoH is genuinely different** and gets its own transport: one HTTP POST per
+  query, HTTP/2 multiplexing over pooled connections, and answers pushed into the
+  **same `rxChannel` the UDP reader feeds** — so `handleInboundPacket` treats every
+  transport identically. In-flight POSTs are bounded (256) and a saturated burst is
+  shed rather than queued: ARQ retransmits, and shedding stops a burst from opening
+  unbounded sockets.
+
+### 17.3 Public resolvers need no server change
+
+The important operational point. Two distinct deployments:
+
+```
+A) public resolver  (no server change, no redeploy)
+   client ──DoH/DoT──► 1.1.1.1 ──plain DNS + your NS delegation──► your server
+
+B) direct           (needs DOT_/DOH_LISTENER_ENABLED)
+   client ──DoH/DoT──► your server
+```
+
+In (A) the encryption covers exactly the hop that gets fingerprinted, and the
+resolver reaches the tunnel server through normal delegation as it always did.
+The server's listeners are **only** for (B), and default to off.
+
+Resolvers are still configured the same way — a list of IPs. The endpoint is built
+from the entry plus the transport's own port/path, so `1.1.1.1` becomes
+`https://1.1.1.1:443/dns-query`. Cloudflare, Google and Quad9 publish certificates
+carrying their **IP as a SAN**, so (A) validates with no configuration at all.
+
+Per-resolver overrides were added later in §25. The encrypted transport's
+port/path and TLS identity remain shared, but individual resolvers can now select
+`auto`, `udp`, `tcp`, `dot`, or `doh`.
+
+### 17.4 Certificate trust
+
+Three modes, best first:
+
+1. **`RESOLVER_TLS_PIN`** — base64 SHA-256 of the server certificate's
+   SubjectPublicKeyInfo. Pinning *replaces* chain validation, so a self-signed or
+   private-CA server is trusted exactly and nothing else is. Pinning the SPKI
+   rather than the certificate lets the server renew without breaking clients.
+2. **Default** — normal hostname/CA verification. With `RESOLVER_TLS_SERVER_NAME`
+   unset the engine verifies against the resolver's own identity, which is what
+   makes public resolvers work unconfigured.
+3. **`RESOLVER_TLS_INSECURE_SKIP_VERIFY`** — last resort, off by default.
+
+Because the payload is already AEAD-encrypted, even (3) never exposes tunnel data.
+Pinning is still preferred: an unverified hop can be transparently intercepted,
+and the interception itself is a censorship signal.
+
+### 17.5 Server listeners, and sharing :443 with a panel
+
+Both listeners share the *exact* transport-agnostic packet handler used by
+UDP/TCP, so no tunnel logic is duplicated. DoT additionally reuses the TCP accept
+loop (`serveDNSOverStream`), inheriting its framing, per-IP caps and load shedding
+unchanged — it is "TCP/53 in a TLS coat" as far as the server is concerned.
+
+TLS material resolves **cert/key → ACME → self-signed**, so an enabled listener
+always comes up. ACME is wrapped so an issuance/renewal failure at handshake time
+falls back to the generated certificate instead of dropping encrypted DNS.
+
+Only one process can bind :443, which matters when a panel (3x-ui, Hiddify, …) is
+on the box. `DOH_COEXIST_MODE` picks the model:
+
+- **`auto` (default) → model A.** CottenDNS **never binds the TLS port at all**.
+  It serves cleartext HTTP/1.1+h2c on `DOH_BEHIND_PORT`, and the panel's own front
+  (Xray fallback / nginx / Caddy) forwards the DoH route in. Because the panel
+  still owns the handshake, every inbound it supports keeps working untouched —
+  VMess/VLESS/Trojan, xhttp/gRPC/raw/ws/tls, CDN-fronted. WireGuard is UDP and is
+  unaffected either way.
+- **`front` → model B.** CottenDNS owns :443, terminates TLS, and SNI-splices
+  every connection that is not for `DOMAIN` to `DOH_SHARE_BACKEND` untouched.
+
+`auto` resolves to A deliberately: model B would opportunistically claim :443, and
+then a panel installed *later* would fail to bind it. Owning the port is therefore
+always an explicit decision, never a default. The SNI router carries the same
+bias — a ClientHello it cannot parse is forwarded to the backend rather than
+swallowed, so a detection bug never takes 443 from the co-hosted service.
+
+### 17.6 Not letting the disguise starve the survival path
+
+DoT/DoH are optional extras; DNS-over-TCP/53 is the fallback the tunnel depends
+on. Sharing one connection budget between them would let a flood of the optional
+listeners consume the headroom the survival path needs.
+
+`connectionBudget` therefore supports a **parent** link: DoT/DoH reserve from a
+child budget capped at `ENCRYPTED_MAX_CONNS` (default ¾ of `TCP_MAX_CONNS`) whose
+reservations also consume parent capacity. However hard the encrypted listeners
+are flooded, the remaining quarter stays available for plain TCP/53. UDP/53 is a
+separate path and is unaffected by any of these budgets.
+
+DoH additionally carries its own request-rate, in-flight and byte ceilings, plus
+trusted-proxy handling: behind a reverse proxy the rate limiter keys on the
+*forwarded* client address, and the per-IP **connection** cap is disabled, since
+otherwise every user would share the proxy's single ceiling.
+
+### 17.7 Why it helps
+
+On a network that fingerprints plaintext 53, the tunnel stops looking like a DNS
+anomaly and starts looking like a phone using Cloudflare — while the fallback
+chain guarantees that turning the disguise on can never leave a user worse off
+than before.
+
+---
+
+## 18. Native sessions, dynamic compatibility, and server scalability
+
+This pass raised the capacity available to native CottenDNS clients without
+turning the server into a native-only endpoint. The server still determines the
+packet/session layout from the packet it receives and continues to answer legacy
+clients on their historical format.
+
+### 18.1 Native capacity without a legacy-client flag day
+
+- Native clients use the two-byte session-ID layout and can use the complete
+  16-bit session namespace.
+- Legacy one-byte session frames remain parseable. Candidate validation uses
+  packet semantics and existing session state instead of assuming that every
+  client was upgraded at once.
+- Session init, reuse, close, stream setup, data, ACK/NACK, DNS, and encrypted
+  packet tests cover both layouts. UDP, TCP/53, DoT, and DoH all enter the same
+  transport-independent packet handler after framing is removed.
+- `MAX_ACTIVE_SESSIONS` (default 2048) is deliberately separate from the 65535
+  ID slots. The wider namespace prevents collisions; the live-session cap
+  prevents an init flood from turning the namespace into an unbounded memory
+  commitment.
+
+The result is dynamic compatibility: a server can give a native client its
+larger session space while an old client continues to work without changing a
+server mode or receiving a new mandatory field.
+
+### 18.2 Optional server policy, never a hidden client throttle
+
+The server can append resource ceilings to `SESSION_ACCEPT` for cooperating
+clients: duplication, setup duplication, upload/download MTU, RX/TX workers,
+minimum ping interval, packets per batch, ARQ window/NACK gap, compression
+threshold, and initial RTO.
+
+Every policy value defaults to zero (no stated limit). If all values are zero,
+the policy block is omitted and `SESSION_ACCEPT` remains byte-for-byte compatible
+with earlier clients. A native client publishes a received policy atomically and
+clamps values at their actual use sites, avoiding a race with already-running
+send, ping, and stream goroutines. Removing a policy on a later session also
+clears the old snapshot rather than leaving a client permanently throttled.
+
+These controls are overload safeguards, not speed knobs. The maximum-speed
+configuration leaves them at zero. In particular, lowering the packets-per-batch
+ceiling can create *more* DNS queries, so it must not be used as a generic rate
+limit.
+
+### 18.3 Bounded ingress and fair overload behavior
+
+The UDP front door was split into cheap admission and bounded processing:
+
+1. A reader parses the DNS question, checks the delegated domain, resolves the
+   dynamic codec/header layout, and decrypts enough to validate the tunnel frame.
+2. Only admitted frames consume bounded worker-queue space. The prepared parse
+   result is retained, so workers do not repeat DNS parsing, codec trials, or
+   decryption.
+3. Decompression, session mutation, and response generation remain on bounded
+   workers.
+
+`MAX_INGRESS_QUEUE_BYTES` bounds queued backing buffers in addition to the
+request-count limit. The default 4096-byte packet-pool ceiling is far above a DNS
+query while avoiding the old worst case where every queue slot retained a
+65535-byte array.
+
+Ingress has separate control and data lanes. Control traffic receives reserved
+capacity so ACK/NACK, setup, ping, and close packets can make progress while data
+is busy. However, duplicated control packets cannot permanently occupy the data
+lane: control spills into that lane only while no data is waiting. This preserves
+recovery under overload without letting duplication reduce a user's useful data
+rate. Drop counters, queue gauges, and rate-limited overload logs make saturation
+observable.
+
+### 18.4 UDP receive scaling without single-flow slowdown
+
+On platforms with `SO_REUSEPORT`, the server opens multiple kernel receive
+queues, but intentionally not one socket per reader. The count is:
+
+```
+max(1, min(UDP_READERS / 2, runtime.NumCPU()))
+```
+
+At least two readers therefore share each socket. Since the kernel hashes a
+resolver flow to one reuse-port socket, a busy flow can still be drained by more
+than one decrypt loop instead of being pinned to one reader. Platforms without
+reuse-port, single-reader configurations, or partial bind failures fall back to
+one shared socket with all readers attached. TCP/53, DoT, and DoH retain their
+own connection budgets and are not coupled to this UDP-only socket topology.
+
+---
+
+## 19. Native-client recovery, connectivity, and throughput pass
+
+The client data path was audited across UDP, TCP/53, DoT, and DoH. The changes
+below do not add fields to DNS packets and do not require a server upgrade.
+
+### 19.1 Runtime path and MTU recovery
+
+Initial discovery is no longer the only time the client can choose a working
+path. A runtime recovery controller can repeat resolver/transport/MTU discovery
+when:
+
+- session initialization repeatedly fails;
+- the ping watchdog sees no useful progress; or
+- every mature active resolver has reached its timeout window.
+
+Recovery has a 15-second cooldown so several symptoms collapse into one scan.
+Explicit `udp` and `tcp` settings remain explicit: recovery re-probes the same
+transport and its usable MTU rather than silently changing the user's choice.
+`auto`, `dot`, and `doh` retain their configured fallback chains. Successful
+recovery resets session state and reconnects on the newly measured path.
+
+Session-init racing and tunneled exchanges are cancellable. Once one attempt
+wins, losing requests stop consuming sockets, HTTP requests, and queue space.
+
+### 19.2 Persistent, priority-aware stream transports
+
+- **DoH:** one long-lived HTTP/2-capable client/transport is shared for the
+  client's lifetime instead of creating and closing a client per DNS query.
+  Sixteen bounded workers drain separate control and data queues (64 and 256
+  entries), preserving control progress while bounding memory and concurrency.
+- **TCP/53 and DoT:** eight bounded send workers use two persistent connection
+  stripes per resolver. Control and data queues are separated, and immediate
+  dial/write failures are reported to resolver health instead of waiting for a
+  later generic timeout.
+- Stream transports no longer allocate unused UDP sockets. All transports feed
+  the same inbound channel and packet handler, preserving identical ARQ/session
+  semantics.
+
+Queue admission is intentionally bounded. A shed request is recoverable through
+ARQ; an unbounded backlog would instead make every user slow long after the
+original burst ended.
+
+### 19.3 Path-specific carrier selection
+
+DNS record-type selection now learns per resolver/domain path. A resolver that
+handles TXT well but drops HTTPS records no longer biases every other resolver,
+and a failure on one domain/path does not globally suppress a useful carrier.
+Aggregate telemetry is retained for operator visibility, while the actual choice
+uses the path-local history.
+
+### 19.4 Duplication cooperates with FEC
+
+The speed preset starts upload and download data duplication at one copy. The
+adaptive controller can still add redundancy when measured loss justifies it,
+and explicit user values remain accepted. When recent downstream FEC is present,
+ACK/NACK duplication is capped at two: FEC has already paid redundancy up front,
+so multiplying recovery control packets further would consume bandwidth without
+improving delivery. Setup/control reliability remains protected independently.
+
+This is the key rule behind the new defaults: duplication is a loss response,
+not a permanent speed multiplier. On a healthy or bandwidth-limited link, extra
+copies reduce useful throughput.
+
+### 19.5 Smaller allocations and compression decisions
+
+- Receive buffers are pooled and sized from the discovered download MTU plus
+  safety space, with an 8192-byte floor and 65535-byte hard ceiling. Direct or
+  legacy paths without a discovered MTU retain the safe maximum.
+- Compression estimates entropy before invoking ZSTD/LZ4/ZLIB. Payloads above
+  the 7.6 bits/byte threshold are already effectively compressed or encrypted,
+  so skipping the codec saves CPU and avoids expansion.
+- Watchdog defaults were reduced from five minutes to 30 seconds; the speed and
+  survival presets use 20 and 15 seconds. A dead resolver/path is therefore
+  rediscovered on a useful timescale for unstable mobile networks.
+
+### 19.6 Operational telemetry
+
+Periodic traffic statistics now include the active transport, control/data
+queue depths, RX/TX admission drops, recovery count, and stream dial/write
+failures. These distinguish four very different problems that previously looked
+like generic loss: resolver failure, local queue saturation, connection failure,
+and actual tunnel packet loss.
+
+---
+
+## 20. Android native-engine integration (`v1.5.1c-rc13`)
+
+The Android `cottendns-engine-ui` branch vendors the same native client recovery
+and transport changes while preserving its Android-specific fast-connect flow,
+resolver injection/progress logging, and executable/TOML boundary.
+
+Android-side behavior was aligned with the engine:
+
+- New/fresh profiles and launch-request fallback values use upload duplication
+  1, download duplication 1, and a 30-second watchdog.
+- Auto-tune profiles start data duplication at 1 and let the native adaptive
+  controller raise it from measured loss instead of imposing a permanent
+  3-30-copy bandwidth penalty.
+- Native CottenDNS profiles emit adaptive duplication and distinct-domain
+  preference. Compatibility mode explicitly leaves adaptive duplication off,
+  preserving legacy-client behavior and user-selected settings.
+- The app parses and displays the new transport, queue, drop, recovery, and
+  stream-connection telemetry.
+
+The Android vendored Go engine passed `go test ./...`, `go vet ./...`, and the
+native client build. The release workflow then rebuilt all Android ABIs with the
+NDK, ran Android unit tests, produced signed split/universal APKs, verified their
+signatures, and published checksums in both Android repositories.
+
+---
+
+## 21. Reuse-port CI correction and final validation
+
+The reuse-port socket-count test originally asserted the obsolete design of one
+socket per UDP reader. Production had already moved to the deliberate
+`UDP_READERS/2`, CPU-capped topology described in section 18.4. GitHub's two-core
+runner therefore opened the correct two sockets for four readers while the stale
+test expected four.
+
+The test now derives its expectation from `udpSocketCount`; production network
+code was not weakened or changed. Validation after the correction included:
+
+- the complete Go test suite in both CottenDNS mirrors;
+- race-sensitive ARQ, client, and UDP-server tests;
+- `go vet`, static analysis, and client/server builds;
+- the live end-to-end tunnel test;
+- installer, Compose, container-health, and legacy-upgrade contracts;
+- the complete cross-platform release matrix and multi-architecture server
+  container publication; and
+- signed Android `v1.5.1c-rc13` releases in both Android repositories.
+
+---
+
+## 22. Sessionful generic UDP and Android full-VPN routing
+
+The native SOCKS5 listener now supports generic UDP destinations in addition to
+the optimized DNS/53 path. Each UDP association is represented by a normal ARQ
+stream, so it inherits DNS-MTU fragmentation, retransmission, path balancing,
+fair stream scheduling, and duplicate suppression rather than adding a second
+reliability protocol.
+
+Datagram boundaries are carried by a two-byte length followed by the standard
+SOCKS address, port, and payload. The one-time association marker is a reserved
+address type: an older server rejects it cleanly, while upgraded peers attach a
+sessionful UDP adapter. The server retains a connected UDP socket per target so
+QUIC, voice, and games keep a stable remote five-tuple. Target fan-out is capped,
+idle endpoints are reclaimed, and literal and DNS-resolved addresses are both
+checked against the public-address policy to prevent access to loopback,
+private, link-local, multicast, and benchmark networks. IPv4 and IPv6 are
+supported. DNS/53 remains on its lower-overhead cache-aware request path and no
+longer tears down the association merely because the first lookup is pending.
+When the server is configured with an external SOCKS5 upstream, it negotiates a
+real upstream UDP ASSOCIATE and keeps its TCP control connection alive; generic
+UDP never bypasses the operator's selected egress mode.
+
+The default local SOCKS UDP association idle time is now 120 seconds. Explicit
+client settings remain authoritative and are still bounded to the existing safe
+range.
+
+The Android full-VPN integration was updated alongside the protocol:
+
+- tun2proxy was upgraded from v0.7.21 to the verified v0.8.1 release interface;
+- the runner requests 1024 sessions, 300-second TCP lifetime, 120-second UDP
+  lifetime, IPv6, virtual DNS, and fatal-error exit reporting;
+- readiness waits for a stable native runner instead of reporting success as
+  soon as its Java thread is started;
+- network capability churn no longer kills CottenDNS; a real default-network
+  identity change gets a recovery grace period and outbound probes before a
+  restart is permitted;
+- normal stop/revoke work is moved off the Android main thread, startup jobs are
+  joined before teardown, and `onRevoke` performs explicit cleanup;
+- the JNI-owned TUN descriptor retains close-on-exec, avoiding inheritance by
+  child processes;
+- IPv6 is routed end-to-end instead of intentionally sinkholed;
+- split-tunnel include mode with no apps and any unfulfillable include/exclude
+  selection fail closed instead of silently broadening VPN scope; and
+- connection verification reports a failed outbound probe as failure rather
+  than calling an unverified route ready.
+
+---
+
+## 23. Safe server health monitoring
+
+The optional metrics listener now provides a detailed JSON monitoring snapshot
+at `/healthz?details=1` (also `/healthz/details` or an
+`Accept: application/json` request). Plain `/healthz` still returns exactly
+`ok` so Docker, systemd, load balancers, and older monitoring scripts remain
+compatible.
+
+The snapshot contains the build version and uptime; Go runtime/memory state;
+safe configured capacity; active transport state; aggregate DNS-upstream
+health; current queue-pressure warnings; and a typed monitoring list covering
+sessions, streams, ingress, deferred work, connection budgets, DNS resolution,
+codec acceptance, UDP/TCP/DoT/DoH listener state, generic-UDP association and
+payload-byte totals, rejection/recovery counters, and runtime memory. The
+Prometheus `/metrics` endpoint uses the same list, including proper
+counter/gauge types, so the JSON and time-series views cannot silently drift.
+
+Monitoring is deliberately outside the tunnel data path and applies no user
+rate limit. Snapshots use atomic counters, short read-only locks, and channel
+length reads. Neither endpoint exposes encryption keys, credentials, client
+addresses, queried domains, UDP destinations, or payload data. Responses are
+marked `no-store`, and the metrics HTTP server has bounded headers and idle
+timeouts.
+
+---
+
+## 24. Generic-UDP isolation and 84% loss validation
+
+Generic UDP setup is now isolated from the optimized DNS/53 path. Previously,
+the first non-DNS datagram could block the SOCKS UDP receive loop while the
+generic stream waited for its server acknowledgement. An old server rejecting
+the marker, a blocked generic association, or a severely lost setup response
+could therefore delay unrelated DNS requests using the same local association.
+
+A dedicated generic-UDP writer now owns setup, stream writes, and bounded
+exponential retry (250 ms through 10 seconds). The SOCKS receive loop only makes
+a non-blocking insertion into a 256-datagram burst queue and immediately returns
+to DNS work. A full queue replaces its oldest unsent datagram, and a failed
+retry drains to the newest available datagram, preventing obsolete real-time
+traffic from accumulating latency. This is not a bandwidth limiter: the writer
+uses all available tunnel capacity whenever it can drain. A 60-second write
+stall guard recycles a genuinely wedged association, while cancellation closes
+the active stream immediately.
+
+This fallback has an exact compatibility boundary: DNS/53 continues through
+the old cache-aware UDP path even when generic UDP is unavailable. Arbitrary
+non-DNS UDP cannot be converted into a DNS-only request without corrupting its
+application semantics, so it is retried on a fresh generic stream instead. The
+stream still inherits the configured DNS-carrier chain, including automatic
+UDP-to-TCP/53 carrier fallback when `RESOLVER_TRANSPORT = "auto"`.
+
+Extreme-loss coverage now validates the actual Reed-Solomon encode/decode path
+after deterministically removing 84% of shards for block sizes 1, 2, 4, and 8.
+Server Super-FEC already scales parity through the 75%-85% operating band, and
+the client duplication test now explicitly covers the 84% survival ceiling.
+ARQ remains the eventual-delivery backstop on both directions. No implementation
+can preserve normal throughput when only 16% of packets survive, but the client
+and server now have tested recovery behavior at that operating point rather
+than merely accepting it as a configuration value.
+
+---
+
+## 25. Poison-aware per-resolver transport and path MTU
+
+Transport selection is now resolver-local instead of a whole-client fallback.
+`RESOLVER_TRANSPORT_PATHS` can override the global policy by connection key,
+resolver label, IP:port, or IP. `auto` measures UDP and TCP/53 for each resolver;
+DoT and DoH remain explicit user choices and retain UDP/TCP survival fallbacks.
+
+Initial MTU discovery probes every configured path separately and stores its RTT,
+loss, upload MTU, and download MTU. A bounded background scanner performs full
+MTU discovery on one rotating resolver/transport path at a time at
+`RESOLVER_TRANSPORT_BACKGROUND_SCAN_INTERVAL_SECONDS`, keeping alternate paths
+fresh without creating a scan burst or competing materially with user traffic.
+Selection uses estimated delivered goodput and will move a resolver away from a
+slow, failing, poisoned, or session-MTU-incompatible path. Bulk packets use only
+the best path; sparse high-priority/control traffic may hedge one alternate at a
+bounded interval, so duplication cannot cap bulk throughput.
+
+The runtime scheduler now scores `(resolver, transport)` jointly for the actual
+native packet type and payload size. MTU probe capacity is normalized for each
+packet header before eligibility is checked. A resolver or transport below the
+global session MTU is therefore not dead capacity: it can carry ACKs, controls,
+and any data fragment that fits, while larger fragments remain on wider paths.
+Stream affinity receives a small stability bias, not a hard pin, preventing
+reordering between equivalent paths without trapping a stream on a materially
+slower route. Bulk data never uses an unmeasured transport.
+
+If local UDP transmission, persistent TCP/DoT dialing/writing, or a DoH exchange
+fails, the exact unacknowledged DNS query is replayed immediately on the best
+eligible alternate resolver/transport. Replay preserves the native frame,
+session, and sequence identity, is capped at two path hops, and does not wait for
+the full ARQ RTO. ARQ/NACK remains the correctness backstop after the bounded
+fast replay is exhausted.
+
+Inbound replies are bound to resolver address, local socket, transport, query ID,
+and the complete DNS question. Same-ID replies carrying a different question are
+treated as injection and ignored. When injected NXDOMAIN filtering is enabled,
+the forged answer no longer consumes the outstanding request, allowing a genuine
+answer arriving moments later to win. Poison is evidence that an alternate path
+must be compared, not an automatic penalty against a UDP path that remains the
+fastest working option.
+
+Question fingerprints canonicalize ASCII letter case because DNS names are
+case-insensitive; resolvers that normalize 0x20 casing are accepted without
+weakening QTYPE/QCLASS or name matching. A UDP reply carrying `TC=1` replays the
+affected request immediately, but UDP is displaced only after repeated
+truncation evidence without an intervening valid reply. Poison evidence
+accelerates a following timeout for two minutes, then expires so an old incident
+cannot make a clean future network overly sensitive.
+
+An unusually fast forged response also acts as a Happy-Eyeballs trigger. The
+still-pending query is raced once on the best alternate path; the original is not
+cancelled, and the first response that passes DNS-question and native tunnel
+authentication atomically claims all replay siblings. Existing control hedges
+count as the alternate, preventing poison from causing duplicate amplification.
+
+Background path exploration is congestion-aware and capacity-budgeted. One
+rotating full MTU refresh is charged per 4096 original foreground frames, a
+conservative approximately 1-2% allowance using a 64-query scan cost model.
+No scan starts when TX, encoded-TX, RX, or pending-query pressure is elevated.
+Completely idle paths receive a stale-state refresh no more often than every two
+minutes (or four configured scan intervals), but even that exception yields to a
+single queued user packet.
+
+The final speed audit ranks replay candidates across the complete eligible
+`(resolver, transport)` set instead of preferring the same resolver by default.
+The common non-duplicated response path no longer scans the complete pending map,
+DNS question fingerprints are parsed once per normal ingress, and immutable
+encoded DNS frames are retained rather than copied into each pending/stream
+queue. Transport-manager publication is protected during runtime teardown.
+Poison/timeout correlation also accepts the timeout deadline being a few
+milliseconds earlier than the adjacent poison event, eliminating an
+event-ordering-dependent missed fast switch found by repeated race testing.
+
+After three successful samples, pending-query blackhole detection uses a
+conservative RTT-derived deadline (`6 × RTT + 500 ms`, with a 1.5-second floor
+and the configured request timeout as its ceiling). Slow/high-jitter paths retain
+the configured timeout. Late genuine replies remain claimable during the
+existing grace period and retract their timeout observation.
+
+The server remains transport-agnostic: UDP, TCP, DoT, and DoH feed the same
+authenticated native packet handler and keep the client's selected settings
+dynamic. The server's Super-FEC band now chooses enough parity for a 90% modeled
+block-recovery target, within Reed-Solomon and configured caps. Randomized loss
+tests exercise actual encoding and reconstruction at 40% and 84% loss; ARQ
+remains the correctness backstop when a block exceeds its parity budget.
+
+---
+
+## 26. Unified directional path and redundancy controller
+
+`PATH_CONTROLLER_MODE = "unified"` coordinates the client-side mechanisms that
+previously made partially independent decisions. It adds no protocol fields and
+requires no server change. `PATH_CONTROLLER_MODE = "legacy"` immediately
+restores the preceding behavior for field rollback.
+
+Each resolver/transport now retains separate authenticated upload and download
+delivery EWMAs, sample confidence, RTT, and failure streaks. A failed ACK poll no
+longer reduces the score of an otherwise healthy upload path, and one fast sample
+cannot outrank a mature path. Packet-size MTU eligibility and the existing
+transport hysteresis remain mandatory gates.
+
+The controller produces one decision per packet. During queue pressure it
+suppresses only copies added by adaptive duplication, never the configured base.
+Recent download FEC retains the established two-poll diversity cap, and healthy
+exploration cannot stack on FEC or existing duplication. Poison/failure recovery
+hedges remain available for high-priority traffic, while ARQ remains the
+eventual-delivery backstop.
+
+With `COMPARABLE_PATH_STRIPING = true`, successive bulk upload packets may rotate
+across at most four resolver paths. A candidate needs at least three
+authenticated directional samples, at least 85% of the primary delivered score,
+and RTT within 35% of the primary. Striping sends exactly one copy, stops when
+queues are congested, and never admits an unknown or materially slower path.
+Weighted multiplicative stepping avoids long bursts on one resolver.
+
+Traffic telemetry reports `stripe` decisions and `saved` redundant copies beside
+exploration and transport-switch counters. This makes the controller observable
+without adding probe traffic.
+
+---
+
+## 27. Final controller and dynamic-encryption validation
+
+The final bug hunt found that rotating the server's last-successful codec index
+could put an unauthenticated decoder ahead of an authenticated one. A random
+legacy decode occasionally passed the compact header check, causing admission
+telemetry to credit the wrong method. Codec iteration is now two-phase and
+allocation-free: every AES-GCM candidate is exhausted first, followed by the
+legacy class in preferred order. Established legacy candidates must match active
+session state, and MTU discovery uses the semantic checks described in section 5.
+
+Dynamic server behavior was tested as a response-producing matrix, not merely as
+"packet accepted": every enabled encryption method was sent through UDP, TCP/53,
+DoT, and DoH, and the returned native MTU response had to contain the original
+four-byte verification nonce. A keyed server accepted methods 1-5; a server
+explicitly configured to allow plaintext accepted methods 0-5. The plaintext
+method remains excluded when the configured server method is encrypted.
+
+Validation on the 2026-07-29 working tree:
+
+- complete uncached repository tests and `go vet`;
+- complete repository race detector;
+- hostile-network race matrix repeated 20 times, covering poison, question
+  hijack, in-flight replay, MTU path selection, UDP/TCP/DoT/DoH, and 40%/75%/84%
+  FEC reconstruction;
+- mixed codec admission repeated 200 times and the response-producing
+  transport/encryption matrix repeated 10 times;
+- country, legacy, and native profile loading repeated 50 times;
+- shuffled complete client tests repeated 10 times;
+- Linux/Windows client and server packaging through `build.py`; and
+- all engine packages cross-compiled for Android arm64, armv7, amd64, and 386
+  with CGO disabled.
+
+The unified controller's clean decision costs 19.42-19.95 ns with zero
+allocations. The sixteen-resolver joint selector measures 3.48-3.57 microseconds
+with three allocations. Under congestion, an adaptive five-copy decision is
+reduced to the configured one-copy base (80% fewer redundant frames). In a
+two-comparable-path simulation, 1000 one-copy bulk packets split 526/474 without
+duplication. Directional evidence retained 100% of a healthy direction's score
+after the opposite direction failed; legacy shared evidence retained 29.2%.
+
+The local one-resolver end-to-end A/B result is intentionally conservative:
+unified and legacy modes were within loopback noise (median upload +0.8%,
+download +0.5% for unified). The controller is not claiming artificial
+single-path bandwidth. Its measurable gain appears when paths diverge or queues
+fill: it avoids redundant congestion, stops cross-direction false demotion, and
+uses comparable capacity without adding copies.
+
+---
+
 *All changes keep ARQ as the correctness backstop; every optimization above is
-designed to fail safe — if FEC, MTU grouping, or a transport channel does not
-help on a given path, the tunnel still delivers via ARQ over the surviving
-resolvers.*
-</content>
+designed to fail safe — if FEC, MTU grouping, a carrier, or a transport channel
+does not help on a given path, the tunnel still delivers through the surviving
+resolver/path combination.*
+
+## 28. Fresh resolver validation on every launch
+
+Resolver reachability, poisoning behavior, transport quality, loss, and MTU can
+change between two process launches on the target networks. Reusing a
+previous-run resolver cache could therefore start the client on paths that are
+no longer usable and could exclude newly useful resolvers.
+
+Cache-assisted startup is now disabled at every supported entrypoint:
+
+- the command-line client always bootstraps from the current resolver source;
+- default, legacy `ask`, and legacy `logs` startup values normalize to
+  `resolvers`;
+- `BootstrapFromLogs` remains source-compatible for older desktop/Android
+  wrappers but intentionally delegates to normal fresh bootstrap and ignores
+  cache entries;
+- resolver-mode MTU retry/timeout/parallelism values are always selected;
+- the Linux service installer rewrites old `ask`/`logs` values to `resolvers`;
+  and
+- resolver-cache log files remain diagnostic output only.
+
+`FAST_CONNECT` preserves good startup experience without stale state: the client
+releases a newly validated starter pool, then continues scanning the remaining
+current-list resolvers in the background at bounded parallelism. No resolver is
+accepted because it worked in a previous process.
+
+## 29. Sustained DNS-over-TCP flow control
+
+Small interactive exchanges could succeed over TCP/53 while sustained media
+traffic filled the fixed stream-transport queue. The old non-blocking admission
+path then discarded newly encoded frames, leaving ARQ to recover them later.
+Combined with unrestricted DNS pipelining and TCP head-of-line blocking, this
+could turn a temporary resolver slowdown into a retransmission loop.
+
+The TCP/53 and DoT data manager now applies lossless backpressure:
+
+- a full stream queue pauses upstream writers instead of dropping fresh frames;
+- each persistent connection permits at most 32 unanswered DNS queries;
+- the historical two connection stripes remain the clean-path baseline;
+- queue pressure raises the stripe count gradually to four, six, and at most
+  eight, returning to the two-stripe decision when pressure clears;
+- a connection with no response progress is closed so blocked senders wake and
+  the existing bounded cross-path replay can recover; and
+- DNS-over-TCP framing completes partial socket writes instead of assuming one
+  `Write` call consumed the complete message.
+
+The server now handles up to 32 pipelined queries concurrently per TCP/DoT
+connection. Response writes remain serialized at DNS-message boundaries, and
+the existing global/per-IP connection budgets still bound overload. No native
+packet, encryption, session, carrier, or legacy wire format changed.
+
+Focused tests cover queue backpressure, shutdown cancellation, inflight-window
+release, pressure-based stripe scaling, partial writes, and concurrent
+server-side pipelining. The full repository tests, `go vet`, native
+client/server builds, and Android engine cross-builds for arm64, armv7, amd64,
+and 386 pass with CGO disabled. Windows race execution was unavailable on this
+workstation because its configured MinGW compiler path no longer exists; the
+CI release matrix remains the authoritative clean-environment build check.

@@ -1,4 +1,4 @@
-﻿// ==============================================================================
+// ==============================================================================
 // CottenDNS
 // Author: tajirax
 // Github: https://github.com/TaJirax/CottenDns
@@ -29,29 +29,22 @@ func (c *Client) mtuWarnEnabled() bool {
 	return c != nil && c.log != nil && c.log.Enabled(logger.LevelWarn)
 }
 
-// logConnectionProgress emits a machine-readable WD_PROGRESS status line that an
-// embedding client (e.g. the Android app) parses to drive a connection-progress
-// UI. phase is a short lifecycle token (starting, mtu, selecting, session,
-// runtime, connected, retry); keyValues are optional key/value pairs appended as
-// key=value tokens. It is a no-op when no logger is configured.
 func (c *Client) logConnectionProgress(phase string, percent int, keyValues ...any) {
 	if c == nil || c.log == nil || phase == "" {
 		return
 	}
 	if percent < 0 {
 		percent = 0
-	}
-	if percent > 100 {
+	} else if percent > 100 {
 		percent = 100
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "WD_PROGRESS phase=%s percent=%d", phase, percent)
 	for idx := 0; idx+1 < len(keyValues); idx += 2 {
 		key, ok := keyValues[idx].(string)
-		if !ok || key == "" {
-			continue
+		if ok && key != "" {
+			fmt.Fprintf(&b, " %s=%v", key, keyValues[idx+1])
 		}
-		fmt.Fprintf(&b, " %s=%v", key, keyValues[idx+1])
 	}
 	c.log.Machinef("%s", b.String())
 }
@@ -151,6 +144,48 @@ func (c *Client) logMTUCompletion(validConns []Connection) {
 		"<green>Global MTU Configuration -> Upload: <cyan>%d</cyan>, Download: <cyan>%d</cyan></green>",
 		c.syncedUploadMTU,
 		c.syncedDownloadMTU,
+	)
+}
+
+// logSelectedResolvers emits a single, concise summary of the resolvers the
+// session actually connected through, at Warn level so it stays visible even
+// when LOG_LEVEL is WARN. Without it, a WARN-level run shows only the per-
+// resolver rejection lines (also Warn) and never reveals which resolvers won —
+// the per-resolver "✅ Accepted" lines and the full completion table are Info.
+// Must be called with mtuStateMu already held (it reads c.connections directly).
+func (c *Client) logSelectedResolvers() {
+	if c == nil || c.log == nil || !c.log.Enabled(logger.LevelWarn) {
+		return
+	}
+	const maxListed = 20
+	active := make([]string, 0, len(c.connections))
+	reserve := 0
+	for i := range c.connections {
+		conn := &c.connections[i]
+		if !conn.IsValid || conn.ResolverLabel == "" {
+			continue
+		}
+		if conn.Backup {
+			reserve++
+			continue
+		}
+		active = append(active, conn.ResolverLabel)
+	}
+	if len(active) == 0 {
+		return
+	}
+	listed := active
+	suffix := ""
+	if len(active) > maxListed {
+		listed = active[:maxListed]
+		suffix = fmt.Sprintf(", …(+%d more)", len(active)-maxListed)
+	}
+	c.log.Warnf(
+		"<green>✅ Connected via <cyan>%d</cyan> active resolver(s)</green> (<yellow>%d</yellow> held in reserve): %s%s",
+		len(active),
+		reserve,
+		strings.Join(listed, ", "),
+		suffix,
 	)
 }
 

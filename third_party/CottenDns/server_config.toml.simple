@@ -214,6 +214,83 @@ MAX_STREAMS_PER_SESSION = 4096
 # frees. Range: 1..65535. Default: 2048.
 MAX_ACTIVE_SESSIONS = 2048
 
+# ---------------------------------------------------------------------------
+# Client resource policy
+# ---------------------------------------------------------------------------
+# Ceilings (and two floors) the server states to clients in SESSION_ACCEPT, so a
+# client configured too aggressively clamps itself instead of taking a
+# disproportionate share of a shared server.
+#
+# Every key below defaults to 0, meaning "state no limit". While all of them are
+# 0 the server sends no policy at all and SESSION_ACCEPT is byte-for-byte what
+# it has always been, so leaving this section alone changes nothing.
+#
+# The wire format matches the MasterDNS/StormDNS family, so compatible clients
+# honour these limits too. Download MTU is additionally enforced server-side;
+# upload MTU is enforced by compatible clients after SESSION_ACCEPT.
+#
+# FOR MAXIMUM CLIENT SPEED, LEAVE EVERY KEY IN THIS SECTION AT 0.
+#
+# These are resource ceilings, not tuning knobs: each one can only take capacity
+# away from a client that wanted more. There is no value here that makes a
+# client faster. Reach for them when a server is genuinely under pressure and
+# you are willing to trade some client throughput for it -- not as part of a
+# performance setup.
+#
+# If you do need them, these are the ones that actually reduce server load:
+#
+#   MIN_ALLOWED_CLIENT_PING_AGGRESSIVE_INTERVAL_SECONDS
+#       The only direct control over how fast a client polls, so the only one
+#       that really bounds query rate. Costs latency in exchange.
+#   MAX_ALLOWED_CLIENT_DOWNLOAD_MTU
+#       Bounds every response the server builds, and is enforced server-side.
+#   MAX_ALLOWED_CLIENT_ARQ_WINDOW_SIZE
+#       Bounds unacknowledged data tracked per stream (memory).
+#   MAX_ALLOWED_CLIENT_PACKET_DUPLICATION_COUNT
+#       Duplication multiplies query volume outright.
+#
+# One trap worth knowing: MAX_ALLOWED_CLIENT_PACKETS_PER_BATCH does NOT reduce
+# query volume, it increases it. Batching packs several control blocks (ACKs and
+# similar) into one query, so a lower ceiling means MORE queries carrying the
+# same acknowledgements -- slower for the client and more requests for the
+# server. It bounds the size and per-query work of a single packed unit, nothing
+# else. Leave it at 0 unless you have measured a per-query cost problem.
+
+# Largest upload/download MTU a client may use. 0 disables the ceiling.
+# Upload range: 10..255. Download range: 10..4096. The download MTU sizes every
+# response the server builds, so it has the most direct effect on server cost.
+MAX_ALLOWED_CLIENT_UPLOAD_MTU = 0
+MAX_ALLOWED_CLIENT_DOWNLOAD_MTU = 0
+
+# Largest ARQ window a client may use. The window bounds how much
+# unacknowledged data the server tracks per stream. 0 disables the ceiling.
+MAX_ALLOWED_CLIENT_ARQ_WINDOW_SIZE = 0
+MAX_ALLOWED_CLIENT_ARQ_DATA_NACK_MAX_GAP = 0
+
+# Largest packed-block batch a client may ask the server to assemble.
+MAX_ALLOWED_CLIENT_PACKETS_PER_BATCH = 0
+
+# Largest packet-duplication factors a client may use (0..15 each). Duplication
+# multiplies the query volume the server receives.
+MAX_ALLOWED_CLIENT_PACKET_DUPLICATION_COUNT = 0
+MAX_ALLOWED_CLIENT_SETUP_PACKET_DUPLICATION_COUNT = 0
+
+# Largest number of client-side RX/TX workers.
+MAX_ALLOWED_CLIENT_RX_TX_WORKERS = 0
+
+# Fastest aggressive ping interval a client may use, in seconds. This is the
+# most direct control over the query rate a single client can generate.
+# Wire range is 0.05..1.00; 0 disables the floor.
+MIN_ALLOWED_CLIENT_PING_AGGRESSIVE_INTERVAL_SECONDS = 0.0
+
+# Smallest compression threshold a client may use, in bytes. A floor stops a
+# client asking the server to compress every tiny packet. 0 disables it.
+MIN_ALLOWED_CLIENT_COMPRESSION_MIN_SIZE = 0
+
+# Smallest initial ARQ RTO a client may use, in seconds. A floor stops a client
+# retransmitting far too eagerly. Wire range is 0.05..1.00; 0 disables it.
+MIN_ALLOWED_CLIENT_ARQ_INITIAL_RTO_SECONDS = 0.0
+
 # Hard upper bound (in bytes) on the size of an upstream DNS response that
 # the server will fragment and tunnel back to the client. Responses larger
 # than this are dropped before fragmentation, preventing attacker-shaped

@@ -1,6 +1,10 @@
 # CottenDns Upstream Policy
 
 WhiteDNS treats `third_party/CottenDns` as a black-box upstream engine.
+The source is vendored from `https://github.com/TaJirax/cottenDNS`; the exact
+reviewed commit is recorded in `third_party/CottenDns.UPSTREAM`. Release CI
+verifies that provenance file before compiling the four Android executables
+that are packaged as JNI libraries.
 
 The Android app must integrate with CottenDns only through stable runtime boundaries:
 
@@ -30,9 +34,8 @@ Build tooling may know where the upstream client command lives so it can compile
 
 Changes under `third_party/CottenDns` are allowed only when they are intentional upstream maintenance, such as:
 
-- Updating the pinned submodule commit.
-- Syncing a reviewed upstream fix.
-- Refreshing native binaries from a documented upstream commit.
+- Syncing a reviewed vendored snapshot from the commit recorded in
+  `third_party/CottenDns.UPSTREAM`.
 
 Any pull request that changes `third_party/CottenDns` must include the label:
 

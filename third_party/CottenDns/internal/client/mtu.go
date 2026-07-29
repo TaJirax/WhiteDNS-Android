@@ -80,57 +80,22 @@ type mtuScanCounters struct {
 	rejectDownload atomic.Int32
 }
 
-// RunInitialMTUTests tests all connections before the client starts. With
-// RESOLVER_TRANSPORT="auto" it probes over UDP first and, if no resolver passes,
-// retries the whole fleet over DNS-over-TCP/53 — so a network that blocks or
-// truncates UDP/53 transparently falls back to TCP. "udp"/"tcp" force a single
-// transport.
+// RunInitialMTUTests probes every resolver over its configured transport chain.
+// Auto measures UDP and TCP/53 independently; explicit DoT/DoH measures the
+// encrypted path and its plain survival fallbacks. Each resolver keeps the
+// fastest healthy path that can sustain the negotiated session MTU.
 func (c *Client) RunInitialMTUTests(ctx context.Context) error {
 	if len(c.connections) == 0 {
 		return ErrNoValidConnections
 	}
 
 	chain := resolverTransportChain(c.cfg.ResolverTransport)
-	var firstErr error
-	for i, transport := range chain {
-		c.setActiveTransport(transport)
-		if i > 0 {
-			if c.log != nil {
-				c.log.Warnf(
-					"<yellow>No resolvers passed over %s — retrying the whole fleet over %s…</yellow>",
-					chain[i-1], transport,
-				)
-			}
-			for idx := range c.connections {
-				c.prepareConnectionMTUScanState(&c.connections[idx])
-			}
-		}
-
-		err := c.runMTUScan(ctx)
-		if err == nil {
-			if i > 0 && c.log != nil {
-				c.log.Infof("<green>✅ Resolver transport fell back to %s.</green>", transport)
-			}
-			return nil
-		}
-		if firstErr == nil {
-			firstErr = err
-		}
-		// Only "no usable resolver" is a transport problem worth falling back on;
-		// anything else (cancellation, config) would fail identically elsewhere.
-		if !errors.Is(err, ErrNoValidConnections) {
-			c.setActiveTransport(chain[0])
-			return err
-		}
+	if len(chain) > 0 {
+		c.setActiveTransport(chain[0])
 	}
-
-	// Nothing worked — restore the configured transport so state is predictable.
-	c.setActiveTransport(chain[0])
-	return firstErr
+	return c.runMTUScan(ctx)
 }
 
-// runMTUScan picks the scan strategy for the current transport: FastConnect
-// stops as soon as enough resolvers pass, otherwise every connection is probed.
 func (c *Client) runMTUScan(ctx context.Context) error {
 	if c.cfg.FastConnect {
 		return c.runFastConnectMTUTests(ctx)
@@ -181,10 +146,8 @@ func (c *Client) runFullMTUTests(ctx context.Context) error {
 	return nil
 }
 
-// runFastConnectMTUTests starts the session as soon as a safe starter pool has
-// passed MTU probing. Remaining resolver probes continue in the background; any
-// later resolver that can carry the chosen session MTU joins the active pool,
-// while smaller-but-valid resolvers stay available as backup.
+// runFastConnectMTUTests releases startup once a safe pool is ready and probes
+// the rest of the fleet at one-at-a-time background priority.
 func (c *Client) runFastConnectMTUTests(ctx context.Context) error {
 	uploadCaps := c.precomputeUploadCaps()
 	workerCount := min(max(1, c.cfg.MTUTestParallelism), len(c.connections))
@@ -199,90 +162,74 @@ func (c *Client) runFastConnectMTUTests(ctx context.Context) error {
 	done := make(chan struct{})
 	var closeReady sync.Once
 	var stateMu sync.Mutex
-	var backgroundSingleWorker atomic.Bool
+	var background atomic.Bool
 	var released bool
 	var finalErr error
 
 	finalizeCurrent := func(reason string) bool {
 		c.mtuStateMu.Lock()
-		defer c.mtuStateMu.Unlock()
-
-		validConns, minUpload, minDownload, minUploadChars := summarizeValidMTUConnections(c.connections)
-		if len(validConns) == 0 {
+		valid, minUpload, minDownload, minChars := summarizeValidMTUConnections(c.connections)
+		if len(valid) == 0 {
+			c.mtuStateMu.Unlock()
 			return false
 		}
 		if c.log != nil {
-			c.log.Infof(
-				"<green>⚡ Fast Connect %s with <cyan>%d</cyan> valid resolver(s); MTU scan continues in the background.</green>",
-				reason,
-				len(validConns),
-			)
+			c.log.Infof("<green>⚡ Fast Connect %s with <cyan>%d</cyan> valid resolver(s); background scan continues.</green>", reason, len(valid))
 		}
-		c.finalizeMTUSelectionLocked(validConns, minUpload, minDownload, minUploadChars)
-		backgroundSingleWorker.Store(true)
-		if c.log != nil && workerCount > 1 {
-			c.log.Infof("<green>⚡ Fast Connect established; background MTU scan throttled to <cyan>1</cyan> worker.</green>")
-		}
+		c.finalizeMTUSelectionLocked(valid, minUpload, minDownload, minChars)
+		c.mtuStateMu.Unlock()
+		c.logResolverRuntimeState()
+		background.Store(true)
 		released = true
 		closeReady.Do(func() { close(ready) })
 		return true
 	}
 
-	addBackgroundResolver := func(conn Connection) {
-		c.mtuStateMu.Lock()
-		if c.syncedUploadMTU > 0 && c.syncedDownloadMTU > 0 &&
-			(conn.UploadMTUBytes < c.syncedUploadMTU || conn.DownloadMTUBytes < c.syncedDownloadMTU) {
-			if idx, ok := c.connectionsByKey[conn.Key]; ok && idx >= 0 && idx < len(c.connections) {
-				c.connections[idx].Backup = true
-			}
-		}
-		c.balancer.RefreshValidConnections()
-		c.mtuStateMu.Unlock()
-		c.initResolverRecheckMeta()
-		c.logResolverRuntimeState()
-	}
-
-	go func() {
-		c.runAllMTUProbeWorkersWithLimit(
-			ctx,
-			uploadCaps,
-			workerCount,
-			counters,
-			func(conn Connection) {
-				stateMu.Lock()
-				defer stateMu.Unlock()
-				if released {
-					addBackgroundResolver(conn)
-					return
-				}
-				validNow := int(counters.valid.Load())
-				if validNow >= fastConnectMinValid {
-					finalizeCurrent("starter pool ready")
-				}
-			},
-			func() int {
-				if backgroundSingleWorker.Load() {
-					return 1
-				}
-				return workerCount
-			},
-		)
-
+	onValid := func(conn Connection) {
 		stateMu.Lock()
 		defer stateMu.Unlock()
+		if released {
+			c.mtuStateMu.Lock()
+			if c.syncedUploadMTU > 0 && c.syncedDownloadMTU > 0 &&
+				(conn.UploadMTUBytes < c.syncedUploadMTU || conn.DownloadMTUBytes < c.syncedDownloadMTU) {
+				if idx, ok := c.connectionsByKey[conn.Key]; ok {
+					c.connections[idx].Backup = true
+				}
+			}
+			c.balancer.RefreshValidConnections()
+			c.mtuStateMu.Unlock()
+			c.initResolverRecheckMeta()
+			c.logResolverRuntimeState()
+			return
+		}
+		if int(counters.valid.Load()) >= min(fastConnectMinValid, len(c.connections)) {
+			finalizeCurrent("starter pool ready")
+		}
+	}
+
+	// The background sweep runs behind a tunnel that already carries traffic, so
+	// it stays quiet by default (one resolver) but is tunable for anyone who
+	// would rather finish probing the fleet sooner. It can never exceed the
+	// initial worker count, which is already bounded by the resolver count.
+	backgroundWorkers := min(max(1, c.cfg.MTUBackgroundParallelism), workerCount)
+
+	go func() {
+		c.runAllMTUProbeWorkersWithLimit(ctx, uploadCaps, workerCount, counters, onValid, func() int {
+			if background.Load() {
+				return backgroundWorkers
+			}
+			return workerCount
+		})
+		stateMu.Lock()
 		if !released {
 			if !finalizeCurrent("full scan completed") {
 				finalErr = ErrNoValidConnections
 				closeReady.Do(func() { close(ready) })
 			}
-		} else if c.log != nil {
-			c.log.Infof(
-				"<green>⚡ Fast Connect background MTU scan completed: valid=<cyan>%d</cyan>, rejected=<red>%d</red>.</green>",
-				counters.valid.Load(),
-				counters.rejectUpload.Load()+counters.rejectDownload.Load(),
-			)
-			c.logResolverTierSummary()
+		} else {
+			c.logResolverRuntimeState()
 		}
+		stateMu.Unlock()
 		close(done)
 	}()
 
@@ -298,6 +245,12 @@ func (c *Client) runFastConnectMTUTests(ctx context.Context) error {
 	}
 }
 
+// finalizeMTUSelection runs Layer 2 clustering and, when MTU_ADAPTIVE_GROUPING
+// is enabled, Layer 3 best-group selection: it raises the session MTU to the
+// throughput-optimal operating point and demotes resolvers that cannot sustain
+// it out of the active pool. It then applies the synced MTU, refreshes the
+// balancer, primes resolver-recheck metadata, and logs the outcome. It returns
+// the final set of connections kept in the active pool.
 // selectOperatingPoint chooses the session operating point over the given
 // connections, honoring the balancing strategy. In MTU-weighted mode it prefers
 // the highest MTU a viable subset (>= MTUWeightedMinPool resolvers) can sustain,
@@ -310,16 +263,12 @@ func (c *Client) selectOperatingPoint(conns []Connection) (uploadMTU, downloadMT
 	return selectMTUOperatingPoint(conns)
 }
 
-// finalizeMTUSelection runs Layer 2 clustering and, when MTU_ADAPTIVE_GROUPING
-// is enabled, Layer 3 best-group selection: it raises the session MTU to the
-// throughput-optimal operating point and demotes resolvers that cannot sustain
-// it out of the active pool. It then applies the synced MTU, refreshes the
-// balancer, primes resolver-recheck metadata, and logs the outcome. It returns
-// the final set of connections kept in the active pool.
 func (c *Client) finalizeMTUSelection(validConns []Connection, minUpload, minDownload, minUploadChars int) []Connection {
 	c.mtuStateMu.Lock()
-	defer c.mtuStateMu.Unlock()
-	return c.finalizeMTUSelectionLocked(validConns, minUpload, minDownload, minUploadChars)
+	selected := c.finalizeMTUSelectionLocked(validConns, minUpload, minDownload, minUploadChars)
+	c.mtuStateMu.Unlock()
+	c.logResolverRuntimeState()
+	return selected
 }
 
 func (c *Client) finalizeMTUSelectionLocked(validConns []Connection, minUpload, minDownload, minUploadChars int) []Connection {
@@ -350,7 +299,6 @@ func (c *Client) finalizeMTUSelectionLocked(validConns []Connection, minUpload, 
 	c.applySyncedMTUState(minUpload, minDownload, minUploadChars)
 	c.balancer.RefreshValidConnections()
 	c.logConnectionProgress("selecting", 85, "valid", len(validConns))
-	c.logResolverRuntimeState()
 	c.initResolverRecheckMeta()
 
 	c.logMTUCompletion(validConns)
@@ -359,6 +307,9 @@ func (c *Client) finalizeMTUSelectionLocked(validConns []Connection, minUpload, 
 	}
 	c.logMTUGroups(groups)
 	c.logResolverTierSummary()
+	// Visible even at LOG_LEVEL=WARN so the user always sees which resolvers were
+	// selected, not only the ones that were rejected.
+	c.logSelectedResolvers()
 	return validConns
 }
 
@@ -534,8 +485,6 @@ func (c *Client) runAllMTUProbeWorkers(ctx context.Context, uploadCaps map[strin
 	c.runAllMTUProbeWorkersWithLimit(ctx, uploadCaps, workerCount, counters, onValid, nil)
 }
 
-// runAllMTUProbeWorkersWithLimit is like runAllMTUProbeWorkers, but the caller
-// can lower the maximum number of in-flight probes before each new job starts.
 func (c *Client) runAllMTUProbeWorkersWithLimit(
 	ctx context.Context,
 	uploadCaps map[string]int,
@@ -563,9 +512,7 @@ func (c *Client) runAllMTUProbeWorkersWithLimit(
 
 	maxWorkers := min(max(1, workerCount), total)
 	done := make(chan struct{}, maxWorkers)
-	next := 0
-	active := 0
-
+	next, active := 0, 0
 	startJob := func(idx int) {
 		active++
 		go func() {
@@ -586,18 +533,15 @@ func (c *Client) runAllMTUProbeWorkersWithLimit(
 			active--
 		}
 	}
-
 	for next < total || active > 0 {
 		if ctx.Err() != nil {
 			waitForActive()
 			return
 		}
-
 		limit := maxWorkers
 		if workerLimit != nil {
 			limit = min(maxWorkers, max(1, workerLimit()))
 		}
-
 		started := false
 		for next < total && active < limit {
 			startJob(next)
@@ -681,6 +625,7 @@ func (c *Client) runConnectionMTUTest(ctx context.Context, conn *Connection, ser
 						rejectedNow,
 					)
 				}
+				c.emitScanResult(conn.ResolverLabel, false)
 			}
 		}
 	}()
@@ -719,6 +664,7 @@ func (c *Client) runConnectionMTUTest(ctx context.Context, conn *Connection, ser
 				rejectedNow,
 			)
 		}
+		c.emitScanResult(conn.ResolverLabel, false)
 		return
 	case mtuRejectDownload:
 		c.mtuStateMu.Lock()
@@ -738,6 +684,7 @@ func (c *Client) runConnectionMTUTest(ctx context.Context, conn *Connection, ser
 				rejectedNow,
 			)
 		}
+		c.emitScanResult(conn.ResolverLabel, false)
 		return
 	}
 
@@ -768,13 +715,61 @@ func (c *Client) runConnectionMTUTest(ctx context.Context, conn *Connection, ser
 			rejectedNow,
 		)
 	}
+	c.emitScanResult(accepted.ResolverLabel, true)
 	c.appendResolverCacheEntry(&accepted)
 }
 
 func (c *Client) probeConnectionMTU(ctx context.Context, conn *Connection, maxUploadPayload int) (mtuConnectionProbeResult, mtuRejectReason) {
+	if conn == nil {
+		return mtuConnectionProbeResult{}, mtuRejectUpload
+	}
+	transports := c.resolverTransportCandidates(conn.Key)
+	if len(transports) == 0 {
+		transports = []resolverTransport{c.activeTransport()}
+	}
+
+	var (
+		chosen       mtuConnectionProbeResult
+		chosenReason = mtuRejectUpload
+		chosenOK     bool
+	)
+	for _, transport := range transports {
+		result, reason := c.probeConnectionMTUOver(ctx, conn, maxUploadPayload, transport)
+		ok := reason == mtuRejectNone
+		c.noteResolverTransportProbe(conn.Key, transport, result, ok, c.now())
+		if !ok {
+			// Preserve the most advanced rejection for useful diagnostics.
+			if reason == mtuRejectDownload {
+				chosen, chosenReason = result, reason
+			}
+			continue
+		}
+
+		// Keep probing the full chain so every alternate is warm and measured,
+		// but synchronize the session from the first viable configured path.
+		// For "auto" that is UDP. A one-off faster/wider TCP probe must not set a
+		// session MTU that excludes otherwise usable UDP before real traffic has
+		// compared the paths. If UDP is rejected, TCP naturally becomes the
+		// first viable result.
+		if !chosenOK {
+			chosen, chosenReason, chosenOK = result, mtuRejectNone, true
+		}
+	}
+	return chosen, chosenReason
+}
+
+func (c *Client) probeConnectionMTUOver(
+	ctx context.Context,
+	conn *Connection,
+	maxUploadPayload int,
+	transport resolverTransport,
+) (mtuConnectionProbeResult, mtuRejectReason) {
+	if c.probeConnectionMTUOverFn != nil {
+		return c.probeConnectionMTUOverFn(ctx, conn, maxUploadPayload, transport)
+	}
 	var result mtuConnectionProbeResult
 
-	probeTransport, err := c.newQueryTransport(conn.ResolverLabel)
+	probeTransport, err := c.newQueryTransportOver(conn.ResolverLabel, transport)
 	if err != nil {
 		return result, mtuRejectUpload
 	}
@@ -1273,13 +1268,14 @@ func (c *Client) sendDownloadMTUProbe(ctx context.Context, conn *Connection, pro
 
 func (c *Client) buildMTUProbeQuery(domain string, packetType uint8, payload []byte) ([]byte, error) {
 	return c.buildTunnelTXTQueryRaw(domain, VpnProto.BuildOptions{
-		SessionID:      255,
-		PacketType:     packetType,
-		StreamID:       1,
-		SequenceNum:    1,
-		FragmentID:     0,
-		TotalFragments: 1,
-		Payload:        payload,
+		LegacySessionID: c.cfg.LegacySessionID,
+		SessionID:       255,
+		PacketType:      packetType,
+		StreamID:        1,
+		SequenceNum:     1,
+		FragmentID:      0,
+		TotalFragments:  1,
+		Payload:         payload,
 	})
 }
 
@@ -1318,14 +1314,15 @@ func (c *Client) canBuildUploadPayload(domain string, payloadLen int) bool {
 
 	payload := buf[:payloadLen]
 	encoded, err := VpnProto.BuildEncoded(VpnProto.BuildOptions{
-		SessionID:      255,
-		PacketType:     Enums.PACKET_MTU_UP_REQ,
-		SessionCookie:  255,
-		StreamID:       0xFFFF,
-		SequenceNum:    0xFFFF,
-		FragmentID:     0xFF,
-		TotalFragments: 0xFF,
-		Payload:        payload,
+		LegacySessionID: c.cfg.LegacySessionID,
+		SessionID:       255,
+		PacketType:      Enums.PACKET_MTU_UP_REQ,
+		SessionCookie:   255,
+		StreamID:        0xFFFF,
+		SequenceNum:     0xFFFF,
+		FragmentID:      0xFF,
+		TotalFragments:  0xFF,
+		Payload:         payload,
 	}, c.codec)
 	if err != nil {
 		return false
@@ -1506,6 +1503,7 @@ func (c *Client) encodedCharsForPacketPayload(packetType uint8, payloadLen int) 
 
 	payload := buf[:payloadLen]
 	encoded, err := VpnProto.BuildEncoded(VpnProto.BuildOptions{
+		LegacySessionID: c.cfg.LegacySessionID,
 		SessionID:       255,
 		PacketType:      packetType,
 		SessionCookie:   255,

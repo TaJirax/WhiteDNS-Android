@@ -24,6 +24,7 @@ import (
 type Stream_server struct {
 	mu        sync.RWMutex
 	txQueueMu sync.Mutex
+	txClosed  bool
 	cleanupMu sync.Once
 	rxQueueMu sync.Mutex
 
@@ -161,6 +162,11 @@ func (s *Stream_server) PushTXPacket(priority int, packetType uint8, sequenceNum
 	pkt.TTL = ttl
 
 	s.txQueueMu.Lock()
+	if s.txClosed {
+		s.txQueueMu.Unlock()
+		putTXPacketToPool(pkt)
+		return false
+	}
 
 	switch packetType {
 	case Enums.PACKET_STREAM_DATA:
@@ -257,17 +263,30 @@ func (s *Stream_server) RemoveQueuedDataNack(sequenceNum uint16) bool {
 }
 
 func (s *Stream_server) ClearTXQueue() {
+	s.clearTXQueue(false)
+}
+
+// closeTXQueue atomically prevents every future producer from enqueueing and
+// releases packets already queued. Holding the same lock as PushTXPacket closes
+// the teardown race where an ARQ goroutine could enqueue a terminal packet just
+// after cleanup had cleared the queue.
+func (s *Stream_server) closeTXQueue() {
+	s.clearTXQueue(true)
+}
+
+func (s *Stream_server) clearTXQueue(closeQueue bool) {
 	if s == nil || s.TXQueue == nil {
 		return
 	}
 
 	s.txQueueMu.Lock()
+	if closeQueue {
+		s.txClosed = true
+	}
 	s.TXQueue.Clear(func(pkt *serverStreamTXPacket) {
 		putTXPacketToPool(pkt)
 	})
-
 	s.txQueueMu.Unlock()
-
 }
 
 func (s *Stream_server) FastTXQueueSize() int {
@@ -354,7 +373,7 @@ func (s *Stream_server) cleanupResources() {
 	if upstream != nil {
 		_ = upstream.Close()
 	}
-	s.ClearTXQueue()
+	s.closeTXQueue()
 }
 
 func (s *Stream_server) finalizeAfterARQClose(reason string) {
@@ -591,7 +610,10 @@ func (s *Stream_server) maybeAdjustAutoFEC() {
 			// code rate tracks how bad the link actually is, lifted above the normal
 			// auto ceiling up to the super cap (0 = Reed-Solomon hard limit). This is
 			// loss-aware, not a flat slam: 76% loss buys less parity than 84%.
-			parity := fec.ParityForLoss(s.fecAutoBlock, loss)
+			// At extreme loss, sizing parity only to the expected survivor count
+			// makes reconstruction a coin flip. Super-FEC targets 90% random-loss
+			// block recovery (subject to the configured/hard parity cap).
+			parity := fec.ParityForLossTarget(s.fecAutoBlock, loss, 0.90)
 			superCap := s.fecSuperMaxParity
 			hardMax := fec.MaxParity(s.fecAutoBlock)
 			if superCap <= 0 || superCap > hardMax {

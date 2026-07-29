@@ -1,15 +1,3 @@
-// ==============================================================================
-// CottenDNS
-// Author: tajirax
-// Github: https://github.com/TaJirax/CottenDns
-// Year: 2026
-// ==============================================================================
-// Package client provides the core logic for the CottenDns client.
-// This file (scan.go) implements resolver scan-only mode: it runs the normal
-// MTU scan to classify resolvers, emits machine-readable WD_SCAN telemetry
-// consumed by embedding clients (e.g. the WhiteDNS Android scan screen), and
-// exits without starting the local SOCKS/DNS listeners, session, or tunnel.
-// ==============================================================================
 package client
 
 import (
@@ -17,78 +5,63 @@ import (
 	"errors"
 )
 
-// ResolverScanSummary reports the outcome of a resolver scan.
 type ResolverScanSummary struct {
 	Total    int
 	Valid    int
 	Rejected int
 }
 
-// RunResolverScan performs a blocking resolver scan and returns without starting
-// the tunnel runtime. It reuses the standard MTU scan (which already emits
-// WD_PROGRESS) to classify every resolver-domain pair, then emits per-resolver
-// WD_SCAN valid/rejected events and a final completion summary.
+// RunResolverScan classifies resolvers without starting listeners or a session.
 func (c *Client) RunResolverScan(ctx context.Context) (ResolverScanSummary, error) {
 	defer c.closeResolverCacheLog()
-
-	total := len(c.connections)
-	summary := ResolverScanSummary{Total: total}
-	if total == 0 {
+	summary := ResolverScanSummary{Total: len(c.connections)}
+	if summary.Total == 0 {
 		c.logResolverScanComplete(summary)
 		return summary, nil
 	}
-
-	// Reuse the real MTU scan to populate per-connection validity and MTU.
-	// ErrNoValidConnections is an expected scan outcome, not a hard failure.
-	if err := c.RunInitialMTUTests(ctx); err != nil && !errors.Is(err, ErrNoValidConnections) {
+	// Scan-only must classify the complete fleet even when the profile normally
+	// enables Fast Connect.
+	fastConnect := c.cfg.FastConnect
+	c.cfg.FastConnect = false
+	// Emit per-resolver WD_SCAN results as each probe finishes rather than in a
+	// post-scan loop, so the UI's Valid/Rejected counters climb during the scan
+	// instead of jumping only after every resolver has been tested. The
+	// authoritative totals still arrive in the WD_SCAN event=complete line below.
+	c.scanTelemetryActive.Store(true)
+	err := c.RunInitialMTUTests(ctx)
+	c.scanTelemetryActive.Store(false)
+	c.cfg.FastConnect = fastConnect
+	if err != nil && !errors.Is(err, ErrNoValidConnections) {
 		return summary, err
 	}
 	if err := ctx.Err(); err != nil {
 		return summary, err
 	}
-
-	for idx := range c.connections {
-		conn := c.connections[idx]
-		if conn.ResolverLabel == "" {
-			continue
-		}
-		if conn.UploadMTUBytes > 0 && conn.DownloadMTUBytes > 0 {
-			c.logResolverScanValid(conn)
-		} else {
-			c.logResolverScanRejected(conn)
-		}
-	}
-
-	validConns, _, _, _ := summarizeValidMTUConnections(c.connections)
-	summary.Valid = len(validConns)
-	summary.Rejected = total - summary.Valid
-
+	valid, _, _, _ := summarizeValidMTUConnections(c.connections)
+	summary.Valid = len(valid)
+	summary.Rejected = summary.Total - summary.Valid
 	c.logResolverScanComplete(summary)
 	return summary, nil
 }
 
-func (c *Client) logResolverScanValid(conn Connection) {
-	if c == nil || c.log == nil || conn.ResolverLabel == "" {
+// emitScanResult reports one resolver's outcome to the UI in real time while a
+// -scan-only run is in progress. It is a no-op during a normal tunnel run, so
+// the shared MTU probe path stays quiet unless RunResolverScan armed it.
+func (c *Client) emitScanResult(resolverLabel string, valid bool) {
+	if c == nil || c.log == nil || resolverLabel == "" || !c.scanTelemetryActive.Load() {
 		return
 	}
-	c.log.Machinef("WD_SCAN event=valid resolver=%s", conn.ResolverLabel)
-}
-
-func (c *Client) logResolverScanRejected(conn Connection) {
-	if c == nil || c.log == nil || conn.ResolverLabel == "" {
-		return
+	if valid {
+		c.log.Machinef("WD_SCAN event=valid resolver=%s", resolverLabel)
+	} else {
+		c.log.Machinef("WD_SCAN event=rejected resolver=%s", resolverLabel)
 	}
-	c.log.Machinef("WD_SCAN event=rejected resolver=%s", conn.ResolverLabel)
 }
 
 func (c *Client) logResolverScanComplete(summary ResolverScanSummary) {
 	if c == nil || c.log == nil {
 		return
 	}
-	c.log.Machinef(
-		"WD_SCAN event=complete total=%d valid=%d rejected=%d",
-		summary.Total,
-		summary.Valid,
-		summary.Rejected,
-	)
+	c.log.Machinef("WD_SCAN event=complete total=%d valid=%d rejected=%d",
+		summary.Total, summary.Valid, summary.Rejected)
 }

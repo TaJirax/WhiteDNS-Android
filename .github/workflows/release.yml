@@ -31,12 +31,18 @@ jobs:
       - name: Verify vendored CottenDns engine
         run: |
           set -euo pipefail
+          EXPECTED_ENGINE_REPOSITORY="https://github.com/TaJirax/cottenDNS"
+          EXPECTED_ENGINE_COMMIT="e3c2ea8813890c021d64e5200ac65d8fd851acca"
           test -f third_party/CottenDns/go.mod
           test -f third_party/CottenDns/cmd/client/main.go
+          test -f third_party/CottenDns.UPSTREAM
           if git ls-files --stage third_party/CottenDns | awk '{print $1}' | grep -qx '160000'; then
             echo "::error::third_party/CottenDns is still a submodule. Vendor the CottenDns engine source in this repository."
             exit 1
           fi
+          grep -Fx "repository=${EXPECTED_ENGINE_REPOSITORY}" third_party/CottenDns.UPSTREAM
+          grep -Fx "commit=${EXPECTED_ENGINE_COMMIT}" third_party/CottenDns.UPSTREAM
+          echo "Vendored CottenDNS source: ${EXPECTED_ENGINE_REPOSITORY}@${EXPECTED_ENGINE_COMMIT}"
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -149,6 +155,8 @@ jobs:
 
           cat > "${NOTES_FILE}" <<EOF
           Official WhiteDNS release for ${TAG_NAME}.
+
+          Vendored CottenDNS engine: TaJirax/cottenDNS@e3c2ea8813890c021d64e5200ac65d8fd851acca.
 
           WhiteDNS is not published on Google Play. APKs attached to this GitHub release are the official release artifacts for this tag.
 

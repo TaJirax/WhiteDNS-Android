@@ -126,7 +126,7 @@ func TestIngressAdmissionKeepsDynamicClientCompatibility(t *testing.T) {
 			t.Fatalf("method %d: %v", method, codecErr)
 		}
 		encoded, buildErr := VpnProto.BuildEncoded(VpnProto.BuildOptions{
-			SessionID: 0, PacketType: Enums.PACKET_MTU_UP_REQ,
+			SessionID: 255, PacketType: Enums.PACKET_MTU_UP_REQ,
 			Payload: []byte{0, 1, 2, 3, 4},
 		}, codec)
 		if buildErr != nil {
@@ -151,6 +151,11 @@ func TestIngressAdmissionKeepsDynamicClientCompatibility(t *testing.T) {
 			if !s.admitIngressPacket(query) {
 				t.Fatalf("method %d qtype %s with shaped QNAME was rejected", method, Enums.DNSRecordTypeName(qType))
 			}
+		}
+	}
+	for _, method := range methods {
+		if got := s.codecAccepted[method].Load(); got == 0 {
+			t.Fatalf("method %d was accepted but not recorded", method)
 		}
 	}
 }

@@ -1,15 +1,3 @@
-// ==============================================================================
-// CottenDNS
-// Author: tajirax
-// Github: https://github.com/TaJirax/CottenDns
-// Year: 2026
-// ==============================================================================
-// Package client provides the core logic for the CottenDns client.
-// This file (resolver_runtime_state.go) emits the machine-readable WD_RESOLVERS
-// status line consumed by embedding clients (e.g. the WhiteDNS Android app) to
-// render live resolver state. It is emitted on resolver-set changes and on a
-// periodic heartbeat, with duplicate suppression in between.
-// ==============================================================================
 package client
 
 import (
@@ -21,28 +9,17 @@ import (
 
 const resolverRuntimeStateHeartbeatInterval = 30 * time.Second
 
-// logResolverRuntimeState emits a WD_RESOLVERS line describing the currently
-// active and MTU-valid resolvers. It is a no-op without a logger and suppresses
-// unchanged lines until the heartbeat interval elapses.
 func (c *Client) logResolverRuntimeState() {
 	if c == nil || c.log == nil {
 		return
 	}
 	active, standby, valid := c.resolverRuntimeSnapshot()
-	line := c.resolverRuntimeStateLogLine(active, standby, valid)
+	line := fmt.Sprintf("WD_RESOLVERS active=%s standby=%s valid=%s",
+		formatResolverRuntimeList(active), formatResolverRuntimeList(standby), formatResolverRuntimeList(valid))
 	if !c.shouldEmitResolverRuntimeState(line, c.now()) {
 		return
 	}
 	c.log.Machinef("%s", line)
-}
-
-func (c *Client) resolverRuntimeStateLogLine(active []string, standby []string, valid []string) string {
-	return fmt.Sprintf(
-		"WD_RESOLVERS active=%s standby=%s valid=%s",
-		formatResolverRuntimeList(active),
-		formatResolverRuntimeList(standby),
-		formatResolverRuntimeList(valid),
-	)
 }
 
 func (c *Client) shouldEmitResolverRuntimeState(line string, now time.Time) bool {
@@ -51,31 +28,24 @@ func (c *Client) shouldEmitResolverRuntimeState(line string, now time.Time) bool
 	}
 	c.resolverRuntimeLogMu.Lock()
 	defer c.resolverRuntimeLogMu.Unlock()
-
-	isHeartbeatDue := c.lastResolverRuntimeLogAt.IsZero() ||
+	heartbeat := c.lastResolverRuntimeLogAt.IsZero() ||
 		now.Sub(c.lastResolverRuntimeLogAt) >= resolverRuntimeStateHeartbeatInterval
-	if line == c.lastResolverRuntimeLog && !isHeartbeatDue {
+	if line == c.lastResolverRuntimeLog && !heartbeat {
 		return false
 	}
-
 	c.lastResolverRuntimeLog = line
 	c.lastResolverRuntimeLogAt = now
 	return true
 }
 
-func (c *Client) resolverRuntimeSnapshot() (active []string, standby []string, valid []string) {
+func (c *Client) resolverRuntimeSnapshot() (active, standby, valid []string) {
 	if c == nil {
 		return nil, nil, nil
 	}
-	// A resolver appears once per tunnel domain (multi-domain profiles create one
-	// connection per resolver-domain pair). Count each resolver once: it is valid
-	// or active if it qualifies on any domain, so callers see unique resolvers
-	// rather than resolver-domain pairs.
-	active = make([]string, 0, len(c.connections))
-	valid = make([]string, 0, len(c.connections))
+	c.mtuStateMu.Lock()
+	defer c.mtuStateMu.Unlock()
 	seenActive := make(map[string]struct{}, len(c.connections))
 	seenValid := make(map[string]struct{}, len(c.connections))
-
 	for _, conn := range c.connections {
 		if conn.Key == "" || conn.ResolverLabel == "" {
 			continue
@@ -93,7 +63,6 @@ func (c *Client) resolverRuntimeSnapshot() (active []string, standby []string, v
 			}
 		}
 	}
-
 	slices.Sort(active)
 	slices.Sort(valid)
 	return active, nil, valid

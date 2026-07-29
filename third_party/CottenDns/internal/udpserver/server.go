@@ -10,6 +10,7 @@ package udpserver
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net"
 	"strconv"
 	"sync"
@@ -22,6 +23,7 @@ import (
 	fragmentStore "cottendns-go/internal/fragmentstore"
 	"cottendns-go/internal/logger"
 	"cottendns-go/internal/security"
+	VpnProto "cottendns-go/internal/vpnproto"
 )
 
 const (
@@ -33,7 +35,6 @@ const (
 	mtuProbeDownMinSize = mtuProbeUpMinSize + 2
 	mtuProbeMinDownSize = 30
 	mtuProbeMaxDownSize = 4096
-	sessionAcceptSize   = 8
 )
 
 var preSessionPacketTypes = buildPreSessionPacketTypes()
@@ -44,6 +45,7 @@ type Server struct {
 	codec                    *security.Codec
 	codecs                   []*security.Codec // candidate codecs for encryption-method auto-detect
 	preferredCodec           atomic.Int32      // index into codecs to try first
+	codecAccepted            [6]atomic.Uint64  // successful ingress frames by encryption method
 	domainMatcher            *domainMatcher.Matcher
 	sessions                 *sessionStore
 	deferredDNSSession       *deferredSessionProcessor
@@ -82,6 +84,15 @@ type Server struct {
 	invalidSessionDropLog    throttledLogState
 	droppedPackets           atomic.Uint64
 	ingressRejectedPackets   atomic.Uint64
+	ingressPreparedPackets   atomic.Uint64
+	ingressInflateFailures   atomic.Uint64
+	ingressControlDepth      atomic.Int64
+	ingressDataDepth         atomic.Int64
+	ingressControlHighWater  atomic.Uint64
+	ingressDataHighWater     atomic.Uint64
+	ingressLatencyNanos      atomic.Uint64
+	ingressLatencySamples    atomic.Uint64
+	sessionBusyResponses     atomic.Uint64
 	lastDropLogUnix          atomic.Int64
 	deferredDroppedPackets   atomic.Uint64
 	lastDeferredDropLogUnix  atomic.Int64
@@ -104,6 +115,7 @@ type Server struct {
 	dnsUpstreamTCPFallbacks atomic.Uint64
 	streamConnBudget        *connectionBudget
 	encryptedConnBudget     *connectionBudget
+	tcpListenerUp           atomic.Uint64
 	dotListenerUp           atomic.Uint64
 	dohListenerUp           atomic.Uint64
 	tlsHandshakeFailures    atomic.Uint64
@@ -111,15 +123,58 @@ type Server struct {
 	dohRequestRejected      atomic.Uint64
 	sniPassthroughActive    atomic.Uint64
 	sniPassthroughFailures  atomic.Uint64
+	genericUDPActive        atomic.Uint64
+	genericUDPTotal         atomic.Uint64
+	genericUDPEndpoints     atomic.Uint64
+	genericUDPUpDatagrams   atomic.Uint64
+	genericUDPUpBytes       atomic.Uint64
+	genericUDPDownDatagrams atomic.Uint64
+	genericUDPDownBytes     atomic.Uint64
+	genericUDPErrors        atomic.Uint64
+	startedAt               time.Time
+	running                 atomic.Bool
+
+	// clientPolicy is the ceiling set advertised to clients in SESSION_ACCEPT.
+	// Resolved once at construction because it never changes at runtime. A zero
+	// value means the operator configured no ceilings, and no policy block is
+	// put on the wire at all.
+	clientPolicy VpnProto.SessionAcceptClientPolicy
 }
 
-// Stats is a point-in-time snapshot of operational counters maintained by the
-// server. The values are monotonically non-decreasing for the lifetime of the
-// process (counters are never reset). Stats() is safe to call from any
-// goroutine.
+// buildClientPolicy maps the MAX_ALLOWED_CLIENT_* / MIN_ALLOWED_CLIENT_* config
+// keys onto the wire policy. It lives here rather than on ServerConfig because
+// config cannot import vpnproto: vpnproto depends on security, which depends on
+// config, so the accessor would close an import cycle.
+func buildClientPolicy(cfg config.ServerConfig) VpnProto.SessionAcceptClientPolicy {
+	return VpnProto.SessionAcceptClientPolicy{
+		MaxPacketDuplicationCount: cfg.MaxAllowedClientPacketDuplication,
+		MaxSetupDuplicationCount:  cfg.MaxAllowedClientSetupPacketDuplication,
+		MaxUploadMTU:              cfg.MaxAllowedClientUploadMTU,
+		MaxDownloadMTU:            cfg.MaxAllowedClientDownloadMTU,
+		MaxRxTxWorkers:            cfg.MaxAllowedClientRxTxWorkers,
+		MinPingAggressiveInterval: cfg.MinAllowedClientPingAggressiveInterval,
+		MaxPacketsPerBatch:        cfg.MaxAllowedClientPacketsPerBatch,
+		MaxARQWindowSize:          cfg.MaxAllowedClientARQWindowSize,
+		MaxARQDataNackMaxGap:      cfg.MaxAllowedClientARQDataNackMaxGap,
+		MinCompressionMinSize:     cfg.MinAllowedClientCompressionMinSize,
+		MinARQInitialRTOSeconds:   cfg.MinAllowedClientARQInitialRTOSeconds,
+	}
+}
+
+// Stats is a point-in-time snapshot of operational counters and queue gauges
+// maintained by the server. Total/high-water values are monotonic; current
+// queue depths may rise and fall. Stats() is safe to call from any goroutine.
 type Stats struct {
 	DroppedPackets          uint64
 	IngressRejectedPackets  uint64
+	IngressPreparedPackets  uint64
+	IngressInflateFailures  uint64
+	IngressControlDepth     uint64
+	IngressDataDepth        uint64
+	IngressControlHighWater uint64
+	IngressDataHighWater    uint64
+	IngressLatencyNanos     uint64
+	IngressLatencySamples   uint64
 	DeferredDroppedPackets  uint64
 	StreamCapRejections     uint64
 	DNSResponseOversize     uint64
@@ -128,11 +183,15 @@ type Stats struct {
 	UpstreamPanicsRecovered uint64
 	CleanupPanicsRecovered  uint64
 	ActiveSessions          uint64
+	NativeSessions          uint64
+	LegacySessions          uint64
 	ActiveStreams           uint64
+	SessionBusyResponses    uint64
 	DNSUpstreamQueries      uint64
 	DNSUpstreamFailures     uint64
 	DNSUpstreamHedges       uint64
 	DNSUpstreamTCPFallbacks uint64
+	TCPListenerUp           uint64
 	DoTListenerUp           uint64
 	DoHListenerUp           uint64
 	TLSHandshakeFailures    uint64
@@ -140,6 +199,25 @@ type Stats struct {
 	DoHRequestRejected      uint64
 	SNIPassthroughActive    uint64
 	SNIPassthroughFailures  uint64
+	IngressControlCapacity  uint64
+	IngressDataCapacity     uint64
+	DeferredDNSPending      uint64
+	DeferredDNSCapacity     uint64
+	DeferredConnectPending  uint64
+	DeferredConnectCapacity uint64
+	StreamConnectionsActive uint64
+	StreamConnectionsLimit  uint64
+	EncryptedConnsActive    uint64
+	EncryptedConnsLimit     uint64
+	CodecAcceptedPackets    [6]uint64
+	GenericUDPActive        uint64
+	GenericUDPTotal         uint64
+	GenericUDPEndpoints     uint64
+	GenericUDPUpDatagrams   uint64
+	GenericUDPUpBytes       uint64
+	GenericUDPDownDatagrams uint64
+	GenericUDPDownBytes     uint64
+	GenericUDPErrors        uint64
 }
 
 // Stats returns a consistent snapshot of the server's observability counters.
@@ -154,10 +232,33 @@ func (s *Server) Stats() Stats {
 	if s.socks5Fragments != nil {
 		fragmentConflicts += s.socks5Fragments.ConflictCount()
 	}
-	activeSessions, activeStreams := s.sessions.operationalCounts()
+	activeSessions, nativeSessions, legacySessions, activeStreams := s.sessions.operationalCounts()
+	var controlCapacity, dataCapacity int
+	// Preserve the documented zero-value Stats contract for unconfigured test
+	// and embedding instances. Loaded production config always normalizes these
+	// fields above zero before New constructs the server.
+	if s.cfg.MaxConcurrentRequests > 0 && s.cfg.MaxPacketSize > 0 && s.cfg.MaxIngressQueueBytes > 0 {
+		controlCapacity, dataCapacity = s.ingressQueueCapacities()
+	}
+	dnsPending, dnsCapacity := s.deferredDNSSession.snapshot()
+	connectPending, connectCapacity := s.deferredConnectSession.snapshot()
+	streamConnectionsActive, streamConnectionsLimit := s.streamConnBudget.snapshot()
+	encryptedConnsActive, encryptedConnsLimit := s.encryptedConnBudget.snapshot()
+	var codecAccepted [6]uint64
+	for method := range codecAccepted {
+		codecAccepted[method] = s.codecAccepted[method].Load()
+	}
 	return Stats{
 		DroppedPackets:          s.droppedPackets.Load(),
 		IngressRejectedPackets:  s.ingressRejectedPackets.Load(),
+		IngressPreparedPackets:  s.ingressPreparedPackets.Load(),
+		IngressInflateFailures:  s.ingressInflateFailures.Load(),
+		IngressControlDepth:     uint64(max(s.ingressControlDepth.Load(), 0)),
+		IngressDataDepth:        uint64(max(s.ingressDataDepth.Load(), 0)),
+		IngressControlHighWater: s.ingressControlHighWater.Load(),
+		IngressDataHighWater:    s.ingressDataHighWater.Load(),
+		IngressLatencyNanos:     s.ingressLatencyNanos.Load(),
+		IngressLatencySamples:   s.ingressLatencySamples.Load(),
 		DeferredDroppedPackets:  s.deferredDroppedPackets.Load(),
 		StreamCapRejections:     s.sessions.streamCapRejectionsCount(),
 		DNSResponseOversize:     s.dnsResponseOversize.Load(),
@@ -166,11 +267,15 @@ func (s *Server) Stats() Stats {
 		UpstreamPanicsRecovered: s.upstreamPanicsRecovered.Load(),
 		CleanupPanicsRecovered:  s.cleanupPanicsRecovered.Load(),
 		ActiveSessions:          activeSessions,
+		NativeSessions:          nativeSessions,
+		LegacySessions:          legacySessions,
 		ActiveStreams:           activeStreams,
+		SessionBusyResponses:    s.sessionBusyResponses.Load(),
 		DNSUpstreamQueries:      s.dnsUpstreamQueries.Load(),
 		DNSUpstreamFailures:     s.dnsUpstreamFailures.Load(),
 		DNSUpstreamHedges:       s.dnsUpstreamHedges.Load(),
 		DNSUpstreamTCPFallbacks: s.dnsUpstreamTCPFallbacks.Load(),
+		TCPListenerUp:           s.tcpListenerUp.Load(),
 		DoTListenerUp:           s.dotListenerUp.Load(),
 		DoHListenerUp:           s.dohListenerUp.Load(),
 		TLSHandshakeFailures:    s.tlsHandshakeFailures.Load(),
@@ -178,14 +283,48 @@ func (s *Server) Stats() Stats {
 		DoHRequestRejected:      s.dohRequestRejected.Load(),
 		SNIPassthroughActive:    s.sniPassthroughActive.Load(),
 		SNIPassthroughFailures:  s.sniPassthroughFailures.Load(),
+		IngressControlCapacity:  uint64(max(controlCapacity, 0)),
+		IngressDataCapacity:     uint64(max(dataCapacity, 0)),
+		DeferredDNSPending:      uint64(max(dnsPending, 0)),
+		DeferredDNSCapacity:     uint64(max(dnsCapacity, 0)),
+		DeferredConnectPending:  uint64(max(connectPending, 0)),
+		DeferredConnectCapacity: uint64(max(connectCapacity, 0)),
+		StreamConnectionsActive: uint64(max(streamConnectionsActive, 0)),
+		StreamConnectionsLimit:  uint64(max(streamConnectionsLimit, 0)),
+		EncryptedConnsActive:    uint64(max(encryptedConnsActive, 0)),
+		EncryptedConnsLimit:     uint64(max(encryptedConnsLimit, 0)),
+		CodecAcceptedPackets:    codecAccepted,
+		GenericUDPActive:        s.genericUDPActive.Load(),
+		GenericUDPTotal:         s.genericUDPTotal.Load(),
+		GenericUDPEndpoints:     s.genericUDPEndpoints.Load(),
+		GenericUDPUpDatagrams:   s.genericUDPUpDatagrams.Load(),
+		GenericUDPUpBytes:       s.genericUDPUpBytes.Load(),
+		GenericUDPDownDatagrams: s.genericUDPDownDatagrams.Load(),
+		GenericUDPDownBytes:     s.genericUDPDownBytes.Load(),
+		GenericUDPErrors:        s.genericUDPErrors.Load(),
 	}
 }
 
 type request struct {
-	buf  []byte
-	size int
-	addr *net.UDPAddr
+	buf      []byte
+	size     int
+	addr     *net.UDPAddr
+	prepared preparedIngress
+	admitted time.Time
+	// conn is the socket the datagram arrived on, so the reply leaves by the
+	// same one. With SO_REUSEPORT every socket shares the listen address, so
+	// this is transmit-load spreading rather than a correctness requirement.
+	conn *net.UDPConn
 }
+
+type ingressQueues struct {
+	control chan request
+	data    chan request
+}
+
+// errReusePortUnsupported reports that SO_REUSEPORT is unavailable, so the
+// caller should fall back to a single shared listening socket.
+var errReusePortUnsupported = errors.New("SO_REUSEPORT not supported on this platform")
 
 type postSessionValidation struct {
 	record   *sessionRuntimeView
@@ -212,7 +351,7 @@ func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Se
 		socksConnectTimeout = 8 * time.Second
 	}
 	dnsDeferredWorkers, connectDeferredWorkers, dnsDeferredQueue, connectDeferredQueue := splitDeferredSessionPools(cfg.DeferredSessionWorkers, cfg.DeferredSessionQueueLimit)
-	return &Server{
+	srv := &Server{
 		cfg:                    cfg,
 		log:                    log,
 		codec:                  codec,
@@ -222,6 +361,7 @@ func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Se
 		deferredDNSSession:     newDeferredSessionProcessor(dnsDeferredWorkers, dnsDeferredQueue, log),
 		deferredConnectSession: newDeferredSessionProcessor(connectDeferredWorkers, connectDeferredQueue, log),
 		invalidCookieTracker:   newInvalidCookieTracker(),
+		clientPolicy:           buildClientPolicy(cfg),
 		dnsCache: dnsCache.New(
 			cfg.DNSCacheMaxRecords,
 			time.Duration(cfg.DNSCacheTTLSeconds*float64(time.Second)),
@@ -259,6 +399,7 @@ func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Se
 			},
 		},
 		deferredInflight: make(map[uint64]struct{}, 128),
+		startedAt:        time.Now(),
 		streamConnBudget: streamBudget,
 		// DoT/DoH draw from a capped sub-share so that flooding the optional
 		// encrypted listeners can never consume the connection headroom the
@@ -270,6 +411,13 @@ func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Se
 			},
 		},
 	}
+
+	// The download ceiling is enforced server-side as well as advertised. The
+	// upload value is retained on the session for accounting; compatible clients
+	// enforce it before constructing subsequent tunnel queries.
+	srv.sessions.setClientMTUCeilings(cfg.MaxAllowedClientUploadMTU, cfg.MaxAllowedClientDownloadMTU)
+
+	return srv
 }
 
 // SetCodecSet enables encryption-method auto-detection by giving the server a
@@ -419,7 +567,7 @@ func (s *Server) Run(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{
+	conns, err := s.listenUDP(&net.UDPAddr{
 		IP:   net.ParseIP(s.cfg.UDPHost),
 		Port: s.cfg.UDPPort,
 	})
@@ -427,22 +575,35 @@ func (s *Server) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	s.running.Store(true)
+	defer s.running.Store(false)
 
-	defer conn.Close()
+	defer func() {
+		for _, conn := range conns {
+			_ = conn.Close()
+		}
+	}()
 
-	s.configureSocketBuffers(conn)
+	for _, conn := range conns {
+		s.configureSocketBuffers(conn)
+	}
 
 	queueCapacity := s.ingressQueueCapacity()
 	s.log.Infof(
-		"\U0001F4E1 <green>UDP Listener Ready, Addr: <cyan>%s</cyan>, Readers: <cyan>%d</cyan>, Workers: <cyan>%d</cyan>, Queue: <cyan>%d</cyan> <gray>(memory cap %d bytes)</gray></green>",
+		"\U0001F4E1 <green>UDP Listener Ready, Addr: <cyan>%s</cyan>, Sockets: <cyan>%d</cyan>, Readers: <cyan>%d</cyan>, Workers: <cyan>%d</cyan>, Queue: <cyan>%d</cyan> <gray>(memory cap %d bytes)</gray></green>",
 		s.cfg.Address(),
+		len(conns),
 		s.cfg.UDPReaders,
 		s.cfg.DNSRequestWorkers,
 		queueCapacity,
 		s.cfg.MaxIngressQueueBytes,
 	)
 
-	reqCh := make(chan request, queueCapacity)
+	controlCapacity, dataCapacity := s.ingressQueueCapacities()
+	queues := ingressQueues{
+		control: make(chan request, controlCapacity),
+		data:    make(chan request, dataCapacity),
+	}
 	var workerWG sync.WaitGroup
 	cleanupDone := make(chan struct{})
 
@@ -453,7 +614,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	s.deferredDNSSession.Start(runCtx)
 	s.deferredConnectSession.Start(runCtx)
-	s.startDNSWorkers(runCtx, conn, reqCh, &workerWG)
+	s.startDNSWorkers(runCtx, queues, &workerWG)
 
 	// DNS-over-TCP fallback on the same host:port, for clients on networks that
 	// filter or truncate UDP/53. Shares the transport-agnostic packet handler.
@@ -509,15 +670,18 @@ func (s *Server) Run(ctx context.Context) error {
 
 	go func() {
 		<-runCtx.Done()
-		_ = conn.Close()
+		for _, conn := range conns {
+			_ = conn.Close()
+		}
 	}()
 
 	readErrCh := make(chan error, s.cfg.UDPReaders)
 	var readerWG sync.WaitGroup
-	s.startReaders(runCtx, conn, reqCh, readErrCh, &readerWG)
+	s.startReaders(runCtx, conns, queues, readErrCh, &readerWG)
 
 	readerWG.Wait()
-	close(reqCh)
+	close(queues.control)
+	close(queues.data)
 	workerWG.Wait()
 	cancel()
 	tcpWG.Wait()

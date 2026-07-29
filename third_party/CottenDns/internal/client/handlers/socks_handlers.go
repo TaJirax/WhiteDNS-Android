@@ -1,4 +1,4 @@
-﻿// ==============================================================================
+// ==============================================================================
 // CottenDNS
 // Author: tajirax
 // Github: https://github.com/TaJirax/CottenDns
@@ -34,10 +34,7 @@ func init() {
 		RegisterHandler(pt, handleSocksFailure)
 	}
 
-	// Register SOCKS5 control ACKs (if they skip general ReceiveControlAck).
-	// CONNECTED_ACK can arrive at the client (e.g. reflected/retransmitted control
-	// on recently-closed streams); route it through the control-ack handler so it
-	// is processed gracefully instead of dropped with a "no handler" warning.
+	// Register SOCKS5 control ACKs (if they skip general ReceiveControlAck)
 	RegisterHandler(Enums.PACKET_SOCKS5_SYN_ACK, handleSocksControlAck)
 	RegisterHandler(Enums.PACKET_SOCKS5_CONNECTED_ACK, handleSocksControlAck)
 }

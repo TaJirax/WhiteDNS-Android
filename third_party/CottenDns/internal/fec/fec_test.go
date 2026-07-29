@@ -10,6 +10,7 @@ package fec
 import (
 	"bytes"
 	"fmt"
+	"math/rand"
 	"testing"
 )
 
@@ -74,6 +75,39 @@ func TestSurvives75PercentLoss(t *testing.T) {
 	}
 }
 
+// Super-FEC's upper supported operating point is 84% loss (just below the
+// default 85% hopeless-link ceiling). Verify reconstruction with actual shards,
+// not only the server's parity-selection arithmetic.
+func TestSurvives84PercentLoss(t *testing.T) {
+	for _, dataShards := range []int{1, 2, 4, 8} {
+		parity := ParityForLoss(dataShards, 0.84)
+		pkts := samplePackets(dataShards)
+		block, err := EncodePackets(pkts, parity)
+		if err != nil {
+			t.Fatalf("EncodePackets(N=%d,K=%d): %v", dataShards, parity, err)
+		}
+
+		total := dataShards + parity
+		drop := int(float64(total) * 0.84)
+		if total-drop < dataShards {
+			t.Fatalf("N=%d parity=%d leaves only %d shards", dataShards, parity, total-drop)
+		}
+		for i := 0; i < drop; i++ {
+			block.Shards[i] = nil
+		}
+
+		got, err := DecodePackets(block)
+		if err != nil {
+			t.Fatalf("N=%d parity=%d after 84%% loss: DecodePackets: %v", dataShards, parity, err)
+		}
+		for i := range pkts {
+			if !bytes.Equal(got[i], pkts[i]) {
+				t.Fatalf("N=%d packet %d mismatch after 84%% loss", dataShards, i)
+			}
+		}
+	}
+}
+
 func TestReorderAndPartialLossReconstructs(t *testing.T) {
 	pkts := samplePackets(6)
 	parity := 6
@@ -122,5 +156,92 @@ func TestParityForLossMonotonic(t *testing.T) {
 			t.Fatalf("parity should not decrease with loss: loss %.2f got %d after %d", loss, p, prev)
 		}
 		prev = p
+	}
+}
+
+func TestLossyNetworkRecoveryEffectiveness(t *testing.T) {
+	tests := []struct {
+		name        string
+		loss        float64
+		parity      int
+		minRecovery float64
+	}{
+		{
+			name:        "auto-fec-40-percent",
+			loss:        0.40,
+			parity:      ParityForLoss(4, 0.40),
+			minRecovery: 0.75,
+		},
+		{
+			name:        "super-fec-84-percent",
+			loss:        0.84,
+			parity:      ParityForLossTarget(4, 0.84, 0.90),
+			minRecovery: 0.85,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			source := samplePackets(4)
+			encoded, err := EncodePackets(source, tc.parity)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rng := rand.New(rand.NewSource(0xC077E))
+			const trials = 1000
+			recovered := 0
+			rawSurvived := 0
+			for trial := 0; trial < trials; trial++ {
+				block := &Block{
+					DataShards:   encoded.DataShards,
+					ParityShards: encoded.ParityShards,
+					ShardSize:    encoded.ShardSize,
+					Shards:       make([][]byte, len(encoded.Shards)),
+				}
+				rawOK := true
+				for i, shard := range encoded.Shards {
+					if rng.Float64() < tc.loss {
+						if i < encoded.DataShards {
+							rawOK = false
+						}
+						continue
+					}
+					block.Shards[i] = append([]byte(nil), shard...)
+				}
+				if rawOK {
+					rawSurvived++
+				}
+				got, decodeErr := DecodePackets(block)
+				if decodeErr != nil {
+					continue
+				}
+				ok := len(got) == len(source)
+				for i := range source {
+					ok = ok && bytes.Equal(got[i], source[i])
+				}
+				if ok {
+					recovered++
+				}
+			}
+			recoveryRate := float64(recovered) / trials
+			rawRate := float64(rawSurvived) / trials
+			if recoveryRate < tc.minRecovery {
+				t.Fatalf("recovery %.1f%% below %.1f%% target (loss=%.0f%% parity=%d)",
+					recoveryRate*100, tc.minRecovery*100, tc.loss*100, tc.parity)
+			}
+			if recoveryRate < rawRate+0.50 {
+				t.Fatalf("FEC improvement too small: recovery=%.1f%% raw=%.1f%%", recoveryRate*100, rawRate*100)
+			}
+		})
+	}
+}
+
+func TestSuperFECParityMeetsRecoveryTarget(t *testing.T) {
+	for _, loss := range []float64{0.75, 0.80, 0.84} {
+		parity := ParityForLossTarget(4, loss, 0.90)
+		probability := shardRecoveryProbability(4+parity, 4, 1-loss)
+		if probability < 0.90 {
+			t.Fatalf("loss=%.0f%% parity=%d recovery=%.3f, want >= 0.90", loss*100, parity, probability)
+		}
 	}
 }

@@ -9,9 +9,11 @@ package config
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"cottendns-go/internal/compression"
 )
@@ -72,6 +74,111 @@ MTU_TEST_TIMEOUT_RESOLVERS = 1.5
 	}
 	if cfg.ResolverMap["1.1.1.1"] != 5353 {
 		t.Fatalf("unexpected resolver port for 1.1.1.1: got=%d want=%d", cfg.ResolverMap["1.1.1.1"], 5353)
+	}
+}
+
+func TestAndroidEmbeddingDefaultsAndLimits(t *testing.T) {
+	cfg := defaultClientConfig()
+	if cfg.LegacySessionID || cfg.FastConnect {
+		t.Fatal("compatibility modes must remain opt-in")
+	}
+	if cfg.MaxActiveStreams != 2048 || cfg.LocalHandshakeTimeoutSeconds != 5 {
+		t.Fatalf("unexpected embedding defaults: streams=%d handshake=%v",
+			cfg.MaxActiveStreams, cfg.LocalHandshakeTimeoutSeconds)
+	}
+	if cfg.PathControllerMode != "unified" || !cfg.ComparablePathStriping {
+		t.Fatalf("unexpected path controller defaults: mode=%q striping=%v",
+			cfg.PathControllerMode, cfg.ComparablePathStriping)
+	}
+	if cfg.StartupMode != "resolvers" {
+		t.Fatalf("Android/engine startup mode=%q, want fresh resolver scan", cfg.StartupMode)
+	}
+
+	if cfg.LocalHandshakeTimeout() != 5*time.Second {
+		t.Fatalf("handshake duration=%v, want 5s", cfg.LocalHandshakeTimeout())
+	}
+}
+
+func TestLegacyLogStartupNormalizesToFreshResolverScan(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "client_config.toml")
+	if err := os.WriteFile(configPath, []byte(`
+DOMAINS = ["v.example.com"]
+ENCRYPTION_KEY = "secret"
+STARTUP_MODE = "logs"
+MTU_TEST_RETRIES_RESOLVERS = 2
+MTU_TEST_TIMEOUT_RESOLVERS = 1.5
+MTU_TEST_PARALLELISM_RESOLVERS = 7
+MTU_TEST_RETRIES_LOGS = 9
+MTU_TEST_TIMEOUT_LOGS = 9
+MTU_TEST_PARALLELISM_LOGS = 9
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "client_resolvers.txt"), []byte("1.1.1.1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadClientConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.StartupMode != "resolvers" {
+		t.Fatalf("legacy startup mode normalized to %q, want resolvers", cfg.StartupMode)
+	}
+	cfg.ApplyStartupModeMTU("logs")
+	if cfg.MTUTestRetries != 2 || cfg.MTUTestTimeout != 1.5 || cfg.MTUTestParallelism != 7 {
+		t.Fatalf("legacy log mode selected cached-scan parameters: retries=%d timeout=%v parallelism=%d",
+			cfg.MTUTestRetries, cfg.MTUTestTimeout, cfg.MTUTestParallelism)
+	}
+}
+
+func TestLoadClientConfigRejectsInvalidPathControllerMode(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "client_config.toml")
+	if err := os.WriteFile(configPath, []byte(`
+PROTOCOL_TYPE = "SOCKS5"
+DOMAINS = ["v.domain.com"]
+ENCRYPTION_KEY = "secret"
+PATH_CONTROLLER_MODE = "experimental"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "client_resolvers.txt"), []byte("8.8.8.8\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadClientConfig(configPath); err == nil {
+		t.Fatal("LoadClientConfig should reject an invalid PATH_CONTROLLER_MODE")
+	}
+}
+
+func TestLoadClientConfigPerResolverTransportPaths(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "client_config.toml")
+	if err := os.WriteFile(configPath, []byte(`
+PROTOCOL_TYPE = "socks5"
+DOMAINS = ["v.domain.com"]
+ENCRYPTION_KEY = "secret"
+RESOLVER_TRANSPORT = "auto"
+RESOLVER_TRANSPORT_PATHS = { "1.1.1.1" = "TCP", "8.8.8.8:53" = "doh" }
+RESOLVER_TRANSPORT_BACKGROUND_SCAN_INTERVAL_SECONDS = 2
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "client_resolvers.txt"), []byte("1.1.1.1\n8.8.8.8\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadClientConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ResolverTransportPaths["1.1.1.1"] != "tcp" ||
+		cfg.ResolverTransportPaths["8.8.8.8:53"] != "doh" {
+		t.Fatalf("unexpected normalized transport paths: %#v", cfg.ResolverTransportPaths)
+	}
+	if cfg.ResolverTransportBackgroundScanIntervalSec != 5 {
+		t.Fatalf("background interval=%v, want clamped 5", cfg.ResolverTransportBackgroundScanIntervalSec)
 	}
 }
 
@@ -218,17 +325,154 @@ QUERY_TYPES = ["TXT"]
 	if cfg.UploadPacketDuplicationCount != 2 {
 		t.Fatalf("explicit upload duplication should win over preset, got %d", cfg.UploadPacketDuplicationCount)
 	}
-	if cfg.DownloadPacketDuplicationCount != 3 {
-		t.Fatalf("speed preset download duplication = %d, want 3", cfg.DownloadPacketDuplicationCount)
-	}
-	if cfg.SessionInitRacingCount != 5 {
-		t.Fatalf("speed preset session init racing count = %d, want 5", cfg.SessionInitRacingCount)
+	if cfg.DownloadPacketDuplicationCount != 1 {
+		t.Fatalf("speed preset download duplication = %d, want adaptive floor 1", cfg.DownloadPacketDuplicationCount)
 	}
 	if !cfg.AdaptiveDuplication || cfg.MTUProbeSamples != 4 || cfg.MTUMaxLoss != 0.25 {
 		t.Fatalf("speed preset loss controls not applied: adaptive=%v samples=%d maxLoss=%v", cfg.AdaptiveDuplication, cfg.MTUProbeSamples, cfg.MTUMaxLoss)
 	}
 	if len(cfg.QueryTypes) != 1 || cfg.QueryTypes[0] != "TXT" {
 		t.Fatalf("explicit query types should win over preset, got %+v", cfg.QueryTypes)
+	}
+}
+
+func TestLoadClientConfigCountryPresets(t *testing.T) {
+	tests := []struct {
+		name            string
+		wantPreset      string
+		wantLabelLength int
+		wantParallelism int
+		wantScanSeconds float64
+	}{
+		{name: "iran", wantPreset: "iran", wantLabelLength: 42, wantParallelism: 48, wantScanSeconds: 45},
+		{name: "china", wantPreset: "china", wantLabelLength: 42, wantParallelism: 100, wantScanSeconds: 45},
+		{name: "russia", wantPreset: "russia", wantLabelLength: 63, wantParallelism: 100, wantScanSeconds: 30},
+		{name: "venezuela", wantPreset: "venezuela", wantLabelLength: 42, wantParallelism: 100, wantScanSeconds: 45},
+		{name: "cuba", wantPreset: "cuba", wantLabelLength: 42, wantParallelism: 24, wantScanSeconds: 90},
+		{name: "africa", wantPreset: "low-bandwidth", wantLabelLength: 42, wantParallelism: 24, wantScanSeconds: 90},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "client_config.toml")
+			resolversPath := filepath.Join(dir, "client_resolvers.txt")
+			configText := fmt.Sprintf(`
+CONFIG_PRESET = %q
+PROTOCOL_TYPE = "SOCKS5"
+DOMAINS = ["v.domain.com"]
+ENCRYPTION_KEY = "secret"
+QUERY_TYPES = ["TXT"]
+`, tt.name)
+			if err := os.WriteFile(configPath, []byte(configText), 0o644); err != nil {
+				t.Fatalf("WriteFile config failed: %v", err)
+			}
+			if err := os.WriteFile(resolversPath, []byte("8.8.8.8\n"), 0o644); err != nil {
+				t.Fatalf("WriteFile resolvers failed: %v", err)
+			}
+
+			cfg, err := LoadClientConfig(configPath)
+			if err != nil {
+				t.Fatalf("LoadClientConfig returned error: %v", err)
+			}
+			if cfg.ConfigPreset != tt.wantPreset {
+				t.Fatalf("preset=%q, want %q", cfg.ConfigPreset, tt.wantPreset)
+			}
+			if cfg.ResolverTransport != "auto" {
+				t.Fatalf("transport=%q, want UDP-first auto", cfg.ResolverTransport)
+			}
+			if cfg.QNameLabelLength != tt.wantLabelLength {
+				t.Fatalf("label length=%d, want %d", cfg.QNameLabelLength, tt.wantLabelLength)
+			}
+			if cfg.MTUTestParallelismResolvers != tt.wantParallelism {
+				t.Fatalf("parallelism=%d, want %d", cfg.MTUTestParallelismResolvers, tt.wantParallelism)
+			}
+			if cfg.ResolverTransportBackgroundScanIntervalSec != tt.wantScanSeconds {
+				t.Fatalf("scan interval=%v, want %v", cfg.ResolverTransportBackgroundScanIntervalSec, tt.wantScanSeconds)
+			}
+			if cfg.UploadPacketDuplicationCount != 1 || cfg.DownloadPacketDuplicationCount != 1 {
+				t.Fatalf(
+					"healthy duplication floors=%d/%d, want 1/1",
+					cfg.UploadPacketDuplicationCount,
+					cfg.DownloadPacketDuplicationCount,
+				)
+			}
+			if !cfg.AdaptiveDuplication || !cfg.ResolverIgnoreInjectedNXDOMAIN {
+				t.Fatalf(
+					"hostile-network protections missing: adaptive=%v poison=%v",
+					cfg.AdaptiveDuplication,
+					cfg.ResolverIgnoreInjectedNXDOMAIN,
+				)
+			}
+		})
+	}
+}
+
+func TestLoadClientCountryPresetPreservesExplicitValues(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "client_config.toml")
+	resolversPath := filepath.Join(dir, "client_resolvers.txt")
+	if err := os.WriteFile(configPath, []byte(`
+CONFIG_PRESET = "iran"
+DOMAINS = ["v.domain.com"]
+ENCRYPTION_KEY = "secret"
+RESOLVER_TRANSPORT = "tcp"
+QNAME_LABEL_LENGTH = 63
+UPLOAD_PACKET_DUPLICATION_COUNT = 2
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile config failed: %v", err)
+	}
+	if err := os.WriteFile(resolversPath, []byte("8.8.8.8\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile resolvers failed: %v", err)
+	}
+
+	cfg, err := LoadClientConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadClientConfig returned error: %v", err)
+	}
+	if cfg.ResolverTransport != "tcp" || cfg.QNameLabelLength != 63 ||
+		cfg.UploadPacketDuplicationCount != 2 {
+		t.Fatalf(
+			"explicit values lost: transport=%q label=%d duplication=%d",
+			cfg.ResolverTransport,
+			cfg.QNameLabelLength,
+			cfg.UploadPacketDuplicationCount,
+		)
+	}
+}
+
+func TestBundledCountryPresetFilesLoad(t *testing.T) {
+	tests := map[string]string{
+		"client_config.iran.toml":          "iran",
+		"client_config.china.toml":         "china",
+		"client_config.russia.toml":        "russia",
+		"client_config.venezuela.toml":     "venezuela",
+		"client_config.cuba.toml":          "cuba",
+		"client_config.low-bandwidth.toml": "low-bandwidth",
+	}
+	for filename, wantPreset := range tests {
+		t.Run(wantPreset, func(t *testing.T) {
+			resolverPath, err := filepath.Abs(filepath.Join("..", "..", "client_resolvers.simple"))
+			if err != nil {
+				t.Fatalf("resolve bundled resolver sample: %v", err)
+			}
+			cfg, err := LoadClientConfigWithOverrides(
+				filepath.Join("..", "..", filename),
+				ClientConfigOverrides{
+					ResolversFilePath: &resolverPath,
+					Values:            map[string]any{"EncryptionKey": "preset-test-key"},
+				},
+			)
+			if err != nil {
+				t.Fatalf("LoadClientConfig(%s): %v", filename, err)
+			}
+			if cfg.ConfigPreset != wantPreset {
+				t.Fatalf("%s preset=%q, want %q", filename, cfg.ConfigPreset, wantPreset)
+			}
+			if cfg.ResolverTransport != "auto" {
+				t.Fatalf("%s transport=%q, want UDP-first auto", filename, cfg.ResolverTransport)
+			}
+		})
 	}
 }
 
@@ -499,5 +743,20 @@ func TestClientConfigFlagBinderBuildsOverridesForSetFlagsOnly(t *testing.T) {
 	}
 	if _, exists := overrides.Values["MaxUploadMTU"]; exists {
 		t.Fatalf("did not expect unset flag to appear in overrides: %#v", overrides.Values["MaxUploadMTU"])
+	}
+}
+
+func TestMTUBackgroundParallelismDefaultAndClamp(t *testing.T) {
+	if got := defaultClientConfig().MTUBackgroundParallelism; got != 1 {
+		t.Fatalf("default MTU_BACKGROUND_PARALLELISM = %d, want 1", got)
+	}
+	for _, tc := range []struct{ in, want int }{
+		{0, 1}, {-3, 1}, {1, 1}, {16, 16}, {100, 100}, {5000, 100},
+	} {
+		cfg := ClientConfig{MTUBackgroundParallelism: tc.in}
+		got := clampInt(defaultIntBelow(cfg.MTUBackgroundParallelism, 1, 1), 1, 100)
+		if got != tc.want {
+			t.Fatalf("clamp(%d) = %d, want %d", tc.in, got, tc.want)
+		}
 	}
 }

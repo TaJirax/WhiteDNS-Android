@@ -7,7 +7,7 @@
 // server_policy.go — client-side application of the ceilings a server states in
 // SESSION_ACCEPT.
 //
-// A server cannot make a client behave, but it can say what it will tolerate,
+// The server cannot make a client behave, but it can say what it will tolerate,
 // and a cooperating client clamps itself. This matters on a shared public
 // server, where one client configured with a huge ARQ window or a very
 // aggressive ping interval otherwise takes a disproportionate share.
@@ -17,9 +17,9 @@
 // reads the compression threshold, the ping manager reads its interval).
 // Mutating it when SESSION_ACCEPT lands -- which happens on the init collector
 // goroutine while those readers are already running -- would be a data race.
-// The policy is published once through an atomic pointer and the governed
-// values are clamped where they are read, so no existing reader changes its
-// synchronization.
+// Instead the policy is published once through an atomic pointer and the
+// governed values are clamped where they are read, so no existing reader
+// changes its synchronization.
 //
 // A server that configures no ceilings sends no policy block, the pointer stays
 // nil, and every accessor returns the configured value untouched.
@@ -34,12 +34,14 @@ import (
 )
 
 // applyServerClientPolicy publishes any policy carried by a SESSION_ACCEPT
-// payload. The block sits after the base payload at whichever session-ID width
-// this build runs in, which DecodeSessionAcceptPolicy reads from the same
-// global that ConfigureLegacySessionID set at startup -- so this works whether
-// the app is pointed at a CottenDns server or a legacy MasterDNS/StormDNS one.
-func (c *Client) applyServerClientPolicy(payload []byte) {
-	policy, ok := VpnProto.DecodeSessionAcceptPolicy(payload)
+// payload. Absent or truncated blocks are simply "no ceilings stated"; they are
+// not an error, because a policy-less server is the normal case.
+func (c *Client) applyServerClientPolicy(payload []byte, legacySessionID ...bool) {
+	legacy := false
+	if len(legacySessionID) > 0 {
+		legacy = legacySessionID[0]
+	}
+	policy, ok := VpnProto.DecodeSessionAcceptPolicy(payload, legacy)
 	if !ok {
 		// Clear rather than keep what we had. Sessions are re-established over
 		// the client's lifetime, so an operator who removes the ceilings and
@@ -76,10 +78,49 @@ func (c *Client) applyServerClientPolicy(payload []byte) {
 // goroutine before sessionReady is set, so this write lands before the send
 // path can read it.
 func (c *Client) refreshPolicyDerivedState() {
-	if c == nil || c.syncedUploadMTU <= 0 {
+	if c == nil {
 		return
 	}
+	if c.discoveredUploadMTU <= 0 {
+		c.discoveredUploadMTU = c.syncedUploadMTU
+	}
+	if c.discoveredDownloadMTU <= 0 {
+		c.discoveredDownloadMTU = c.syncedDownloadMTU
+	}
+	c.syncedUploadMTU = c.effectivePolicyMTU(c.discoveredUploadMTU, true)
+	c.syncedDownloadMTU = c.effectivePolicyMTU(c.discoveredDownloadMTU, false)
+	c.tunnelRX_TX_Workers = c.effectiveRxTxWorkers()
+	if c.syncedUploadMTU <= 0 {
+		return
+	}
+	c.safeUploadMTU = computeSafeUploadMTU(c.syncedUploadMTU, c.mtuCryptoOverhead)
 	c.maxPackedBlocks = VpnProto.CalculateMaxPackedBlocks(c.syncedUploadMTU, 80, c.effectiveMaxPacketsPerBatch())
+}
+
+func (c *Client) effectivePolicyMTU(discovered int, upload bool) int {
+	if discovered <= 0 {
+		return discovered
+	}
+	policy := c.serverPolicySnapshot()
+	if policy == nil {
+		return discovered
+	}
+	ceiling := policy.MaxDownloadMTU
+	if upload {
+		ceiling = policy.MaxUploadMTU
+	}
+	return policyMaxInt(discovered, ceiling)
+}
+
+func (c *Client) effectiveRxTxWorkers() int {
+	workers := c.cfg.RX_TX_Workers
+	if workers < 1 {
+		workers = 1
+	}
+	if policy := c.serverPolicySnapshot(); policy != nil {
+		workers = policyMaxInt(workers, policy.MaxRxTxWorkers)
+	}
+	return workers
 }
 
 // serverPolicySnapshot returns the active policy, or nil when the server stated
@@ -119,8 +160,8 @@ func (c *Client) effectiveARQWindowSize() int {
 	return c.cfg.ARQWindowSize
 }
 
-// effectiveARQDataNackMaxGap is the NACK scan span after any server ceiling, and
-// after re-establishing the invariant config enforces at load time: the gap
+// effectiveARQDataNackMaxGap is the NACK scan span after any server ceiling,
+// and after re-establishing the invariant config enforces at load time: the gap
 // stays at or below a quarter of the window.
 //
 // That re-clamp is the point of this function. Config sizes the gap against the

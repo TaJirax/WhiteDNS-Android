@@ -29,15 +29,27 @@ var ErrSessionTableFull = errors.New("session table full")
 const (
 	maxServerSessionID    = 65535
 	maxServerSessionSlots = 65535
-	sessionInitDataSize   = 10
-	minSessionMTU         = 10
-	maxSessionMTU         = 4096
+	// maxLegacySessionID is the largest ID a MasterDNS/StormDNS client can
+	// represent in its one-byte session field. The ID space is split at this
+	// boundary — legacy sessions below it, native sessions above — so that the
+	// parser can tell the two header layouts apart by the ID they decode to
+	// (see vpnproto.parseFrom). Native clients lose the first 255 IDs, which is
+	// immaterial against a 65535 space.
+	maxLegacySessionID  = 255
+	sessionInitDataSize = 10
+	minSessionMTU       = 10
+	maxSessionMTU       = 4096
 )
 
 type sessionRecord struct {
 	mu sync.RWMutex
 
-	ID                                  uint16
+	ID uint16
+	// LegacySessionID records that this session was opened by a client of the
+	// MasterDNS/StormDNS lineage, which spends one header byte on the session
+	// ID instead of two. Every reply on this session is built back in that
+	// format.
+	LegacySessionID                     bool
 	Cookie                              uint8
 	ResponseMode                        uint8
 	UploadCompression                   uint8
@@ -67,6 +79,7 @@ type sessionRecord struct {
 	StreamQueueCap                  int
 	MaxStreams                      int
 	streamCapRejections             *atomic.Uint64
+	activeStreamCounter             *atomic.Uint64
 	StreamsMu                       sync.RWMutex
 	RecentlyClosed                  map[uint16]recentlyClosedStreamRecord
 	RecentlyClosedTTL               time.Duration
@@ -121,6 +134,7 @@ func getEffectivePriority(packetType uint8, basePriority int) int {
 
 type sessionRuntimeView struct {
 	ID                  uint16
+	LegacySessionID     bool
 	Cookie              uint8
 	ResponseMode        uint8
 	ResponseBase64      bool
@@ -131,9 +145,10 @@ type sessionRuntimeView struct {
 }
 
 type closedSessionRecord struct {
-	Cookie       uint8
-	ResponseMode uint8
-	ExpiresAt    time.Time
+	Cookie          uint8
+	ResponseMode    uint8
+	LegacySessionID bool
+	ExpiresAt       time.Time
 }
 
 type sessionLookupState uint8
@@ -145,9 +160,10 @@ const (
 )
 
 type sessionLookupResult struct {
-	Cookie       uint8
-	ResponseMode uint8
-	State        sessionLookupState
+	Cookie          uint8
+	ResponseMode    uint8
+	LegacySessionID bool
+	State           sessionLookupState
 }
 
 type sessionValidationResult struct {
@@ -169,12 +185,19 @@ type idleDeferredCleanup struct {
 
 type sessionStore struct {
 	mu                     sync.RWMutex
-	nextID                 uint16
+	legacyNextID           uint16
+	nativeNextID           uint16
 	activeCount            uint16
+	activeNative           uint16
+	activeLegacy           uint16
 	nextReuseSweepUnixNano int64
 	cookieBytes            [32]byte
 	cookieIndex            int
 	byID                   [maxServerSessionID + 1]*sessionRecord
+	// liveByID mirrors active byID entries for the packet hot path. Allocation,
+	// cleanup, signature reuse and recently-closed bookkeeping remain under mu;
+	// established packet lookup and cookie validation need only an atomic load.
+	liveByID [maxServerSessionID + 1]atomic.Pointer[sessionRecord]
 	// activeIDs is the set of currently-allocated session IDs. It lets the
 	// background sweeps iterate only live sessions instead of scanning the full
 	// 65536-slot byID array, which matters now that the session cap is uint16.
@@ -187,14 +210,21 @@ type sessionStore struct {
 	// maxActiveSessions caps how many sessions may be live at once. 0 means fall
 	// back to the hard slot ceiling (maxServerSessionSlots).
 	maxActiveSessions int
-	sessionInitTTL    time.Duration
-	recentlyClosedTTL time.Duration
-	recentlyClosedCap int
+	// maxClientUploadMTU/maxClientDownloadMTU are the operator's ceilings on
+	// what a client may request in SESSION_INIT. Zero means no ceiling. Set via
+	// setClientMTUCeilings rather than the positional options list, which is
+	// already long enough that another anonymous int would invite mix-ups.
+	maxClientUploadMTU   int
+	maxClientDownloadMTU int
+	sessionInitTTL       time.Duration
+	recentlyClosedTTL    time.Duration
+	recentlyClosedCap    int
 	// streamCapRejections counts every getOrCreateStream call that was
 	// refused because MaxStreams had been reached. The pointer is shared
 	// with each sessionRecord so the cap-enforcement path can increment it
 	// without holding a back-reference to the store.
 	streamCapRejections atomic.Uint64
+	activeStreams       atomic.Uint64
 }
 
 // streamCapRejectionsCount returns the running count of stream-cap rejections
@@ -249,7 +279,8 @@ func newSessionStore(orphanQueueCap int, streamQueueCap int, options ...any) *se
 		bySig:                make(map[[sessionInitDataSize]byte]uint16, 64),
 		recentClosed:         make(map[uint16]closedSessionRecord, 32),
 		cookieIndex:          32,
-		nextID:               1,
+		legacyNextID:         1,
+		nativeNextID:         maxLegacySessionID + 1,
 		orphanQueueCap:       orphanQueueCap,
 		streamQueueCap:       streamQueueCap,
 		maxStreamsPerSession: maxStreamsPerSession,
@@ -260,7 +291,7 @@ func newSessionStore(orphanQueueCap int, streamQueueCap int, options ...any) *se
 	}
 }
 
-func (s *sessionStore) findOrCreate(payload []byte, uploadCompressionType uint8, downloadCompressionType uint8, maxPacketsPerBatch int) (*sessionRecord, bool, error) {
+func (s *sessionStore) findOrCreate(payload []byte, uploadCompressionType uint8, downloadCompressionType uint8, maxPacketsPerBatch int, legacy bool) (*sessionRecord, bool, error) {
 	if len(payload) != sessionInitDataSize || !isValidSessionResponseMode(payload[0]) {
 		return nil, false, nil
 	}
@@ -277,7 +308,11 @@ func (s *sessionStore) findOrCreate(payload []byte, uploadCompressionType uint8,
 
 	if sessionID, ok := s.bySig[signature]; ok {
 		if existing := s.byID[sessionID]; existing != nil {
-			if nowUnixNano <= existing.reuseUntilUnixNano {
+			// The signature is derived from the init payload alone, which is
+			// identical in both wire formats, so it can collide across client
+			// generations. Reusing a record of the other format would hand the
+			// client a session ID it cannot express, so only reuse on a match.
+			if nowUnixNano <= existing.reuseUntilUnixNano && existing.LegacySessionID == legacy {
 				existing.setLastActivityUnixNano(nowUnixNano)
 				return existing, true, nil
 			}
@@ -285,13 +320,14 @@ func (s *sessionStore) findOrCreate(payload []byte, uploadCompressionType uint8,
 		delete(s.bySig, signature)
 	}
 
-	slot := s.allocateSlotLocked()
+	slot := s.allocateSlotLocked(legacy)
 	if slot < 0 {
 		return nil, false, ErrSessionTableFull
 	}
 
 	record := &sessionRecord{
 		ID:                  uint16(slot),
+		LegacySessionID:     legacy,
 		ResponseMode:        payload[0],
 		CreatedAt:           now,
 		ReuseUntil:          now.Add(s.sessionInitTTL),
@@ -301,6 +337,7 @@ func (s *sessionStore) findOrCreate(payload []byte, uploadCompressionType uint8,
 		StreamQueueCap:      s.streamQueueCap,
 		MaxStreams:          s.maxStreamsPerSession,
 		streamCapRejections: &s.streamCapRejections,
+		activeStreamCounter: &s.activeStreams,
 		RecentlyClosed:      make(map[uint16]recentlyClosedStreamRecord, 8),
 		RecentlyClosedTTL:   s.recentlyClosedTTL,
 		RecentlyClosedCap:   s.recentlyClosedCap,
@@ -317,18 +354,37 @@ func (s *sessionStore) findOrCreate(payload []byte, uploadCompressionType uint8,
 		binary.BigEndian.Uint16(payload[2:4]),
 		binary.BigEndian.Uint16(payload[4:6]),
 		maxPacketsPerBatch,
+		s.maxClientUploadMTU,
+		s.maxClientDownloadMTU,
 	)
 	copy(record.VerifyCode[:], payload[6:10])
 	record.Cookie = s.randomCookieLocked()
 
 	s.byID[slot] = record
+	s.liveByID[slot].Store(record)
 	s.activeIDs[uint16(slot)] = struct{}{}
 	s.activeCount++
+	if legacy {
+		s.activeLegacy++
+		s.legacyNextID = nextSessionIDInRange(uint16(slot), 1, maxLegacySessionID)
+	} else {
+		s.activeNative++
+		s.nativeNextID = nextSessionIDInRange(uint16(slot), maxLegacySessionID+1, maxServerSessionID)
+	}
 	s.bySig[signature] = uint16(slot)
 	s.updateNextReuseSweepLocked(record.reuseUntilUnixNano)
 	delete(s.recentClosed, uint16(slot))
-	s.nextID = uint16(nextSessionID(uint16(slot)))
 	return record, false, nil
+}
+
+// setClientMTUCeilings bounds what a client may request in SESSION_INIT. Zero
+// for either value leaves that dimension uncapped. Call before serving.
+func (s *sessionStore) setClientMTUCeilings(maxUploadMTU int, maxDownloadMTU int) {
+	if s == nil {
+		return
+	}
+	s.maxClientUploadMTU = maxUploadMTU
+	s.maxClientDownloadMTU = maxDownloadMTU
 }
 
 func (s *sessionStore) expireReuseLocked(nowUnixNano int64) {
@@ -355,9 +411,10 @@ func (s *sessionStore) expireReuseLocked(nowUnixNano int64) {
 }
 
 func (s *sessionStore) Get(sessionID uint16) (*sessionRecord, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	record := s.byID[sessionID]
+	if s == nil || sessionID == 0 {
+		return nil, false
+	}
+	record := s.liveByID[sessionID].Load()
 	if record == nil || record.isClosed() {
 		return nil, false
 	}
@@ -369,29 +426,31 @@ func (s *sessionStore) HasActive(sessionID uint16) bool {
 		return false
 	}
 
-	s.mu.RLock()
-	record := s.byID[sessionID]
-	s.mu.RUnlock()
+	record := s.liveByID[sessionID].Load()
 	return record != nil && !record.isClosed()
 }
 
 func (s *sessionStore) Lookup(sessionID uint16) (sessionLookupResult, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if record := s.byID[sessionID]; record != nil {
+	if s == nil || sessionID == 0 {
+		return sessionLookupResult{}, false
+	}
+	if record := s.liveByID[sessionID].Load(); record != nil && !record.isClosed() {
 		return sessionLookupResult{
-			Cookie:       record.Cookie,
-			ResponseMode: record.ResponseMode,
-			State:        sessionLookupActive,
+			Cookie:          record.Cookie,
+			ResponseMode:    record.ResponseMode,
+			LegacySessionID: record.LegacySessionID,
+			State:           sessionLookupActive,
 		}, true
 	}
 
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if record, ok := s.recentClosed[sessionID]; ok {
 		return sessionLookupResult{
-			Cookie:       record.Cookie,
-			ResponseMode: record.ResponseMode,
-			State:        sessionLookupClosed,
+			Cookie:          record.Cookie,
+			ResponseMode:    record.ResponseMode,
+			LegacySessionID: record.LegacySessionID,
+			State:           sessionLookupClosed,
 		}, true
 	}
 
@@ -399,13 +458,16 @@ func (s *sessionStore) Lookup(sessionID uint16) (sessionLookupResult, bool) {
 }
 
 func (s *sessionStore) ValidateAndTouch(sessionID uint16, cookie uint8, now time.Time) sessionValidationResult {
-	s.mu.RLock()
-	if record := s.byID[sessionID]; record != nil {
+	if s == nil || sessionID == 0 {
+		return sessionValidationResult{}
+	}
+	if record := s.liveByID[sessionID].Load(); record != nil && !record.isClosed() {
 		result := sessionValidationResult{
 			Lookup: sessionLookupResult{
-				Cookie:       record.Cookie,
-				ResponseMode: record.ResponseMode,
-				State:        sessionLookupActive,
+				Cookie:          record.Cookie,
+				ResponseMode:    record.ResponseMode,
+				LegacySessionID: record.LegacySessionID,
+				State:           sessionLookupActive,
 			},
 			Known: true,
 			Valid: record.Cookie == cookie,
@@ -414,20 +476,21 @@ func (s *sessionStore) ValidateAndTouch(sessionID uint16, cookie uint8, now time
 			view := record.runtimeView()
 			result.Active = &view
 		}
-		s.mu.RUnlock()
 		if result.Valid {
 			record.setLastActivity(now)
 		}
 		return result
 	}
 
+	s.mu.RLock()
 	if record, ok := s.recentClosed[sessionID]; ok {
 		s.mu.RUnlock()
 		return sessionValidationResult{
 			Lookup: sessionLookupResult{
-				Cookie:       record.Cookie,
-				ResponseMode: record.ResponseMode,
-				State:        sessionLookupClosed,
+				Cookie:          record.Cookie,
+				ResponseMode:    record.ResponseMode,
+				LegacySessionID: record.LegacySessionID,
+				State:           sessionLookupClosed,
 			},
 			Known: true,
 			Valid: false,
@@ -447,6 +510,7 @@ func (s *sessionStore) Close(sessionID uint16, now time.Time, retention time.Dur
 		return nil, false
 	}
 	record.markClosed()
+	s.liveByID[sessionID].Store(nil)
 
 	delete(s.bySig, record.Signature)
 	s.byID[sessionID] = nil
@@ -454,11 +518,13 @@ func (s *sessionStore) Close(sessionID uint16, now time.Time, retention time.Dur
 	if s.activeCount > 0 {
 		s.activeCount--
 	}
+	s.decrementFormatCountLocked(record)
 	if retention > 0 {
 		s.recentClosed[sessionID] = closedSessionRecord{
-			Cookie:       record.Cookie,
-			ResponseMode: record.ResponseMode,
-			ExpiresAt:    now.Add(retention),
+			Cookie:          record.Cookie,
+			ResponseMode:    record.ResponseMode,
+			LegacySessionID: record.LegacySessionID,
+			ExpiresAt:       now.Add(retention),
 		}
 	} else {
 		delete(s.recentClosed, sessionID)
@@ -502,15 +568,18 @@ func (s *sessionStore) Cleanup(now time.Time, idleTimeout time.Duration, closedR
 
 		delete(s.bySig, record.Signature)
 		s.byID[sessionID] = nil
+		s.liveByID[sessionID].Store(nil)
 		delete(s.activeIDs, sessionID)
 		if s.activeCount > 0 {
 			s.activeCount--
 		}
+		s.decrementFormatCountLocked(record)
 		if closedRetention > 0 {
 			s.recentClosed[uint16(sessionID)] = closedSessionRecord{
-				Cookie:       record.Cookie,
-				ResponseMode: record.ResponseMode,
-				ExpiresAt:    now.Add(closedRetention),
+				Cookie:          record.Cookie,
+				ResponseMode:    record.ResponseMode,
+				LegacySessionID: record.LegacySessionID,
+				ExpiresAt:       now.Add(closedRetention),
 			}
 		}
 		record.markClosed()
@@ -540,18 +609,28 @@ func (s *sessionStore) activeRecordsSnapshot() []*sessionRecord {
 	return records
 }
 
-func (s *sessionStore) operationalCounts() (sessions uint64, streams uint64) {
-	for _, record := range s.activeRecordsSnapshot() {
-		sessions++
-		record.StreamsMu.RLock()
-		for id := range record.Streams {
-			if id != 0 {
-				streams++
-			}
-		}
-		record.StreamsMu.RUnlock()
+func (s *sessionStore) operationalCounts() (sessions uint64, native uint64, legacy uint64, streams uint64) {
+	if s == nil {
+		return 0, 0, 0, 0
 	}
-	return sessions, streams
+	s.mu.RLock()
+	sessions = uint64(s.activeCount)
+	native = uint64(s.activeNative)
+	legacy = uint64(s.activeLegacy)
+	s.mu.RUnlock()
+	return sessions, native, legacy, s.activeStreams.Load()
+}
+
+func (s *sessionStore) decrementFormatCountLocked(record *sessionRecord) {
+	if record != nil && record.LegacySessionID {
+		if s.activeLegacy > 0 {
+			s.activeLegacy--
+		}
+		return
+	}
+	if s.activeNative > 0 {
+		s.activeNative--
+	}
 }
 
 func (s *sessionStore) SweepTerminalStreams(now time.Time, retention time.Duration) {
@@ -566,7 +645,14 @@ func (s *sessionStore) SweepRecentlyClosedStreams(now time.Time) {
 	}
 }
 
-func (s *sessionStore) allocateSlotLocked() int {
+// allocateSlotLocked picks a free session ID from the half of the space that
+// matches the client's header format: 1..255 for legacy MasterDNS/StormDNS
+// clients, which cannot express anything wider, and 256..65535 for native
+// clients. Keeping the ranges disjoint is what lets the parser resolve the two
+// header layouts, so neither branch may borrow from the other — a legacy client
+// gets ErrSessionTableFull once 255 of them are connected even while the native
+// range is empty.
+func (s *sessionStore) allocateSlotLocked(legacy bool) int {
 	cap := s.maxActiveSessions
 	if cap <= 0 || cap > maxServerSessionSlots {
 		cap = maxServerSessionSlots
@@ -575,16 +661,24 @@ func (s *sessionStore) allocateSlotLocked() int {
 		return -1
 	}
 
-	start := int(s.nextID)
-	if start < 1 || start > maxServerSessionID {
-		start = 1
+	low, high := maxLegacySessionID+1, maxServerSessionID
+	if legacy {
+		low, high = 1, maxLegacySessionID
 	}
-	for slot := start; slot <= maxServerSessionID; slot++ {
+
+	start := int(s.nativeNextID)
+	if legacy {
+		start = int(s.legacyNextID)
+	}
+	if start < low || start > high {
+		start = low
+	}
+	for slot := start; slot <= high; slot++ {
 		if s.byID[slot] == nil {
 			return slot
 		}
 	}
-	for slot := 1; slot < start; slot++ {
+	for slot := low; slot < start; slot++ {
 		if s.byID[slot] == nil {
 			return slot
 		}
@@ -621,6 +715,20 @@ func clampMTU(value uint16) uint16 {
 	}
 
 	return value
+}
+
+// clampMTUCeiling applies an operator-configured ceiling on top of the protocol
+// bounds already applied by clampMTU. A ceiling of zero or less means none was
+// configured. The result never falls below minSessionMTU: a ceiling set absurdly
+// low must not produce a session too small to carry a packet.
+func clampMTUCeiling(value uint16, ceiling int) uint16 {
+	if ceiling <= 0 || int(value) <= ceiling {
+		return value
+	}
+	if ceiling < minSessionMTU {
+		return minSessionMTU
+	}
+	return uint16(ceiling)
 }
 
 func isValidSessionResponseMode(value uint8) bool {
@@ -690,12 +798,27 @@ func nextSessionID(current uint16) uint16 {
 	return current + 1
 }
 
-func (r *sessionRecord) applyMTUFromSessionInit(uploadMTU uint16, downloadMTU uint16, maxPacketsPerBatch int) {
+func nextSessionIDInRange(current uint16, low int, high int) uint16 {
+	next := int(current) + 1
+	if next < low || next > high {
+		next = low
+	}
+	return uint16(next)
+}
+
+// applyMTUFromSessionInit sets the session MTUs from what the client asked for
+// in SESSION_INIT, bounded by the server's ceilings.
+//
+// The download ceiling is enforced here rather than merely advertised because
+// it directly sizes every response the server builds. Upload MTU is retained
+// for accounting while compatible clients apply that ceiling to their query
+// construction. A ceiling of zero means the operator set none.
+func (r *sessionRecord) applyMTUFromSessionInit(uploadMTU uint16, downloadMTU uint16, maxPacketsPerBatch int, maxUploadMTU int, maxDownloadMTU int) {
 	if r == nil {
 		return
 	}
-	r.UploadMTU = clampMTU(uploadMTU)
-	r.DownloadMTU = clampMTU(downloadMTU)
+	r.UploadMTU = clampMTUCeiling(clampMTU(uploadMTU), maxUploadMTU)
+	r.DownloadMTU = clampMTUCeiling(clampMTU(downloadMTU), maxDownloadMTU)
 	r.DownloadMTUBytes = int(r.DownloadMTU)
 	r.MaxPackedBlocks = VpnProto.CalculateMaxPackedBlocks(r.DownloadMTUBytes, 80, maxPacketsPerBatch)
 }
@@ -703,6 +826,7 @@ func (r *sessionRecord) applyMTUFromSessionInit(uploadMTU uint16, downloadMTU ui
 func (r *sessionRecord) runtimeView() sessionRuntimeView {
 	return sessionRuntimeView{
 		ID:                  r.ID,
+		LegacySessionID:     r.LegacySessionID,
 		Cookie:              r.Cookie,
 		ResponseMode:        r.ResponseMode,
 		ResponseBase64:      r.ResponseMode == mtuProbeModeBase64,
@@ -779,6 +903,9 @@ func (r *sessionRecord) getOrCreateStream(streamID uint16, arqConfig arq.Config,
 	s := NewStreamServer(streamID, r.ID, arqConfig, localConn, r.DownloadMTUBytes, r.StreamQueueCap, logger)
 	s.onClosed = r.onStreamClosed
 	r.Streams[streamID] = s
+	if streamID != 0 && r.activeStreamCounter != nil {
+		r.activeStreamCounter.Add(1)
+	}
 
 	// Active streams tracking: keep sorted for Round-Robin predictability
 	found := slices.Contains(r.ActiveStreams, streamID)
@@ -928,7 +1055,11 @@ func (r *sessionRecord) removeStream(streamID uint16, now time.Time, suppressOrp
 		return
 	}
 	r.StreamsMu.Lock()
+	_, existed := r.Streams[streamID]
 	delete(r.Streams, streamID)
+	if existed && r.activeStreamCounter != nil {
+		r.activeStreamCounter.Add(^uint64(0))
+	}
 
 	r.removeActiveStreamLocked(streamID)
 	r.StreamsMu.Unlock()
@@ -1024,10 +1155,19 @@ func (r *sessionRecord) closeAllStreams(reason string) {
 	}
 
 	r.StreamsMu.Lock()
+	dataStreams := 0
+	for id := range r.Streams {
+		if id != 0 {
+			dataStreams++
+		}
+	}
 	clear(r.Streams)
 	r.ActiveStreams = r.ActiveStreams[:0]
 	r.markActiveStreamsChangedLocked()
 	r.StreamsMu.Unlock()
+	if dataStreams > 0 && r.activeStreamCounter != nil {
+		r.activeStreamCounter.Add(^uint64(dataStreams - 1))
+	}
 
 	if r.OrphanQueue != nil {
 		r.OrphanQueue.Clear(nil)

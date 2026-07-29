@@ -1,4 +1,4 @@
-﻿// ==============================================================================
+// ==============================================================================
 // CottenDNS
 // Author: tajirax
 // Github: https://github.com/TaJirax/CottenDns
@@ -13,10 +13,12 @@ import (
 	"io"
 	"net"
 	"slices"
+	"sync"
 	"time"
 
 	"cottendns-go/internal/arq"
 	Enums "cottendns-go/internal/enums"
+	"cottendns-go/internal/udpframe"
 	VpnProto "cottendns-go/internal/vpnproto"
 )
 
@@ -76,8 +78,6 @@ func (c *Client) HandleSOCKS5(ctx context.Context, conn net.Conn) {
 		}
 	}
 
-	// Bound the local SOCKS handshake so a stalled client cannot hold a
-	// connection open indefinitely. Cleared when the data phase begins.
 	if timeout := c.cfg.LocalHandshakeTimeout(); timeout > 0 {
 		_ = conn.SetReadDeadline(time.Now().Add(timeout))
 	}
@@ -331,11 +331,9 @@ func readNullTerminatedSocksField(conn net.Conn) ([]byte, error) {
 }
 
 func (c *Client) handleSOCKSConnect(ctx context.Context, conn net.Conn, addr string, port uint16, atyp byte, socksVersion byte) {
-	// Handshake is complete; the data relay must not inherit its read deadline.
 	_ = conn.SetReadDeadline(time.Time{})
-
-	if c.cfg.MaxActiveStreams > 0 && c.activeLocalStreamCount() >= c.cfg.MaxActiveStreams {
-		c.log.Warnf("<yellow>Rejecting new %s stream: active stream limit reached (%d)</yellow>", "SOCKS", c.cfg.MaxActiveStreams)
+	if ok, reason := c.shouldAdmitNewLocalStream(c.now()); !ok {
+		c.logNewStreamRejected(reason)
 		if socksVersion == SOCKS4_VERSION {
 			_ = c.sendSocks4Reply(conn, false)
 		} else {
@@ -344,7 +342,6 @@ func (c *Client) handleSOCKSConnect(ctx context.Context, conn net.Conn, addr str
 		_ = conn.Close()
 		return
 	}
-
 	streamID, ok := c.get_new_stream_id()
 	if !ok {
 		c.log.Errorf("❌ <red>Failed to get new Stream ID for SOCKS CONNECT</red>")
@@ -597,16 +594,14 @@ func (c *Client) sendSocksReply(conn net.Conn, rep byte, atyp byte, bndAddr net.
 	return err
 }
 
-func (c *Client) rejectSocksUDPAssociateUnsupportedTarget(conn net.Conn, targetAddr string, targetPort uint16) {
-	if c.log != nil {
-		c.log.Debugf("⚠️ <yellow>SOCKS5 UDP packet to unsupported target %s:%d rejected (Only DNS/53 allowed).</yellow>", targetAddr, targetPort)
-	}
-}
-
 func (c *Client) handleSocksUDPAssociate(ctx context.Context, conn net.Conn, clientAddr string, clientPort uint16, atyp byte) {
-	// Handshake is complete; the associate loop manages its own deadlines.
+	defer conn.Close()
 	_ = conn.SetReadDeadline(time.Time{})
-
+	if ok, reason := c.shouldAdmitNewLocalStream(c.now()); !ok {
+		c.logNewStreamRejected(reason)
+		_ = c.sendSocksReply(conn, SOCKS5_REPLY_GENERAL_FAILURE, SOCKS5_ATYP_IPV4, net.IPv4zero, 0)
+		return
+	}
 	replyIP := net.ParseIP(c.cfg.ListenIP)
 	if tcpAddr, ok := conn.LocalAddr().(*net.TCPAddr); ok && tcpAddr != nil && tcpAddr.IP != nil {
 		replyIP = tcpAddr.IP
@@ -620,11 +615,14 @@ func (c *Client) handleSocksUDPAssociate(ctx context.Context, conn net.Conn, cli
 		replyATYP = SOCKS5_ATYP_IPV6
 	}
 
-	bindAddr := &net.UDPAddr{
-		IP:   net.IPv4zero,
-		Port: 0,
+	bindNetwork := "udp4"
+	bindIP := net.IPv4zero
+	if replyATYP == SOCKS5_ATYP_IPV6 {
+		bindNetwork = "udp6"
+		bindIP = net.IPv6zero
 	}
-	udpConn, err := net.ListenUDP("udp", bindAddr)
+	bindAddr := &net.UDPAddr{IP: bindIP, Port: 0}
+	udpConn, err := net.ListenUDP(bindNetwork, bindAddr)
 	if err != nil {
 		_ = c.sendSocksReply(conn, SOCKS5_REPLY_GENERAL_FAILURE, SOCKS5_ATYP_IPV4, net.IPv4zero, 0)
 		return
@@ -637,7 +635,158 @@ func (c *Client) handleSocksUDPAssociate(ctx context.Context, conn net.Conn, cli
 		return
 	}
 
-	buf := make([]byte, 4096)
+	// The TCP control connection owns the association. Closing the UDP socket
+	// unblocks ReadFromUDP immediately instead of waiting for the idle timeout.
+	associationDone := make(chan struct{})
+	go func() {
+		var one [1]byte
+		_, _ = conn.Read(one[:])
+		close(associationDone)
+		_ = udpConn.Close()
+	}()
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = udpConn.Close()
+		case <-associationDone:
+		}
+	}()
+
+	type genericAssociationHandle struct {
+		conn     net.Conn
+		streamID uint16
+	}
+	var associationPeer *net.UDPAddr
+
+	startGenericAssociation := func(peerAddr *net.UDPAddr) (*genericAssociationHandle, error) {
+		streamID, ok := c.get_new_stream_id()
+		if !ok {
+			return nil, errors.New("no free stream ID for UDP association")
+		}
+		appConn, tunnelConn := net.Pipe()
+		s := c.new_stream(streamID, tunnelConn, udpframe.AssociationMarker)
+		if s == nil {
+			_ = appConn.Close()
+			_ = tunnelConn.Close()
+			return nil, errors.New("failed to create UDP association stream")
+		}
+		s.LocalSocksVersion = SOCKS5_VERSION
+		s.IsUDPAssociation = true
+		arqObj, ok := s.Stream.(*arq.ARQ)
+		if !ok || arqObj == nil {
+			_ = appConn.Close()
+			c.removeStream(streamID)
+			return nil, errors.New("UDP association stream has no ARQ")
+		}
+		arqObj.SendControlPacketWithTTL(
+			Enums.PACKET_SOCKS5_SYN, 0, 0, 1,
+			udpframe.AssociationMarker,
+			Enums.DefaultPacketPriority(Enums.PACKET_SOCKS5_SYN),
+			true, nil, 120*time.Second,
+		)
+		go c.relayGenericUDPResponses(appConn, udpConn, peerAddr)
+		c.log.Infof("📡 <green>Generic SOCKS5 UDP association started, Stream ID: <cyan>%d</cyan></green>", streamID)
+		return &genericAssociationHandle{conn: appConn, streamID: streamID}, nil
+	}
+
+	// Generic UDP setup and backpressure must never block the established SOCKS
+	// UDP socket from serving its optimized DNS/53 path. This worker owns stream
+	// retries while the receive loop only performs a non-blocking queue insert.
+	// An old server can reject the reserved marker and DNS will still flow.
+	genericCtx, genericCancel := context.WithCancel(ctx)
+	genericFrames := make(chan []byte, genericUDPFrameQueueCapacity)
+	genericDone := make(chan struct{})
+	var genericActiveMu sync.Mutex
+	var genericActive *genericAssociationHandle
+	setGenericActive := func(active *genericAssociationHandle) bool {
+		genericActiveMu.Lock()
+		defer genericActiveMu.Unlock()
+		if genericCtx.Err() != nil {
+			_ = active.conn.Close()
+			c.CloseStream(active.streamID, true, 0)
+			return false
+		}
+		genericActive = active
+		return true
+	}
+	clearGenericActive := func(active *genericAssociationHandle) {
+		genericActiveMu.Lock()
+		if genericActive == active {
+			genericActive = nil
+		}
+		genericActiveMu.Unlock()
+	}
+	closeGeneric := func(active *genericAssociationHandle) {
+		if active == nil {
+			return
+		}
+		clearGenericActive(active)
+		_ = active.conn.Close()
+		c.CloseStream(active.streamID, true, 0)
+	}
+	go func() {
+		defer close(genericDone)
+		var active *genericAssociationHandle
+		defer func() { closeGeneric(active) }()
+		retryDelay := genericUDPRetryMinDelay
+		for {
+			var frame []byte
+			select {
+			case <-genericCtx.Done():
+				return
+			case frame = <-genericFrames:
+			}
+
+			for len(frame) > 0 {
+				if active == nil {
+					started, startErr := startGenericAssociation(associationPeer)
+					if startErr != nil {
+						c.log.Warnf("Unable to start generic UDP association: %v; legacy DNS remains active", startErr)
+						if !waitGenericUDPRetry(genericCtx, retryDelay) {
+							return
+						}
+						frame = latestGenericUDPFrame(genericFrames, frame)
+						retryDelay = nextGenericUDPRetryDelay(retryDelay)
+						continue
+					}
+					active = started
+					if !setGenericActive(active) {
+						active = nil
+						return
+					}
+				}
+
+				_ = active.conn.SetWriteDeadline(time.Now().Add(genericUDPWriteStallTimeout))
+				_, writeErr := active.conn.Write(frame)
+				_ = active.conn.SetWriteDeadline(time.Time{})
+				if writeErr == nil {
+					frame = nil
+					retryDelay = genericUDPRetryMinDelay
+					continue
+				}
+
+				c.log.Warnf("Generic UDP association failed: %v; retrying while legacy DNS remains active", writeErr)
+				closeGeneric(active)
+				active = nil
+				if !waitGenericUDPRetry(genericCtx, retryDelay) {
+					return
+				}
+				frame = latestGenericUDPFrame(genericFrames, frame)
+				retryDelay = nextGenericUDPRetryDelay(retryDelay)
+			}
+		}
+	}()
+	defer func() {
+		genericCancel()
+		genericActiveMu.Lock()
+		if genericActive != nil {
+			_ = genericActive.conn.Close()
+		}
+		genericActiveMu.Unlock()
+		<-genericDone
+	}()
+
+	buf := make([]byte, 65535)
 	for {
 		_ = udpConn.SetReadDeadline(time.Now().Add(c.cfg.SOCKSUDPAssociateReadTimeout()))
 		n, peerAddr, err := udpConn.ReadFromUDP(buf)
@@ -646,6 +795,11 @@ func (c *Client) handleSocksUDPAssociate(ctx context.Context, conn net.Conn, cli
 				return
 			}
 			return
+		}
+		if associationPeer == nil {
+			associationPeer = &net.UDPAddr{IP: append(net.IP(nil), peerAddr.IP...), Port: peerAddr.Port, Zone: peerAddr.Zone}
+		} else if !associationPeer.IP.Equal(peerAddr.IP) || associationPeer.Port != peerAddr.Port {
+			continue
 		}
 
 		if n < 6 {
@@ -693,14 +847,19 @@ func (c *Client) handleSocksUDPAssociate(ctx context.Context, conn net.Conn, cli
 			continue
 		}
 
+		payload := buf[payloadOffset:n]
 		if targetPort != 53 {
-			c.rejectSocksUDPAssociateUnsupportedTarget(conn, targetAddr, targetPort)
+			frame, frameErr := udpframe.Encode(buf[3], targetAddr, targetPort, payload)
+			if frameErr != nil {
+				continue
+			}
+			enqueueLatestGenericUDPFrame(genericFrames, frame)
 			continue
 		}
 
 		c.log.Infof("📡 <green>Received DNS Query from SOCKS5 UDP: <cyan>%d bytes</cyan>, Target: <cyan>%s:%d</cyan></green>", n-payloadOffset, targetAddr, targetPort)
 
-		dnsQuery := buf[payloadOffset:n]
+		dnsQuery := payload
 
 		isHit := c.ProcessDNSQuery(dnsQuery, peerAddr, func(resp []byte) {
 			header := []byte{0x00, 0x00, 0x00, SOCKS5_ATYP_IPV4, 0, 0, 0, 0, 0, 53}
@@ -709,7 +868,33 @@ func (c *Client) handleSocksUDPAssociate(ctx context.Context, conn net.Conn, cli
 		})
 
 		if !isHit {
-			c.log.Debugf("🧳 <yellow>SOCKS5 DNS Miss or Pending - Closing association to trigger client retry.</yellow>")
+			c.log.Debugf("🧳 <yellow>SOCKS5 DNS Miss or Pending - keeping association alive for retry.</yellow>")
+		}
+	}
+}
+
+func (c *Client) relayGenericUDPResponses(stream net.Conn, relay *net.UDPConn, peer *net.UDPAddr) {
+	buffer := make([]byte, 4096)
+	var framed []byte
+	for {
+		n, err := stream.Read(buffer)
+		if n > 0 {
+			framed = append(framed, buffer[:n]...)
+			for {
+				body, rest, ready, frameErr := udpframe.Pop(framed)
+				if frameErr != nil {
+					return
+				}
+				if !ready {
+					break
+				}
+				response := make([]byte, 3, 3+len(body))
+				response = append(response, body...)
+				_, _ = relay.WriteToUDP(response, peer)
+				framed = rest
+			}
+		}
+		if err != nil {
 			return
 		}
 	}
@@ -736,6 +921,15 @@ func (c *Client) HandleSocksConnected(packet VpnProto.Packet) error {
 		if arqObj, err := c.getStreamARQ(packet.StreamID); err == nil {
 			arqObj.Close("late SOCKS success after local cancellation", arq.CloseOptions{SendRST: true})
 		}
+		return nil
+	}
+	if s.IsUDPAssociation {
+		s.SetStatus(streamStatusActive)
+		s.socksResultMu.Unlock()
+		if arqObj, err := c.getStreamARQ(packet.StreamID); err == nil {
+			arqObj.SetIOReady(true)
+		}
+		c.log.Debugf("📡 <green>Generic UDP association connected for stream %d</green>", packet.StreamID)
 		return nil
 	}
 
@@ -779,6 +973,18 @@ func (c *Client) HandleSocksFailure(packet VpnProto.Packet) error {
 		arqObj, err := c.getStreamARQ(packet.StreamID)
 		if err == nil {
 			arqObj.Close("SOCKS failure received after local cancellation", arq.CloseOptions{SendRST: true})
+		}
+		return nil
+	}
+	if s.IsUDPAssociation {
+		s.SetStatus(streamStatusSocksFailed)
+		s.MarkTerminal(time.Now())
+		s.socksResultMu.Unlock()
+		if s.NetConn != nil {
+			_ = s.NetConn.Close()
+		}
+		if arqObj, err := c.getStreamARQ(packet.StreamID); err == nil {
+			arqObj.Close("UDP association setup failed", arq.CloseOptions{Force: true})
 		}
 		return nil
 	}

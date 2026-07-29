@@ -21,7 +21,9 @@ logs/
 *.tmp
 *.exe
 build/
-.gocache
+dist/
+.gocache/
+.gocache-audit/
 .bench/
 
 # OpenCode tooling artifacts
@@ -31,3 +33,9 @@ build/
 client.exe
 server.exe
 cmd/*/resource_windows_*.syso
+.gochache/
+.android-build-audit/
+.tmp-android-engine-upstream/
+
+# Local engineering audit (human-readable, intentionally not committed)
+reports/cottendns-network-engineering-audit.html

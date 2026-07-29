@@ -14,7 +14,9 @@ Official channel: [https://t.me/whitedns](https://t.me/whitedns)
 
 ## Credits
 
-WhiteDNS is backed by the [CottenDns Client](https://github.com/masterking32/CottenDnsVPN) project and uses CottenDns, a fork from CottenDns, from [nullroute1970/CottenDns](https://github.com/nullroute1970/CottenDns).
+WhiteDNS is backed by the [MasterDNS Client](https://github.com/masterking32/MasterDnsVPN)
+project and vendors the CottenDNS engine from
+[TaJirax/cottenDNS](https://github.com/TaJirax/cottenDNS) at commit `e3c2ea8813890c021d64e5200ac65d8fd851acca`.
 
 The Android VPN path also packages `tun2proxy`; see [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for third-party license details.
 
@@ -122,7 +124,7 @@ Requirements:
 Build and test a local debug copy:
 
 ```bash
-git submodule update --init --recursive
+cat third_party/CottenDns.UPSTREAM
 ./gradlew testDebugUnitTest
 make debug
 ```

@@ -24,22 +24,25 @@ package client
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"net"
 	"net/http"
 	"sync"
 	"time"
+
+	Enums "cottendns-go/internal/enums"
 )
 
 const (
-	dohContentType     = "application/dns-message"
-	dohDialTimeout     = 6 * time.Second
-	dohIdleConnTimeout = 90 * time.Second
-	dohMaxResponse     = 65535
-	// dohMaxInflight bounds concurrent in-flight POSTs on the data plane so a
-	// burst cannot spawn unbounded goroutines and sockets.
-	dohMaxInflight = 256
+	dohContentType       = "application/dns-message"
+	dohDialTimeout       = 6 * time.Second
+	dohIdleConnTimeout   = 90 * time.Second
+	dohMaxResponse       = 65535
+	dohWorkerCount       = 16
+	dohDataQueueCapacity = 256
+	dohControlQueueCap   = 64
 )
 
 var errDoHStatus = errors.New("doh: non-200 response")
@@ -63,6 +66,27 @@ func (c *Client) newDoHHTTPClient() *http.Client {
 		}).DialContext,
 	}
 	return &http.Client{Transport: transport}
+}
+
+func (c *Client) sharedDoHHTTPClient() *http.Client {
+	c.dohHTTPMu.Lock()
+	defer c.dohHTTPMu.Unlock()
+	if c.dohHTTP == nil {
+		c.dohHTTP = c.newDoHHTTPClient()
+	}
+	return c.dohHTTP
+}
+
+func (c *Client) closeSharedDoHHTTPClient() {
+	c.dohHTTPMu.Lock()
+	defer c.dohHTTPMu.Unlock()
+	if c.dohHTTP == nil {
+		return
+	}
+	if tr, ok := c.dohHTTP.Transport.(*http.Transport); ok {
+		tr.CloseIdleConnections()
+	}
+	c.dohHTTP = nil
 }
 
 // dohEndpoint builds the request URL for a resolver. Resolver entries carry the
@@ -113,7 +137,7 @@ type dohQueryTransport struct {
 
 func (c *Client) newDoHQueryTransport(resolverLabel string) (queryExchanger, error) {
 	return &dohQueryTransport{
-		httpClient: c.newDoHHTTPClient(),
+		httpClient: c.sharedDoHHTTPClient(),
 		endpoint:   c.dohEndpoint(resolverLabel),
 	}, nil
 }
@@ -124,16 +148,19 @@ func (t *dohQueryTransport) exchange(packet []byte, timeout time.Duration) ([]by
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	return dohExchange(ctx, t.httpClient, t.endpoint, packet)
+	response, err := dohExchange(ctx, t.httpClient, t.endpoint, packet)
+	if err != nil {
+		return nil, err
+	}
+	if len(packet) < 2 || len(response) < 2 ||
+		binary.BigEndian.Uint16(packet[:2]) != binary.BigEndian.Uint16(response[:2]) ||
+		(dnsQuestionFingerprint(packet) != 0 && dnsQuestionFingerprint(packet) != dnsQuestionFingerprint(response)) {
+		return nil, errors.New("doh: response does not match query")
+	}
+	return response, nil
 }
 
 func (t *dohQueryTransport) Close() error {
-	if t == nil || t.httpClient == nil {
-		return nil
-	}
-	if tr, ok := t.httpClient.Transport.(*http.Transport); ok {
-		tr.CloseIdleConnections()
-	}
 	return nil
 }
 
@@ -147,24 +174,38 @@ type dohDataManager struct {
 
 	mu       sync.Mutex
 	ctx      context.Context
+	cancel   context.CancelFunc
 	dead     bool
-	inFlight chan struct{}
+	controlQ chan dohDataJob
+	dataQ    chan dohDataJob
 	wg       sync.WaitGroup
+}
+
+type dohDataJob struct {
+	frame encodedOutboundDatagram
+	now   time.Time
 }
 
 func newDoHDataManager(c *Client) *dohDataManager {
 	return &dohDataManager{
 		client:     c,
-		httpClient: c.newDoHHTTPClient(),
-		inFlight:   make(chan struct{}, dohMaxInflight),
+		httpClient: c.sharedDoHHTTPClient(),
+		controlQ:   make(chan dohDataJob, dohControlQueueCap),
+		dataQ:      make(chan dohDataJob, dohDataQueueCapacity),
 	}
 }
 
 func (m *dohDataManager) Start(ctx context.Context) {
+	workerCtx, cancel := context.WithCancel(ctx)
 	m.mu.Lock()
-	m.ctx = ctx
+	m.ctx = workerCtx
+	m.cancel = cancel
 	m.dead = false
 	m.mu.Unlock()
+	for i := 0; i < dohWorkerCount; i++ {
+		m.wg.Add(1)
+		go m.worker(workerCtx)
+	}
 }
 
 func (m *dohDataManager) Stop() {
@@ -173,74 +214,94 @@ func (m *dohDataManager) Stop() {
 	}
 	m.mu.Lock()
 	m.dead = true
+	if m.cancel != nil {
+		m.cancel()
+		m.cancel = nil
+	}
 	m.mu.Unlock()
 	m.wg.Wait()
-	if tr, ok := m.httpClient.Transport.(*http.Transport); ok {
-		tr.CloseIdleConnections()
-	}
 }
 
-// Send posts one already-built DNS query and feeds the answer back into the
-// client's rxChannel, mirroring the UDP writer's bookkeeping. The POST runs on
-// its own goroutine because DoH is request/response: the answer arrives on the
-// same exchange rather than on a separate read loop.
-func (m *dohDataManager) Send(serverKey string, addr *net.UDPAddr, packet []byte, now time.Time) {
-	if m == nil || addr == nil || len(packet) == 0 {
-		return
+// Send queues one already-built DNS query. A bounded worker pool performs the
+// POST and feeds the answer back into rxChannel; control packets have reserved
+// capacity so a bulk burst cannot strand ACKs or session traffic.
+func (m *dohDataManager) Send(frame encodedOutboundDatagram, now time.Time) bool {
+	if m == nil || frame.addr == nil || len(frame.packet) == 0 {
+		return false
 	}
 	m.mu.Lock()
 	ctx, dead := m.ctx, m.dead
 	m.mu.Unlock()
 	if dead || ctx == nil || ctx.Err() != nil {
-		return
+		return false
 	}
 
+	// Encoded runtime packets are immutable; retaining the frame is sufficient
+	// to keep its backing array alive until the HTTP exchange completes.
+	job := dohDataJob{frame: frame, now: now}
+	queue := m.dataQ
+	if frame.priority <= Enums.PacketPriorityHigh {
+		queue = m.controlQ
+	}
 	select {
-	case m.inFlight <- struct{}{}:
+	case queue <- job:
+		return true
 	default:
-		// Saturated: drop rather than queue. ARQ retransmits, and shedding here
-		// keeps a burst from opening unbounded sockets.
-		m.client.onRXDrop(addr)
+		m.client.txAdmissionDrops.Add(1)
+		return false
+	}
+}
+
+func (m *dohDataManager) worker(ctx context.Context) {
+	defer m.wg.Done()
+	for {
+		// Give control traffic a reserved queue and strict first look without
+		// starving bulk data when the control queue is empty.
+		select {
+		case <-ctx.Done():
+			return
+		case job := <-m.controlQ:
+			m.exchangeJob(ctx, job)
+			continue
+		default:
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case job := <-m.controlQ:
+			m.exchangeJob(ctx, job)
+		case job := <-m.dataQ:
+			m.exchangeJob(ctx, job)
+		}
+	}
+}
+
+func (m *dohDataManager) exchangeJob(ctx context.Context, job dohDataJob) {
+	if m.client.resolverReplayCompleted(job.frame, time.Now()) {
 		return
 	}
-
-	// Copy the packet: the caller owns its buffer and may recycle it once Send
-	// returns, while the POST body is read asynchronously.
-	body := append([]byte(nil), packet...)
-	endpoint := m.client.dohEndpoint(addr.String())
-
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
-		defer func() { <-m.inFlight }()
-
-		m.client.trackResolverSend(body, addr.String(), "", serverKey, now)
-		m.client.txTotalBytes.Add(uint64(len(body)))
-
-		reqCtx, cancel := context.WithTimeout(ctx, m.client.resolverRequestTimeout())
-		defer cancel()
-
-		response, err := dohExchange(reqCtx, m.httpClient, endpoint, body)
-		if err != nil || len(response) < 12 {
-			return
-		}
-		// Only DNS responses (QR=1) are of interest, mirroring the UDP reader.
-		if (response[2] & 0x80) == 0 {
-			return
-		}
-
-		buf := m.client.getRuntimeUDPBuffer()
-		if len(response) > len(buf) {
-			m.client.putRuntimeUDPBuffer(buf)
-			return
-		}
-		n := copy(buf, response)
-		m.client.rxTotalBytes.Add(uint64(n))
-		select {
-		case m.client.rxChannel <- asyncReadPacket{data: buf[:n], addr: addr, localAddr: ""}:
-		default:
-			m.client.putRuntimeUDPBuffer(buf)
-			m.client.onRXDrop(addr)
-		}
-	}()
+	endpoint := m.client.dohEndpoint(job.frame.addr.String())
+	m.client.trackResolverFrameOver(job.frame, "", transportDoH, job.now)
+	m.client.txTotalBytes.Add(uint64(len(job.frame.packet)))
+	reqCtx, cancel := context.WithTimeout(ctx, m.client.resolverRequestTimeout())
+	defer cancel()
+	response, err := dohExchange(reqCtx, m.httpClient, endpoint, job.frame.packet)
+	if err != nil || len(response) < 12 || (response[2]&0x80) == 0 {
+		m.client.trackResolverFailureOver(job.frame.packet, job.frame.addr, "", transportDoH, time.Now())
+		m.client.replayRuntimeFrame(job.frame, transportDoH, nil, "", failureReplayMaxDepth)
+		return
+	}
+	buf := m.client.getRuntimeUDPBuffer()
+	if len(response) > len(buf) {
+		m.client.putRuntimeUDPBuffer(buf)
+		return
+	}
+	n := copy(buf, response)
+	m.client.rxTotalBytes.Add(uint64(n))
+	select {
+	case m.client.rxChannel <- asyncReadPacket{data: buf[:n], addr: job.frame.addr, localAddr: "", transport: transportDoH}:
+	default:
+		m.client.putRuntimeUDPBuffer(buf)
+		m.client.onRXDrop(job.frame.addr)
+	}
 }

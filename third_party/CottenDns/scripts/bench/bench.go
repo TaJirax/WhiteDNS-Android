@@ -19,12 +19,13 @@ import (
 )
 
 var (
-	runs       = flag.Int("runs", 3, "Number of runs for each direction")
-	payloadMiB = flag.Int("bytes", 100*1024*1024, "Payload size in bytes (default 100MiB)")
-	forceBuild = flag.Bool("force-build", true, "Force rebuilding binaries")
-	benchPort  = flag.Int("bench-port", 19090, "Legacy port (not used much now with dynamic targets)")
-	clientPort = flag.Int("client-port", 18080, "Port for the CottenDns client listener")
-	serverPort = flag.Int("server-port", 5300, "Port for the CottenDns server UDP listener")
+	runs           = flag.Int("runs", 3, "Number of runs for each direction")
+	payloadMiB     = flag.Int("bytes", 100*1024*1024, "Payload size in bytes (default 100MiB)")
+	forceBuild     = flag.Bool("force-build", true, "Force rebuilding binaries")
+	benchPort      = flag.Int("bench-port", 19090, "Legacy port (not used much now with dynamic targets)")
+	clientPort     = flag.Int("client-port", 18080, "Port for the CottenDns client listener")
+	serverPort     = flag.Int("server-port", 5300, "Port for the CottenDns server UDP listener")
+	pathController = flag.String("path-controller", "unified", "Client path controller: unified or legacy")
 
 	// Standalone / slipstream-like flags
 	optMode         = flag.String("mode", "", "Standalone mode: 'sink', 'source', 'send', 'recv'")
@@ -71,6 +72,9 @@ func nowAsTs() float64 {
 
 func main() {
 	flag.Parse()
+	if *pathController != "unified" && *pathController != "legacy" {
+		log.Fatalf("Invalid -path-controller %q (want unified or legacy)", *pathController)
+	}
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	if *optMode != "" {
@@ -80,7 +84,8 @@ func main() {
 
 	fmt.Printf("🚀 Starting CottenDns Go-Benchmark (slipstream-style timing)\n")
 	fmt.Printf("📂 Working Dir: %s\n", benchDir)
-	fmt.Printf("💾 Payload: %.2f MiB | Runs: %d\n\n", float64(*payloadMiB)/(1024*1024), *runs)
+	fmt.Printf("💾 Payload: %.2f MiB | Runs: %d | Controller: %s\n\n",
+		float64(*payloadMiB)/(1024*1024), *runs, *pathController)
 
 	if err := setupDirs(); err != nil {
 		log.Fatalf("Failed to setup directories: %v", err)
@@ -191,12 +196,12 @@ func runOnce(ctx context.Context, direction string, runIndex int) (BenchResult, 
 	UDP_PORT = %d
 	DOMAIN = ["a.io"]
 	MIN_VPN_LABEL_LENGTH = 1
-	DATA_ENCRYPTION_METHOD = 1
+	DATA_ENCRYPTION_METHOD = 3
 	ENCRYPTION_KEY_FILE = "encrypt_key.txt"
 	FORWARD_IP = "127.0.0.1"
 	FORWARD_PORT = %d
 	MAX_PACKETS_PER_BATCH = 5
-	ARQ_WINDOW_SIZE = 16384
+	ARQ_WINDOW_SIZE = 6000
 	ARQ_INITIAL_RTO_SECONDS = 0.25
 	ARQ_MAX_RTO_SECONDS = 1.0
 	UDP_READERS = 24
@@ -207,7 +212,7 @@ func runOnce(ctx context.Context, direction string, runIndex int) (BenchResult, 
 	SUPPORTED_UPLOAD_COMPRESSION_TYPES = [0, 1, 2, 3]
 	SUPPORTED_DOWNLOAD_COMPRESSION_TYPES = [0, 1, 2, 3]
 	SOCKET_BUFFER_SIZE = 8388608
-	MAX_PACKET_SIZE = 65535
+	MAX_PACKET_SIZE = 4096
 	DEFERRED_SESSION_QUEUE_LIMIT = 4096
 	SESSION_ORPHAN_QUEUE_INITIAL_CAPACITY = 128
 	STREAM_QUEUE_INITIAL_CAPACITY = 256
@@ -261,12 +266,14 @@ func runOnce(ctx context.Context, direction string, runIndex int) (BenchResult, 
 	DOMAINS = ["a.io"]
 	ENCRYPTION_KEY = "%s"
 	RESOLVER_BALANCING_STRATEGY = 1
-	DATA_ENCRYPTION_METHOD = 1
+	PATH_CONTROLLER_MODE = "%s"
+	COMPARABLE_PATH_STRIPING = true
+	DATA_ENCRYPTION_METHOD = 3
 	UPLOAD_PACKET_DUPLICATION_COUNT = 1
 	DOWNLOAD_PACKET_DUPLICATION_COUNT = 1
 	UPLOAD_SETUP_PACKET_DUPLICATION_COUNT = 1
 	DOWNLOAD_SETUP_PACKET_DUPLICATION_COUNT = 1
-	MIN_UPLOAD_MTU = 120
+	MIN_UPLOAD_MTU = 80
 	MIN_DOWNLOAD_MTU = 4000
 	MAX_UPLOAD_MTU = 142
 	MAX_DOWNLOAD_MTU = 4000
@@ -276,17 +283,16 @@ func runOnce(ctx context.Context, direction string, runIndex int) (BenchResult, 
 	MTU_TEST_RETRIES_LOGS = 0
 	MTU_TEST_TIMEOUT_LOGS = 1.0
 	MTU_TEST_PARALLELISM_LOGS = 1
-	TUNNEL_READER_WORKERS = 20
-	TUNNEL_WRITER_WORKERS = 20
+	RX_TX_WORKERS = 20
 	TUNNEL_PROCESS_WORKERS = 20
 	TX_CHANNEL_SIZE = 32768
 	RX_CHANNEL_SIZE = 32768
-	ARQ_WINDOW_SIZE = 16384
+	ARQ_WINDOW_SIZE = 6000
 	ARQ_INITIAL_RTO_SECONDS = 0.25
 	ARQ_MAX_RTO_SECONDS = 1.0
 	DISPATCHER_IDLE_POLL_INTERVAL_SECONDS = 0.002
 	LOG_LEVEL = "INFO"
-	PING_AGGRESSIVE_INTERVAL_SECONDS = 0.030
+	PING_AGGRESSIVE_INTERVAL_SECONDS = 0.050
 	PING_LAZY_INTERVAL_SECONDS = 0.100
 	PING_COOLDOWN_INTERVAL_SECONDS = 1.0
 	PING_COLD_INTERVAL_SECONDS = 10.0
@@ -315,7 +321,7 @@ func runOnce(ctx context.Context, direction string, runIndex int) (BenchResult, 
 	ARQ_MAX_CONTROL_RETRIES = 300
 	ARQ_DATA_NACK_INITIAL_DELAY_SECONDS = 0.35
 	ARQ_DATA_NACK_REPEAT_SECONDS = 0.8
-	`, *clientPort, encryptionKey)), 0644)
+	`, *clientPort, encryptionKey, *pathController)), 0644)
 
 	absClientBin, _ := filepath.Abs(filepath.Join(binDir, "client.exe"))
 	clientCmd := exec.Command(absClientBin, "--config", clientCfg)

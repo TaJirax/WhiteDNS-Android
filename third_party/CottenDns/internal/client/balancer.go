@@ -25,11 +25,7 @@ const (
 	// proportional to their download MTU, so a resolver that can carry 4000-byte
 	// downloads receives proportionally more traffic than one capped at 1000.
 	BalancingMTUWeighted = 5
-	// BalancingHighestMTU selects the highest-capacity active resolvers first.
-	// It is used by Fast Connect so traffic moves to the best MTU-tested
-	// resolvers as soon as they are found. Download MTU dominates, upload MTU is
-	// next, and MTU-probe latency only breaks ties after capacity.
-	BalancingHighestMTU = 6
+	BalancingHighestMTU  = 6
 )
 
 type Balancer struct {
@@ -561,35 +557,6 @@ func (b *Balancer) selectRandom(snap *balancerSnapshot, count int) []Connection 
 	return snapshotConnections(snap.connections, indices[:count])
 }
 
-func (b *Balancer) selectHighestMTU(snap *balancerSnapshot, count int) []Connection {
-	if snap == nil || count <= 0 || len(snap.valid) == 0 {
-		return nil
-	}
-	if count > len(snap.valid) {
-		count = len(snap.valid)
-	}
-
-	selected := make([]int, 0, count)
-	used := make(map[int]struct{}, count)
-	for len(selected) < count {
-		best := -1
-		for _, idx := range snap.valid {
-			if _, ok := used[idx]; ok {
-				continue
-			}
-			if best == -1 || higherMTUFirst(snap.connections[idx], snap.connections[best]) {
-				best = idx
-			}
-		}
-		if best == -1 {
-			break
-		}
-		used[best] = struct{}{}
-		selected = append(selected, best)
-	}
-	return snapshotConnections(snap.connections, selected)
-}
-
 func (b *Balancer) selectLowestScore(snap *balancerSnapshot, count int, scorer func(*balancerSnapshot, int) uint64) []Connection {
 	n := len(snap.valid)
 	if count <= 0 || n == 0 {
@@ -634,6 +601,34 @@ func (b *Balancer) selectLowestScore(snap *balancerSnapshot, count int, scorer f
 	return snapshotConnections(snap.connections, indices)
 }
 
+func (b *Balancer) selectHighestMTU(snap *balancerSnapshot, count int) []Connection {
+	if snap == nil || count <= 0 || len(snap.valid) == 0 {
+		return nil
+	}
+	if count > len(snap.valid) {
+		count = len(snap.valid)
+	}
+	selected := make([]int, 0, count)
+	used := make(map[int]struct{}, count)
+	for len(selected) < count {
+		best := -1
+		for _, idx := range snap.valid {
+			if _, ok := used[idx]; ok {
+				continue
+			}
+			if best == -1 || higherMTUFirst(snap.connections[idx], snap.connections[best]) {
+				best = idx
+			}
+		}
+		if best == -1 {
+			break
+		}
+		used[best] = struct{}{}
+		selected = append(selected, best)
+	}
+	return snapshotConnections(snap.connections, selected)
+}
+
 func (b *Balancer) bestHighestMTUConnection(snap *balancerSnapshot) (Connection, bool) {
 	selected := b.selectHighestMTU(snap, 1)
 	if len(selected) == 0 {
@@ -643,9 +638,6 @@ func (b *Balancer) bestHighestMTUConnection(snap *balancerSnapshot) (Connection,
 }
 
 func (b *Balancer) bestHighestMTUConnectionExcluding(snap *balancerSnapshot, excludeKey string) (Connection, bool) {
-	if snap == nil || len(snap.valid) == 0 {
-		return Connection{}, false
-	}
 	for _, conn := range b.selectHighestMTU(snap, len(snap.valid)) {
 		if conn.Key != "" && conn.Key != excludeKey {
 			return conn, true
