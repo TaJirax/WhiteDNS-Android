@@ -106,6 +106,14 @@ data class AdvancedSettingsProfile(
     val id: String,
     val name: String,
     val configPreset: String,
+    val transportMode: String,
+    val deliveryMode: String,
+    val qnameMode: String,
+    val resolverTlsServerName: String,
+    val resolverTlsPin: String,
+    val resolverDoTPort: String,
+    val resolverDoHPort: String,
+    val resolverDoHPath: String,
     val listenIp: String,
     val listenPort: String,
     val httpProxyEnabled: Boolean,
@@ -181,6 +189,14 @@ data class AdvancedSettingsProfile(
                 id = id,
                 name = name,
                 configPreset = settings.configPreset,
+                transportMode = settings.transportMode,
+                deliveryMode = settings.deliveryMode,
+                qnameMode = settings.qnameMode,
+                resolverTlsServerName = settings.resolverTlsServerName,
+                resolverTlsPin = settings.resolverTlsPin,
+                resolverDoTPort = settings.resolverDoTPort,
+                resolverDoHPort = settings.resolverDoHPort,
+                resolverDoHPath = settings.resolverDoHPath,
                 listenIp = settings.listenIp,
                 listenPort = settings.listenPort,
                 httpProxyEnabled = settings.httpProxyEnabled,
@@ -1076,7 +1092,16 @@ fun WhiteDnsSettings.applyCottenDnsConfigPreset(preset: String): WhiteDnsSetting
             mtuTestRetriesLogs = defaults.mtuTestRetriesLogs,
             mtuTestTimeoutLogs = defaults.mtuTestTimeoutLogs,
         )
-    }.syncSelectedConnectionProfileFields()
+    }
+        // Choosing a preset is an explicit request to use that preset's complete
+        // wire policy. Clear stale manual overrides first; the user can then
+        // deliberately change transport, delivery, or QNAME shape afterward.
+        .copy(
+            transportMode = "preset",
+            deliveryMode = "preset",
+            qnameMode = "preset",
+        )
+        .syncSelectedConnectionProfileFields()
 }
 
 fun WhiteDnsSettings.runtimeConnectionSettings(): WhiteDnsSettings {
@@ -1105,6 +1130,14 @@ fun WhiteDnsSettings.applyAdvancedProfile(profile: AdvancedSettingsProfile): Whi
     return copy(
         selectedAdvancedProfileId = profile.id,
         configPreset = profile.configPreset,
+        transportMode = profile.transportMode,
+        deliveryMode = profile.deliveryMode,
+        qnameMode = profile.qnameMode,
+        resolverTlsServerName = profile.resolverTlsServerName,
+        resolverTlsPin = profile.resolverTlsPin,
+        resolverDoTPort = profile.resolverDoTPort,
+        resolverDoHPort = profile.resolverDoHPort,
+        resolverDoHPath = profile.resolverDoHPath,
         listenIp = profile.listenIp,
         listenPort = profile.listenPort,
         httpProxyEnabled = profile.httpProxyEnabled,
@@ -1166,11 +1199,9 @@ fun WhiteDnsSettings.selectAdvancedProfile(profileId: String): WhiteDnsSettings 
     return applyAdvancedProfile(selectedProfile)
 }
 
-// The CottenDns wire settings are deliberately global rather than per-profile,
-// so AdvancedSettingsProfile does not carry them. The settings dialog still
-// edits them on its draft, which means a save has to copy them across
-// explicitly -- going through AdvancedSettingsProfile alone silently drops
-// them and the fields snap back to "From preset".
+// Copy the dialog's wire choices into the active settings immediately. The same
+// values are also stored in AdvancedSettingsProfile, so selecting a different
+// profile restores its complete CottenDns wire configuration.
 fun WhiteDnsSettings.copyCottenDnsWireSettingsFrom(source: WhiteDnsSettings): WhiteDnsSettings {
     return copy(
         transportMode = source.transportMode,

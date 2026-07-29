@@ -60,8 +60,29 @@ class WhiteDnsSettingsStore(
         } else {
             selectedResolverProfileId
         }
+        val legacyWireSettings = defaults.copy(
+            transportMode = preferences.getString(KeyTransportMode, defaults.transportMode)
+                ?: defaults.transportMode,
+            deliveryMode = preferences.getString(KeyDeliveryMode, defaults.deliveryMode)
+                ?: defaults.deliveryMode,
+            qnameMode = preferences.getString(KeyQnameMode, defaults.qnameMode)
+                ?: defaults.qnameMode,
+            resolverTlsServerName = preferences.getString(
+                KeyResolverTlsServerName,
+                defaults.resolverTlsServerName,
+            ) ?: defaults.resolverTlsServerName,
+            resolverTlsPin = preferences.getString(KeyResolverTlsPin, defaults.resolverTlsPin)
+                ?: defaults.resolverTlsPin,
+            resolverDoTPort = preferences.getString(KeyResolverDoTPort, defaults.resolverDoTPort)
+                ?: defaults.resolverDoTPort,
+            resolverDoHPort = preferences.getString(KeyResolverDoHPort, defaults.resolverDoHPort)
+                ?: defaults.resolverDoHPort,
+            resolverDoHPath = preferences.getString(KeyResolverDoHPath, defaults.resolverDoHPath)
+                ?: defaults.resolverDoHPath,
+        )
         val advancedProfiles = decodeAdvancedProfiles(
             raw = preferences.getString(KeyAdvancedProfiles, null),
+            legacyWireSettings = legacyWireSettings,
         )
         val parallelTestAggressivePresetsEnabled = preferences.getBoolean(
             KeyParallelTestAggressivePresetsEnabled,
@@ -447,12 +468,18 @@ class WhiteDnsSettingsStore(
         return array.toString()
     }
 
-    private fun decodeAdvancedProfiles(raw: String?): List<AdvancedSettingsProfile> {
+    private fun decodeAdvancedProfiles(
+        raw: String?,
+        legacyWireSettings: WhiteDnsSettings,
+    ): List<AdvancedSettingsProfile> {
         if (raw.isNullOrBlank()) {
             return emptyList()
         }
         return runCatching {
-            val defaultProfile = AdvancedSettingsProfile.defaultProfile()
+            // Profiles saved before wire controls became profile-owned do not
+            // contain these keys. Seed them from the previously global values so
+            // an upgrade preserves the user's effective configuration.
+            val defaultProfile = AdvancedSettingsProfile.fromSettings(legacyWireSettings)
             val array = JSONArray(raw)
             List(array.length()) { index ->
                 val item = array.getJSONObject(index)
@@ -460,6 +487,26 @@ class WhiteDnsSettingsStore(
                     id = item.optString("id"),
                     name = item.optString("name", "Advanced Settings"),
                     configPreset = item.optString("configPreset", defaultProfile.configPreset),
+                    transportMode = item.optString("transportMode", defaultProfile.transportMode),
+                    deliveryMode = item.optString("deliveryMode", defaultProfile.deliveryMode),
+                    qnameMode = item.optString("qnameMode", defaultProfile.qnameMode),
+                    resolverTlsServerName = item.optString(
+                        "resolverTlsServerName",
+                        defaultProfile.resolverTlsServerName,
+                    ),
+                    resolverTlsPin = item.optString("resolverTlsPin", defaultProfile.resolverTlsPin),
+                    resolverDoTPort = item.optString(
+                        "resolverDoTPort",
+                        defaultProfile.resolverDoTPort,
+                    ),
+                    resolverDoHPort = item.optString(
+                        "resolverDoHPort",
+                        defaultProfile.resolverDoHPort,
+                    ),
+                    resolverDoHPath = item.optString(
+                        "resolverDoHPath",
+                        defaultProfile.resolverDoHPath,
+                    ),
                     listenIp = item.optString("listenIp", defaultProfile.listenIp),
                     listenPort = item.optString("listenPort", defaultProfile.listenPort),
                     httpProxyEnabled = item.optBoolean("httpProxyEnabled", defaultProfile.httpProxyEnabled),
@@ -609,6 +656,14 @@ class WhiteDnsSettingsStore(
                         .put("id", profile.id)
                         .put("name", profile.name)
                         .put("configPreset", profile.configPreset)
+                        .put("transportMode", profile.transportMode)
+                        .put("deliveryMode", profile.deliveryMode)
+                        .put("qnameMode", profile.qnameMode)
+                        .put("resolverTlsServerName", profile.resolverTlsServerName)
+                        .put("resolverTlsPin", profile.resolverTlsPin)
+                        .put("resolverDoTPort", profile.resolverDoTPort)
+                        .put("resolverDoHPort", profile.resolverDoHPort)
+                        .put("resolverDoHPath", profile.resolverDoHPath)
                         .put("listenIp", profile.listenIp)
                         .put("listenPort", profile.listenPort)
                         .put("httpProxyEnabled", profile.httpProxyEnabled)

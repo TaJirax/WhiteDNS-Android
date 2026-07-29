@@ -749,6 +749,36 @@ private fun ConnectTabContent(
                                 showAdvancedEditDialog = true
                             },
                         )
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(WhiteDnsPalette.Surface)
+                                .border(1.5.dp, WhiteDnsPalette.Border, RoundedCornerShape(16.dp))
+                                .padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Text(
+                                text = "Engine path controls",
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontSize = 12.sp,
+                                    color = WhiteDnsPalette.Ink,
+                                    fontWeight = FontWeight.SemiBold,
+                                    letterSpacing = 0.7.sp,
+                                ),
+                            )
+                            Text(
+                                text = "Saved immediately and used on the next connection.",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontSize = 10.sp,
+                                    color = WhiteDnsPalette.Muted,
+                                ),
+                            )
+                            CottenDnsFeaturePresetGroup(
+                                settings = settings,
+                                onSettingsChange = onSettingsChange,
+                            )
+                        }
                     }
                 }
             }

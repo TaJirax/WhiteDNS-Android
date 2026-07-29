@@ -543,9 +543,6 @@ class WhiteDnsModelsTest {
 
     @Test
     fun savingSettingProfileKeepsCottenDnsWireSettingsEditedInTheDialog() {
-        // The dialog edits these on its draft, but AdvancedSettingsProfile does not
-        // carry them, so saving through the profile alone used to drop them and the
-        // fields snapped back to "From preset".
         val settings = WhiteDnsSettings()
         val draft = settings.copy(
             transportMode = "doh",
@@ -575,6 +572,54 @@ class WhiteDnsModelsTest {
         assertEquals("8853", saved.resolverDoTPort)
         assertEquals("8443", saved.resolverDoHPort)
         assertEquals("/query", saved.resolverDoHPath)
+    }
+
+    @Test
+    fun selectingAdvancedProfileRestoresItsCompleteCottenDnsWireConfiguration() {
+        val udpProfile = AdvancedSettingsProfile.fromSettings(
+            settings = WhiteDnsSettings()
+                .applyCottenDnsConfigPreset("udp-only")
+                .copy(
+                    transportMode = "udp",
+                    deliveryMode = "txt",
+                    qnameMode = "off",
+                ),
+            id = "advanced-udp",
+            name = "UDP only",
+        )
+        val dohProfile = AdvancedSettingsProfile.fromSettings(
+            settings = WhiteDnsSettings()
+                .applyCottenDnsConfigPreset("survival")
+                .copy(
+                    transportMode = "doh",
+                    deliveryMode = "txt-https",
+                    qnameMode = "aggressive",
+                    resolverTlsServerName = "dns.example.org",
+                    resolverDoHPort = "8443",
+                    resolverDoHPath = "/dns-query",
+                ),
+            id = "advanced-doh",
+            name = "DoH",
+        )
+        val settings = WhiteDnsSettings(
+            selectedAdvancedProfileId = dohProfile.id,
+            advancedProfiles = listOf(udpProfile, dohProfile),
+        ).applyAdvancedProfile(dohProfile)
+
+        val selectedUdp = settings.selectAdvancedProfile(udpProfile.id)
+        assertEquals("udp-only", selectedUdp.configPreset)
+        assertEquals("udp", selectedUdp.transportMode)
+        assertEquals("txt", selectedUdp.deliveryMode)
+        assertEquals("off", selectedUdp.qnameMode)
+
+        val selectedDoh = selectedUdp.selectAdvancedProfile(dohProfile.id)
+        assertEquals("survival", selectedDoh.configPreset)
+        assertEquals("doh", selectedDoh.transportMode)
+        assertEquals("txt-https", selectedDoh.deliveryMode)
+        assertEquals("aggressive", selectedDoh.qnameMode)
+        assertEquals("dns.example.org", selectedDoh.resolverTlsServerName)
+        assertEquals("8443", selectedDoh.resolverDoHPort)
+        assertEquals("/dns-query", selectedDoh.resolverDoHPath)
     }
 
     @Test
@@ -766,6 +811,20 @@ class WhiteDnsModelsTest {
         assertEquals(24, lowBandwidth.mtuTestParallelismResolvers)
         assertEquals(3.0, lowBandwidth.mtuTestTimeoutResolvers, 0.0)
         assertEquals(45, lowBandwidth.pingWatchdogSeconds)
+    }
+
+    @Test
+    fun selectingBundledPresetClearsStaleManualWireOverrides() {
+        val selected = WhiteDnsSettings(
+            transportMode = "tcp",
+            deliveryMode = "all",
+            qnameMode = "aggressive",
+        ).applyCottenDnsConfigPreset("udp-only")
+
+        assertEquals("udp-only", selected.configPreset)
+        assertEquals("preset", selected.transportMode)
+        assertEquals("preset", selected.deliveryMode)
+        assertEquals("preset", selected.qnameMode)
     }
 
     @Test

@@ -4,11 +4,13 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import shop.whitedns.client.model.AdvancedSettingsProfile
 import shop.whitedns.client.model.ConnectionProfile
 import shop.whitedns.client.model.ResolverProfile
 import shop.whitedns.client.model.WhiteDnsSettings
 import shop.whitedns.client.model.applyCottenDnsConfigPreset
 import shop.whitedns.client.model.importAdvancedSettingsProfileFromToml
+import shop.whitedns.client.model.selectAdvancedProfile
 
 class CottenDnsConfigRendererTest {
     @Test
@@ -418,5 +420,48 @@ class CottenDnsConfigRendererTest {
         assertTrue(toml.contains("RESOLVER_TRANSPORT = \"tcp\""))
         assertTrue(toml.contains("QUERY_TYPES = [\"TXT\", \"HTTPS\"]"))
         assertTrue(toml.contains("QNAME_LABEL_LENGTH = 32"))
+    }
+
+    @Test
+    fun selectingSavedProfileChangesTheRenderedEngineWirePolicy() {
+        val udpProfile = AdvancedSettingsProfile.fromSettings(
+            settings = WhiteDnsSettings()
+                .applyCottenDnsConfigPreset("udp-only"),
+            id = "advanced-udp",
+            name = "UDP",
+        )
+        val tcpProfile = AdvancedSettingsProfile.fromSettings(
+            settings = WhiteDnsSettings()
+                .applyCottenDnsConfigPreset("speed")
+                .copy(
+                    transportMode = "tcp",
+                    deliveryMode = "txt-https",
+                    qnameMode = "aggressive",
+                ),
+            id = "advanced-tcp",
+            name = "TCP",
+        )
+        val settings = WhiteDnsSettings(
+            selectedAdvancedProfileId = tcpProfile.id,
+            advancedProfiles = listOf(udpProfile, tcpProfile),
+        )
+
+        val udpToml = CottenDnsConfigRenderer.renderClientToml(
+            serverProfile = encryptedServerProfile(),
+            settings = settings.selectAdvancedProfile(udpProfile.id),
+        )
+        val tcpToml = CottenDnsConfigRenderer.renderClientToml(
+            serverProfile = encryptedServerProfile(),
+            settings = settings.selectAdvancedProfile(tcpProfile.id),
+        )
+
+        assertTrue(udpToml.contains("CONFIG_PRESET = \"udp-only\""))
+        assertTrue(udpToml.contains("RESOLVER_TRANSPORT = \"udp\""))
+        assertTrue(udpToml.contains("QUERY_TYPES = [\"TXT\"]"))
+        assertTrue(udpToml.contains("QNAME_LABEL_LENGTH = 63"))
+        assertTrue(tcpToml.contains("CONFIG_PRESET = \"speed\""))
+        assertTrue(tcpToml.contains("RESOLVER_TRANSPORT = \"tcp\""))
+        assertTrue(tcpToml.contains("QUERY_TYPES = [\"TXT\", \"HTTPS\"]"))
+        assertTrue(tcpToml.contains("QNAME_LABEL_LENGTH = 32"))
     }
 }
