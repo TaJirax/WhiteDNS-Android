@@ -14,6 +14,22 @@ import shop.whitedns.client.model.selectAdvancedProfile
 
 class CottenDnsConfigRendererTest {
     @Test
+    fun helperConfigIsNonInteractiveAndKeepsIPv6Fallback() {
+        val server = shop.whitedns.client.model.CottenDnsServerProfile(
+            id = "native", label = "Native", domain = "server.example.com",
+            encryptionKey = "test-key", encryptionMethod = 5,
+        )
+        val settings = WhiteDnsSettings()
+        for (toml in listOf(
+            CottenDnsConfigRenderer.renderClientToml(server, settings),
+            CottenDnsConfigRenderer.renderScanClientToml(server, settings),
+        )) {
+            assertTrue(toml.contains("TERMINAL_UI = \"plain\""))
+            assertTrue(toml.contains("RESOLVER_IP_MODE = \"auto\""))
+        }
+    }
+
+    @Test
     fun renderClientTomlFromConnectionProfileIncludesCompleteServerInfo() {
         val resolverProfile = ResolverProfile(
             id = "resolver-main",

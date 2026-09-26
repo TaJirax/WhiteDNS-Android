@@ -46,6 +46,14 @@ type ClientConfig struct {
 	LocalDNSCachePersist      bool     `toml:"LOCAL_DNS_CACHE_PERSIST_TO_FILE"`
 	LocalDNSCacheFlushSec     float64  `toml:"LOCAL_DNS_CACHE_FLUSH_INTERVAL_SECONDS"`
 	ResolverBalancingStrategy int      `toml:"RESOLVER_BALANCING_STRATEGY"`
+	// ResolverIPMode controls which address family carries DNS queries:
+	//   "auto" (default) prefers healthy IPv4 resolvers and automatically falls
+	//          back to healthy IPv6 resolvers when the IPv4 pool is unavailable.
+	//   "dual" balances across both families.
+	//   "ipv4" / "ipv6" restrict selection to one family.
+	// MTU discovery and health checks still exercise every configured resolver in
+	// auto mode, so IPv6 fallback is warm rather than discovered after an outage.
+	ResolverIPMode string `toml:"RESOLVER_IP_MODE"`
 	// QNameLabelLength is the target maximum DNS label length when laying the
 	// tunnel payload into the query name (1..63). The default 63 packs the payload
 	// into the fewest, longest labels (max capacity); a smaller value produces
@@ -73,25 +81,6 @@ type ClientConfig struct {
 	// fatal — the client falls back to UDP and then TCP/53 on its own, so a
 	// blocked TLS port degrades to the survival path instead of no tunnel.
 	ResolverTransport string `toml:"RESOLVER_TRANSPORT"`
-	// PathControllerMode selects the client-only runtime coordinator:
-	// "unified" shares directional path evidence and one redundancy budget
-	// across duplication/FEC/exploration; "legacy" restores the previous
-	// independent decisions without changing the wire protocol.
-	PathControllerMode string `toml:"PATH_CONTROLLER_MODE"`
-	// ComparablePathStriping lets unified mode distribute successive bulk
-	// packets across mature, near-equal resolver paths while sending one copy.
-	ComparablePathStriping bool `toml:"COMPARABLE_PATH_STRIPING"`
-	// ResolverTransportPaths optionally pins individual resolvers to a transport
-	// policy. Keys may be a resolver IP, resolver label (IP:port), or connection
-	// key; values are auto|udp|tcp|dot|doh. "auto" compares UDP and TCP for that
-	// resolver. Explicit udp/tcp stay fixed; dot/doh keep their plain survival
-	// fallbacks. Unlisted resolvers inherit ResolverTransport.
-	ResolverTransportPaths map[string]string `toml:"RESOLVER_TRANSPORT_PATHS"`
-	// ResolverTransportBackgroundScanIntervalSec controls the low-rate active
-	// path check. One resolver is checked at a time at the current session MTU;
-	// zero is finalized to 30 seconds. This keeps alternate path RTT/loss fresh
-	// without competing with user traffic.
-	ResolverTransportBackgroundScanIntervalSec float64 `toml:"RESOLVER_TRANSPORT_BACKGROUND_SCAN_INTERVAL_SECONDS"`
 	// Encrypted-resolver settings, used only by the dot/doh transports.
 	// ResolverTLSServerName is the SNI + certificate name presented to the
 	// resolver (leave empty to use the resolver IP itself). ResolverTLSPin is an
@@ -211,12 +200,16 @@ type ClientConfig struct {
 	// resolvers still yields exactly one session. Higher values connect faster
 	// on lossy networks where any single resolver may be dead, at the cost of
 	// that many queries per attempt. 1 disables racing.
-	SessionInitRacingCount         int               `toml:"SESSION_INIT_RACING_COUNT"`
-	LogLevel                       string            `toml:"LOG_LEVEL"`
-	LogToFile                      bool              `toml:"LOG_TO_FILE"`
-	LogDir                         string            `toml:"LOG_DIR"`
-	LogFileName                    string            `toml:"LOG_FILE_NAME"`
-	StatsReportIntervalSeconds     float64           `toml:"STATS_REPORT_INTERVAL_SECONDS"`
+	SessionInitRacingCount     int     `toml:"SESSION_INIT_RACING_COUNT"`
+	LogLevel                   string  `toml:"LOG_LEVEL"`
+	LogToFile                  bool    `toml:"LOG_TO_FILE"`
+	LogDir                     string  `toml:"LOG_DIR"`
+	LogFileName                string  `toml:"LOG_FILE_NAME"`
+	StatsReportIntervalSeconds float64 `toml:"STATS_REPORT_INTERVAL_SECONDS"`
+	// TerminalUI selects the client console presentation. "auto" uses the
+	// interactive dashboard only on a terminal; "tui" forces it and "plain"
+	// retains line-oriented logs for services, redirection, and integrations.
+	TerminalUI                     string            `toml:"TERMINAL_UI"`
 	StartupMode                    string            `toml:"STARTUP_MODE"`
 	LogScanMaxDays                 int               `toml:"LOG_SCAN_MAX_DAYS"`
 	LogScanMaxResolvers            int               `toml:"LOG_SCAN_MAX_RESOLVERS"`
@@ -321,30 +314,27 @@ type ClientConfigFlagBinder struct {
 
 func defaultClientConfig() ClientConfig {
 	return ClientConfig{
-		ConfigPreset:              "default",
-		ProtocolType:              "SOCKS5",
-		Domains:                   nil,
-		ListenIP:                  "127.0.0.1",
-		ListenPort:                18000,
-		SOCKS5Auth:                false,
-		SOCKS5User:                "master_dns_vpn",
-		SOCKS5Pass:                "master_dns_vpn",
-		LocalDNSEnabled:           false,
-		LocalDNSIP:                "127.0.0.1",
-		LocalDNSPort:              53,
-		LocalDNSCacheMaxRecords:   10000,
-		LocalDNSCacheTTLSeconds:   14400.0,
-		LocalDNSPendingTimeoutSec: 300.0,
-		LocalDNSCachePersist:      true,
-		LocalDNSCacheFlushSec:     60.0,
-		ResolverBalancingStrategy: 3,
-		QNameLabelLength:          63,
-		ResolverRateLimitEnabled:  true,
-		ResolverTransport:         "auto",
-		PathControllerMode:        "unified",
-		ComparablePathStriping:    true,
-		ResolverTransportPaths:    map[string]string{},
-		ResolverTransportBackgroundScanIntervalSec: 30.0,
+		ConfigPreset:                          "default",
+		ProtocolType:                          "SOCKS5",
+		Domains:                               nil,
+		ListenIP:                              "127.0.0.1",
+		ListenPort:                            18000,
+		SOCKS5Auth:                            false,
+		SOCKS5User:                            "master_dns_vpn",
+		SOCKS5Pass:                            "master_dns_vpn",
+		LocalDNSEnabled:                       false,
+		LocalDNSIP:                            "127.0.0.1",
+		LocalDNSPort:                          53,
+		LocalDNSCacheMaxRecords:               10000,
+		LocalDNSCacheTTLSeconds:               14400.0,
+		LocalDNSPendingTimeoutSec:             300.0,
+		LocalDNSCachePersist:                  true,
+		LocalDNSCacheFlushSec:                 60.0,
+		ResolverBalancingStrategy:             3,
+		ResolverIPMode:                        "auto",
+		QNameLabelLength:                      63,
+		ResolverRateLimitEnabled:              true,
+		ResolverTransport:                     "auto",
 		ResolverDoTPort:                       853,
 		ResolverDoHPort:                       443,
 		ResolverDoHPath:                       "/dns-query",
@@ -413,7 +403,7 @@ func defaultClientConfig() ClientConfig {
 		PingWatchdogTimeoutSeconds:           30.0,
 		TXChannelSize:                        32768,
 		RXChannelSize:                        32768,
-		ResolverUDPConnectionPoolSize:        64,
+		ResolverUDPConnectionPoolSize:        1024,
 		StreamQueueInitialCapacity:           512, // per local stream, not global — see clamp below
 		OrphanQueueInitialCapacity:           16384,
 		DNSResponseFragmentStoreCap:          16384,
@@ -432,7 +422,8 @@ func defaultClientConfig() ClientConfig {
 		LogDir:                               "logs",
 		LogFileName:                          "cottendns_{time}.log",
 		StatsReportIntervalSeconds:           5.0,
-		StartupMode:                          "resolvers",
+		TerminalUI:                           "auto",
+		StartupMode:                          "logs",
 		LogScanMaxDays:                       30,
 		LogScanMaxResolvers:                  0,
 		LogBasedMTUVerify:                    true,
@@ -469,16 +460,24 @@ func LoadClientConfig(filename string) (ClientConfig, error) {
 	return finalizeClientConfig(cfg)
 }
 
-// ApplyStartupModeMTU selects the fresh resolver-scan parameters. The mode
-// argument is retained for source compatibility; cached log startup is disabled
-// because resolver reachability and MTU are not reliable across launches.
-func (cfg *ClientConfig) ApplyStartupModeMTU(_ string) {
+// ApplyStartupModeMTU resolves the active MTU-test parameters (MTUTestRetries,
+// MTUTestTimeout, MTUTestParallelism) from the per-mode configuration values
+// based on the supplied startup mode. Any value other than "logs" is treated as
+// the resolvers mode.
+func (cfg *ClientConfig) ApplyStartupModeMTU(mode string) {
 	if cfg == nil {
 		return
 	}
-	cfg.MTUTestRetries = cfg.MTUTestRetriesResolvers
-	cfg.MTUTestTimeout = cfg.MTUTestTimeoutResolvers
-	cfg.MTUTestParallelism = cfg.MTUTestParallelismResolvers
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "logs":
+		cfg.MTUTestRetries = cfg.MTUTestRetriesLogs
+		cfg.MTUTestTimeout = cfg.MTUTestTimeoutLogs
+		cfg.MTUTestParallelism = cfg.MTUTestParallelismLogs
+	default:
+		cfg.MTUTestRetries = cfg.MTUTestRetriesResolvers
+		cfg.MTUTestTimeout = cfg.MTUTestTimeoutResolvers
+		cfg.MTUTestParallelism = cfg.MTUTestParallelismResolvers
+	}
 }
 
 func loadClientConfigFile(filename string) (ClientConfig, error) {
@@ -537,8 +536,8 @@ func LoadClientConfigWithOverrides(filename string, overrides ClientConfigOverri
 		return cfg, err
 	}
 
-	// Explicit resolvers supplied by an embedding or CLI integration override the
-	// file-loaded list after the rest of the configuration has been validated.
+	// When explicit resolvers are provided (e.g. from log-based startup), override the
+	// file-loaded ones after finalization so the rest of the config is still validated.
 	if len(overrides.Resolvers) > 0 {
 		cfg.Resolvers = overrides.Resolvers
 		rm := make(map[string]int, len(overrides.Resolvers))
@@ -553,8 +552,8 @@ func LoadClientConfigWithOverrides(filename string, overrides ClientConfigOverri
 
 func finalizeClientConfig(cfg ClientConfig) (ClientConfig, error) {
 	cfg.ConfigPreset = normalizeConfigPresetName(cfg.ConfigPreset)
-	if !isKnownClientConfigPreset(cfg.ConfigPreset) {
-		return cfg, fmt.Errorf("invalid CONFIG_PRESET: %q (valid: %s)", cfg.ConfigPreset, clientConfigPresetNames)
+	if !isKnownConfigPreset(cfg.ConfigPreset) {
+		return cfg, fmt.Errorf("invalid CONFIG_PRESET: %q (valid: default, speed, survival, tcp-survival)", cfg.ConfigPreset)
 	}
 
 	cfg.ProtocolType = strings.ToUpper(strings.TrimSpace(cfg.ProtocolType))
@@ -635,6 +634,26 @@ func finalizeClientConfig(cfg ClientConfig) (ClientConfig, error) {
 		return cfg, fmt.Errorf("invalid RESOLVER_BALANCING_STRATEGY: %d", cfg.ResolverBalancingStrategy)
 	}
 
+	cfg.ResolverIPMode = strings.ToLower(strings.TrimSpace(cfg.ResolverIPMode))
+	if cfg.ResolverIPMode == "" {
+		cfg.ResolverIPMode = "auto"
+	}
+	switch cfg.ResolverIPMode {
+	case "auto", "dual", "ipv4", "ipv6":
+	default:
+		return cfg, fmt.Errorf("invalid RESOLVER_IP_MODE: %q (valid: auto, dual, ipv4, ipv6)", cfg.ResolverIPMode)
+	}
+
+	cfg.TerminalUI = strings.ToLower(strings.TrimSpace(cfg.TerminalUI))
+	if cfg.TerminalUI == "" {
+		cfg.TerminalUI = "auto"
+	}
+	switch cfg.TerminalUI {
+	case "auto", "tui", "plain":
+	default:
+		return cfg, fmt.Errorf("invalid TERMINAL_UI: %q (valid: auto, tui, plain)", cfg.TerminalUI)
+	}
+
 	if cfg.QNameLabelLength <= 0 || cfg.QNameLabelLength > 63 {
 		cfg.QNameLabelLength = 63
 	}
@@ -674,40 +693,6 @@ func finalizeClientConfig(cfg ClientConfig) (ClientConfig, error) {
 	default:
 		return cfg, fmt.Errorf("invalid RESOLVER_TRANSPORT: %q (want auto|udp|tcp|dot|doh)", cfg.ResolverTransport)
 	}
-	switch strings.ToLower(strings.TrimSpace(cfg.PathControllerMode)) {
-	case "", "unified":
-		cfg.PathControllerMode = "unified"
-	case "legacy":
-		cfg.PathControllerMode = "legacy"
-	default:
-		return cfg, fmt.Errorf("invalid PATH_CONTROLLER_MODE: %q (want unified|legacy)", cfg.PathControllerMode)
-	}
-	if cfg.ResolverTransportPaths == nil {
-		cfg.ResolverTransportPaths = map[string]string{}
-	}
-	normalizedTransportPaths := make(map[string]string, len(cfg.ResolverTransportPaths))
-	for rawResolver, rawTransport := range cfg.ResolverTransportPaths {
-		resolver := strings.TrimSpace(rawResolver)
-		if resolver == "" {
-			return cfg, fmt.Errorf("RESOLVER_TRANSPORT_PATHS contains an empty resolver key")
-		}
-		transport := strings.ToLower(strings.TrimSpace(rawTransport))
-		switch transport {
-		case "auto", "udp", "tcp", "dot", "doh":
-		default:
-			return cfg, fmt.Errorf(
-				"invalid RESOLVER_TRANSPORT_PATHS value for %q: %q (want auto|udp|tcp|dot|doh)",
-				resolver, rawTransport,
-			)
-		}
-		normalizedTransportPaths[resolver] = transport
-	}
-	cfg.ResolverTransportPaths = normalizedTransportPaths
-	cfg.ResolverTransportBackgroundScanIntervalSec = clampFloat(
-		defaultFloatAtMostZero(cfg.ResolverTransportBackgroundScanIntervalSec, 30.0),
-		5.0,
-		3600.0,
-	)
 	cfg.ResolverDoTPort = clampInt(defaultIntBelow(cfg.ResolverDoTPort, 1, 853), 1, 65535)
 	cfg.ResolverDoHPort = clampInt(defaultIntBelow(cfg.ResolverDoHPort, 1, 443), 1, 65535)
 	if cfg.ResolverDoHPath == "" || cfg.ResolverDoHPath[0] != '/' {
@@ -802,10 +787,7 @@ func finalizeClientConfig(cfg ClientConfig) (ClientConfig, error) {
 	cfg.PingWatchdogTimeoutSeconds = clampFloat(defaultFloatAtMostZero(cfg.PingWatchdogTimeoutSeconds, 30.0), 10.0, 3600.0)
 	cfg.TXChannelSize = clampInt(defaultIntBelow(cfg.TXChannelSize, 1, 32768), 64, 262144)
 	cfg.RXChannelSize = clampInt(defaultIntBelow(cfg.RXChannelSize, 1, 32768), 64, 262144)
-	// This pool is per resolver, so a large value multiplies across the fleet.
-	// Sixty-four already exceeds normal per-resolver worker concurrency without
-	// risking thousands of retained sockets on a large resolver list.
-	cfg.ResolverUDPConnectionPoolSize = clampInt(defaultIntBelow(cfg.ResolverUDPConnectionPoolSize, 1, 64), 1, 1024)
+	cfg.ResolverUDPConnectionPoolSize = clampInt(defaultIntBelow(cfg.ResolverUDPConnectionPoolSize, 1, 64), 1, 4096)
 	// Sizes a census map allocated once per local stream: ~2.3 MiB/stream at
 	// 65536 vs ~19 KiB at 512. A browser's worth of streams at the large value
 	// OOMs Android, so both the default and this ceiling stay small.
@@ -835,12 +817,12 @@ func finalizeClientConfig(cfg ClientConfig) (ClientConfig, error) {
 	}
 	cfg.StartupMode = strings.ToLower(strings.TrimSpace(cfg.StartupMode))
 	switch cfg.StartupMode {
-	case "", "ask", "logs", "resolvers":
-		// "ask" and the former "logs" mode are compatibility aliases. Every
-		// launch now validates the complete current resolver environment.
-		cfg.StartupMode = "resolvers"
+	case "", "ask":
+		cfg.StartupMode = "ask"
+	case "resolvers", "logs":
+		// valid
 	default:
-		cfg.StartupMode = "resolvers"
+		cfg.StartupMode = "ask"
 	}
 	if cfg.LogScanMaxDays < 0 {
 		cfg.LogScanMaxDays = 0
@@ -1125,7 +1107,7 @@ func (c ClientStartupPreConfig) ResolvedLogDir() string {
 // decoded. This is intentionally lenient so the startup prompt can always be shown.
 func PeekClientStartupConfig(configPath string) ClientStartupPreConfig {
 	pre := ClientStartupPreConfig{
-		StartupMode:         "resolvers",
+		StartupMode:         "ask",
 		LogDir:              "logs",
 		LogScanMaxDays:      30,
 		LogScanMaxResolvers: 0,
@@ -1142,10 +1124,12 @@ func PeekClientStartupConfig(configPath string) ClientStartupPreConfig {
 
 	pre.StartupMode = strings.ToLower(strings.TrimSpace(pre.StartupMode))
 	switch pre.StartupMode {
-	case "", "ask", "logs", "resolvers":
-		pre.StartupMode = "resolvers"
+	case "", "ask":
+		pre.StartupMode = "ask"
+	case "resolvers", "logs":
+		// valid
 	default:
-		pre.StartupMode = "resolvers"
+		pre.StartupMode = "ask"
 	}
 	if pre.LogScanMaxDays < 0 {
 		pre.LogScanMaxDays = 0

@@ -313,6 +313,9 @@ object CottenDnsConfigRenderer {
     ) {
         appendLine("LISTEN_IP = \"${escape(listenIp)}\"")
         appendLine("LISTEN_PORT = $listenPort")
+        // GUI-supervised helpers keep stdout telemetry and permit IPv6 fallback.
+        appendLine("TERMINAL_UI = \"plain\"")
+        appendLine("RESOLVER_IP_MODE = \"auto\"")
         appendLine("SOCKS5_AUTH = ${resolved.socks5Authentication}")
         appendLine("SOCKS5_USER = \"${escape(resolved.socksUsername)}\"")
         appendLine("SOCKS5_PASS = \"${escape(resolved.socksPassword)}\"")

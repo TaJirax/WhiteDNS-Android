@@ -1,0 +1,6 @@
+repository=TaJirax/cottenDNS
+commit=cdf084f528c5833eeb77f1b9a29ecf0ceae89f86
+version=v2026.09.25.185911-cdf084f
+android_api=26
+asset=CottenDNS-Android-v2026.09.25.185911-cdf084f.zip
+sha256=0e3a2fcba5b4066e5e0f83d7a822b1e785765ccf345f894953f2a4853261030c

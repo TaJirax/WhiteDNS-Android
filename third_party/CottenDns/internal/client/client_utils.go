@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"cottendns-go/internal/arq"
+	"cottendns-go/internal/config"
 	Enums "cottendns-go/internal/enums"
 	"cottendns-go/internal/logger"
 	"cottendns-go/internal/version"
@@ -54,10 +55,11 @@ func fragmentPayload(payload []byte, mtu int) [][]byte {
 }
 
 func formatResolverEndpoint(resolver string, port int) string {
-	if strings.IndexByte(resolver, ':') >= 0 && !strings.HasPrefix(resolver, "[") {
-		return fmt.Sprintf("[%s]:%d", resolver, port)
+	host := strings.TrimSpace(resolver)
+	if len(host) >= 2 && host[0] == '[' && host[len(host)-1] == ']' {
+		host = host[1 : len(host)-1]
 	}
-	return fmt.Sprintf("%s:%d", resolver, port)
+	return net.JoinHostPort(host, strconv.Itoa(port))
 }
 
 func makeConnectionKey(resolver string, port int, domain string) string {
@@ -521,7 +523,7 @@ func (c *Client) ShortPrintBanner() {
 	}
 
 	c.log.Infof("============================================================")
-	c.log.Infof("<cyan>GitHub:</cyan> <yellow>https://github.com/TaJirax/CottenDns</yellow>")
+	c.log.Infof("<cyan>GitHub:</cyan> <yellow>https://github.com/WhiteDNS/CottenDns</yellow>")
 	c.log.Infof("<cyan>Telegram:</cyan> <yellow>https://t.me/whitedns</yellow>")
 	c.log.Infof("<cyan>Build Version:</cyan> <yellow>%s</yellow>", version.GetVersion())
 	c.log.Infof("============================================================")
@@ -569,10 +571,25 @@ func (c *Client) Connections() []Connection {
 func (c *Client) BuildConnectionMap() error {
 	domains := c.cfg.Domains
 	resolvers := c.cfg.Resolvers
+	if c.cfg.ResolverIPMode == "ipv4" || c.cfg.ResolverIPMode == "ipv6" {
+		filtered := make([]config.ResolverAddress, 0, len(resolvers))
+		wantIPv6 := c.cfg.ResolverIPMode == "ipv6"
+		for _, resolver := range resolvers {
+			isIPv6 := resolverAddressIsIPv6(resolver.IP)
+			isIPv4 := net.ParseIP(resolver.IP) != nil && !isIPv6
+			if (wantIPv6 && isIPv6) || (!wantIPv6 && isIPv4) {
+				filtered = append(filtered, resolver)
+			}
+		}
+		resolvers = filtered
+	}
 
 	total := len(domains) * len(resolvers)
 	if total <= 0 {
-		return fmt.Errorf("Domains or Resolvers are missing in config.")
+		if len(domains) == 0 {
+			return fmt.Errorf("domains are missing in config")
+		}
+		return fmt.Errorf("no %s resolvers are available for RESOLVER_IP_MODE=%q", strings.ToUpper(c.cfg.ResolverIPMode), c.cfg.ResolverIPMode)
 	}
 
 	connections := make([]Connection, 0, total)
@@ -587,16 +604,14 @@ func (c *Client) BuildConnectionMap() error {
 			}
 
 			indexByKey[key] = len(connections)
-			connection := Connection{
+			connections = append(connections, Connection{
 				Domain:        domain,
 				Resolver:      resolver.IP,
 				ResolverPort:  resolver.Port,
 				ResolverLabel: label,
 				Key:           key,
 				IsValid:       true,
-			}
-			connection.networkGroup = resolverNetworkGroup(connection)
-			connections = append(connections, connection)
+			})
 			if ip := net.ParseIP(resolver.IP); ip != nil {
 				c.resolverAddrCache[label] = &net.UDPAddr{IP: ip, Port: resolver.Port}
 			}

@@ -38,6 +38,12 @@ const (
 	// 1/8 = 12.5%) before the session adopts it, so flapping resolvers do not
 	// churn the session MTU. Stranded (unsustainable) points always move.
 	mtuHysteresisDivisor = 8
+	// The MTU scan owns the middle of the connect progress bar: it starts where
+	// the "starting" phase leaves off and stops below the "selecting" phase, so
+	// the bar only ever moves forward.
+	mtuProgressStartPercent = 10
+	mtuProgressSpanPercent  = 70
+	mtuProgressInterval     = 250 * time.Millisecond
 )
 
 var (
@@ -60,8 +66,9 @@ const (
 )
 
 type mtuProbeOptions struct {
-	IsRetry bool
-	Quiet   bool
+	IsRetry   bool
+	Quiet     bool
+	QueryType uint16
 }
 
 type mtuConnectionProbeResult struct {
@@ -80,20 +87,60 @@ type mtuScanCounters struct {
 	rejectDownload atomic.Int32
 }
 
-// RunInitialMTUTests probes every resolver over its configured transport chain.
-// Auto measures UDP and TCP/53 independently; explicit DoT/DoH measures the
-// encrypted path and its plain survival fallbacks. Each resolver keeps the
-// fastest healthy path that can sustain the negotiated session MTU.
+// RunInitialMTUTests tests all connections before the client starts, walking a
+// transport fallback chain until one carries the tunnel:
+//
+//	"udp" / "tcp" — that transport only, no fallback.
+//	"auto"        — UDP, then TCP/53 (a network that blocks or truncates UDP).
+//	"dot" / "doh" — the chosen encrypted transport, then UDP, then TCP/53.
+//
+// The encrypted transports are deliberately *opt-in only*: nothing ever escalates
+// into them, because they exist to disguise the resolver hop, not to rescue a
+// broken one. But choosing one is not a commitment — if the TLS port is blocked
+// (a common censorship response) the client silently degrades to the plain
+// survival transports rather than failing to connect at all.
 func (c *Client) RunInitialMTUTests(ctx context.Context) error {
 	if len(c.connections) == 0 {
 		return ErrNoValidConnections
 	}
 
 	chain := resolverTransportChain(c.cfg.ResolverTransport)
-	if len(chain) > 0 {
-		c.setActiveTransport(chain[0])
+	var firstErr error
+	for i, transport := range chain {
+		c.setActiveTransport(transport)
+		if i > 0 {
+			if c.log != nil {
+				c.log.Warnf(
+					"<yellow>No resolvers passed over %s — retrying the whole fleet over %s…</yellow>",
+					chain[i-1], transport,
+				)
+			}
+			for idx := range c.connections {
+				c.prepareConnectionMTUScanState(&c.connections[idx])
+			}
+		}
+
+		err := c.runMTUScan(ctx)
+		if err == nil {
+			if i > 0 && c.log != nil {
+				c.log.Infof("<green>✅ Resolver transport fell back to %s.</green>", transport)
+			}
+			return nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+		// Only "no usable resolver" is a transport problem worth falling back on;
+		// anything else (cancellation, config) would fail identically elsewhere.
+		if !errors.Is(err, ErrNoValidConnections) {
+			c.setActiveTransport(chain[0])
+			return err
+		}
 	}
-	return c.runMTUScan(ctx)
+
+	// Nothing worked — restore the configured transport so state is predictable.
+	c.setActiveTransport(chain[0])
+	return firstErr
 }
 
 func (c *Client) runMTUScan(ctx context.Context) error {
@@ -272,6 +319,11 @@ func (c *Client) finalizeMTUSelection(validConns []Connection, minUpload, minDow
 }
 
 func (c *Client) finalizeMTUSelectionLocked(validConns []Connection, minUpload, minDownload, minUploadChars int) []Connection {
+	validConns = c.resolverConnectionsForOperatingPoint(validConns)
+	if len(validConns) == 0 {
+		return nil
+	}
+	_, minUpload, minDownload, minUploadChars = summarizeValidMTUConnections(validConns)
 	// Cluster the full validated set BEFORE any demotion so every tier (including
 	// the slower ones that may be demoted) is visible in the UI.
 	groups := clusterConnectionsByMTU(c.connections, c.cfg.MTUGroupGapRatio)
@@ -356,7 +408,7 @@ func (c *Client) recomputeMTUOperatingPoint() {
 	if c == nil || !c.cfg.MTUAdaptiveGrouping || c.balancer == nil {
 		return
 	}
-	conns := c.balancer.AllValidConnectionsIncludingBackup()
+	conns := c.resolverConnectionsForOperatingPoint(c.balancer.AllValidConnectionsIncludingBackup())
 	if len(conns) == 0 {
 		return
 	}
@@ -599,6 +651,9 @@ func (c *Client) runConnectionMTUTest(ctx context.Context, conn *Connection, ser
 	if conn == nil {
 		return
 	}
+	// Registered before the recover below so it runs after it: every exit path,
+	// panic included, has updated the counters by the time progress is reported.
+	defer c.logMTUProgress(counters, total)
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			c.mtuStateMu.Lock()
@@ -720,56 +775,9 @@ func (c *Client) runConnectionMTUTest(ctx context.Context, conn *Connection, ser
 }
 
 func (c *Client) probeConnectionMTU(ctx context.Context, conn *Connection, maxUploadPayload int) (mtuConnectionProbeResult, mtuRejectReason) {
-	if conn == nil {
-		return mtuConnectionProbeResult{}, mtuRejectUpload
-	}
-	transports := c.resolverTransportCandidates(conn.Key)
-	if len(transports) == 0 {
-		transports = []resolverTransport{c.activeTransport()}
-	}
-
-	var (
-		chosen       mtuConnectionProbeResult
-		chosenReason = mtuRejectUpload
-		chosenOK     bool
-	)
-	for _, transport := range transports {
-		result, reason := c.probeConnectionMTUOver(ctx, conn, maxUploadPayload, transport)
-		ok := reason == mtuRejectNone
-		c.noteResolverTransportProbe(conn.Key, transport, result, ok, c.now())
-		if !ok {
-			// Preserve the most advanced rejection for useful diagnostics.
-			if reason == mtuRejectDownload {
-				chosen, chosenReason = result, reason
-			}
-			continue
-		}
-
-		// Keep probing the full chain so every alternate is warm and measured,
-		// but synchronize the session from the first viable configured path.
-		// For "auto" that is UDP. A one-off faster/wider TCP probe must not set a
-		// session MTU that excludes otherwise usable UDP before real traffic has
-		// compared the paths. If UDP is rejected, TCP naturally becomes the
-		// first viable result.
-		if !chosenOK {
-			chosen, chosenReason, chosenOK = result, mtuRejectNone, true
-		}
-	}
-	return chosen, chosenReason
-}
-
-func (c *Client) probeConnectionMTUOver(
-	ctx context.Context,
-	conn *Connection,
-	maxUploadPayload int,
-	transport resolverTransport,
-) (mtuConnectionProbeResult, mtuRejectReason) {
-	if c.probeConnectionMTUOverFn != nil {
-		return c.probeConnectionMTUOverFn(ctx, conn, maxUploadPayload, transport)
-	}
 	var result mtuConnectionProbeResult
 
-	probeTransport, err := c.newQueryTransportOver(conn.ResolverLabel, transport)
+	probeTransport, err := c.newQueryTransport(conn.ResolverLabel)
 	if err != nil {
 		return result, mtuRejectUpload
 	}
@@ -823,42 +831,54 @@ func (c *Client) testUploadMTU(ctx context.Context, conn *Connection, probeTrans
 		maxPayload = maxLimit
 	}
 
-	best, bestRTT, bestLoss := c.binarySearchMTU(
-		ctx,
-		"upload mtu",
-		c.cfg.MinUploadMTU,
-		maxPayload,
-		func(candidate int, isRetry bool) (bool, time.Duration, error) {
-			return c.sendUploadMTUProbe(ctx, conn, probeTransport, candidate, mtuProbeOptions{
-				IsRetry: isRetry,
-			})
-		},
-	)
-	if best < max(defaultMTUMinFloor, c.cfg.MinUploadMTU) {
-		return false, 0, 0, 0, 0, nil
+	for _, qType := range c.mtuProbeQueryTypes(false) {
+		best, bestRTT, bestLoss := c.binarySearchMTU(
+			ctx,
+			"upload mtu",
+			c.cfg.MinUploadMTU,
+			maxPayload,
+			func(candidate int, isRetry bool) (bool, time.Duration, error) {
+				return c.sendUploadMTUProbe(ctx, conn, probeTransport, candidate, mtuProbeOptions{
+					IsRetry:   isRetry,
+					QueryType: qType,
+				})
+			},
+		)
+		if best >= max(defaultMTUMinFloor, c.cfg.MinUploadMTU) {
+			return true, best, c.encodedCharsForPayload(best), bestRTT, bestLoss, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return false, 0, 0, 0, 0, err
+		}
 	}
-	return true, best, c.encodedCharsForPayload(best), bestRTT, bestLoss, nil
+	return false, 0, 0, 0, 0, nil
 }
 
 func (c *Client) testDownloadMTU(ctx context.Context, conn *Connection, probeTransport queryExchanger, uploadMTU int) (bool, int, time.Duration, float64, error) {
 	if c.log != nil && c.log.Enabled(logger.LevelDebug) {
 		c.log.Debugf("<cyan>[MTU]</cyan> Testing download MTU for %s", conn.Domain)
 	}
-	best, bestRTT, bestLoss := c.binarySearchMTU(
-		ctx,
-		"download mtu",
-		c.cfg.MinDownloadMTU,
-		c.cfg.MaxDownloadMTU,
-		func(candidate int, isRetry bool) (bool, time.Duration, error) {
-			return c.sendDownloadMTUProbe(ctx, conn, probeTransport, candidate, uploadMTU, mtuProbeOptions{
-				IsRetry: isRetry,
-			})
-		},
-	)
-	if best < max(defaultMTUMinFloor, c.cfg.MinDownloadMTU) {
-		return false, 0, 0, 0, nil
+	for _, qType := range c.mtuProbeQueryTypes(true) {
+		best, bestRTT, bestLoss := c.binarySearchMTU(
+			ctx,
+			"download mtu",
+			c.cfg.MinDownloadMTU,
+			c.cfg.MaxDownloadMTU,
+			func(candidate int, isRetry bool) (bool, time.Duration, error) {
+				return c.sendDownloadMTUProbe(ctx, conn, probeTransport, candidate, uploadMTU, mtuProbeOptions{
+					IsRetry:   isRetry,
+					QueryType: qType,
+				})
+			},
+		)
+		if best >= max(defaultMTUMinFloor, c.cfg.MinDownloadMTU) {
+			return true, best, bestRTT, bestLoss, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return false, 0, 0, 0, err
+		}
 	}
-	return true, best, bestRTT, bestLoss, nil
+	return false, 0, 0, 0, nil
 }
 
 func (c *Client) binarySearchMTU(ctx context.Context, label string, minValue, maxValue int, testFn func(int, bool) (bool, time.Duration, error)) (int, time.Duration, float64) {
@@ -1052,7 +1072,7 @@ func (c *Client) sendUploadMTUProbe(ctx context.Context, conn *Connection, probe
 		return false, 0, err
 	}
 
-	query, err := c.buildMTUProbeQuery(conn.Domain, Enums.PACKET_MTU_UP_REQ, payload)
+	query, err := c.buildMTUProbeQuery(conn.Domain, Enums.PACKET_MTU_UP_REQ, payload, options.QueryType)
 	if err != nil {
 		return false, 0, nil
 	}
@@ -1072,7 +1092,7 @@ func (c *Client) sendUploadMTUProbe(ctx context.Context, conn *Connection, probe
 	}
 	rtt := time.Since(startedAt)
 
-	packet, err := DnsParser.ExtractVPNResponseMatching(response, useBase64, c.cfg.Domains)
+	packet, err := c.extractVPNResponse(response, useBase64)
 	if err != nil {
 		c.logMTUProbe(
 			options.IsRetry,
@@ -1166,8 +1186,18 @@ func (c *Client) sendDownloadMTUProbe(ctx context.Context, conn *Connection, pro
 	}
 	binary.BigEndian.PutUint16(payload[1+mtuProbeCodeLength:1+mtuProbeCodeLength+2], uint16(effectiveDownloadSize))
 
-	query, err := c.buildMTUProbeQuery(conn.Domain, Enums.PACKET_MTU_DOWN_REQ, payload)
+	query, err := c.buildMTUProbeQuery(conn.Domain, Enums.PACKET_MTU_DOWN_REQ, payload, options.QueryType)
 	if err != nil {
+		return false, 0, nil
+	}
+	// Small carriers must carry the complete encrypted frame in their own RR
+	// type. A direct resolver may accept the server's oversized TXT fallback,
+	// but recursive resolvers strip it; accepting that probe would strand data.
+	frameSize := effectiveDownloadSize + VpnProto.HeaderRawSize(Enums.PACKET_MTU_DOWN_RES)
+	if c.encryptedDownstream() {
+		frameSize += c.codec.CiphertextOverhead()
+	}
+	if frameSize > DnsParser.MatchingFrameCapacity(query, conn.Domain, true, true) {
 		return false, 0, nil
 	}
 
@@ -1185,8 +1215,26 @@ func (c *Client) sendDownloadMTUProbe(ctx context.Context, conn *Connection, pro
 		return false, 0, nil
 	}
 	rtt := time.Since(startedAt)
+	if qType, ok := DnsParser.FirstQuestionQType(query); ok && !isBulkQueryType(qType) {
+		// A/AAAA delivery can be disabled on the server. Direct connections
+		// may still return an oversized TXT fallback that recursive resolvers
+		// discard, so only the requested carrier or CNAME proves capacity.
+		parsed, parseErr := DnsParser.ParsePacket(response)
+		matched := false
+		if parseErr == nil {
+			for _, answer := range parsed.Answers {
+				if answer.Type == qType || answer.Type == Enums.DNS_RECORD_TYPE_CNAME {
+					matched = true
+					break
+				}
+			}
+		}
+		if !matched {
+			return false, 0, nil
+		}
+	}
 
-	packet, err := DnsParser.ExtractVPNResponseMatching(response, useBase64, c.cfg.Domains)
+	packet, err := c.extractVPNResponse(response, useBase64)
 	if err != nil {
 		c.logMTUProbe(
 			options.IsRetry,
@@ -1266,8 +1314,15 @@ func (c *Client) sendDownloadMTUProbe(ctx context.Context, conn *Connection, pro
 	return ok, rtt, nil
 }
 
-func (c *Client) buildMTUProbeQuery(domain string, packetType uint8, payload []byte) ([]byte, error) {
-	return c.buildTunnelTXTQueryRaw(domain, VpnProto.BuildOptions{
+func (c *Client) buildMTUProbeQuery(domain string, packetType uint8, payload []byte, queryTypes ...uint16) ([]byte, error) {
+	qType := uint16(0)
+	if len(queryTypes) > 0 {
+		qType = queryTypes[0]
+	}
+	if qType == 0 {
+		qType = c.mtuProbeQueryTypes(packetType == Enums.PACKET_MTU_DOWN_REQ)[0]
+	}
+	return c.buildTunnelQueryRawWithType(domain, VpnProto.BuildOptions{
 		LegacySessionID: c.cfg.LegacySessionID,
 		SessionID:       255,
 		PacketType:      packetType,
@@ -1276,7 +1331,7 @@ func (c *Client) buildMTUProbeQuery(domain string, packetType uint8, payload []b
 		FragmentID:      0,
 		TotalFragments:  1,
 		Payload:         payload,
-	})
+	}, qType)
 }
 
 func (c *Client) maxUploadMTUPayload(domain string) int {
@@ -1339,10 +1394,7 @@ func (c *Client) buildMTUProbePayload(length int) ([]byte, uint32, bool, error) 
 
 	payload := make([]byte, length)
 	useBase64 := c != nil && c.cfg.BaseEncodeData
-	payload[0] = mtuProbeRawResponse
-	if useBase64 {
-		payload[0] = mtuProbeBase64Reply
-	}
+	payload[0] = c.configuredResponseMode()
 
 	code := c.mtuProbeCounter.Add(1)
 	binary.BigEndian.PutUint32(payload[1:1+mtuProbeCodeLength], code)
