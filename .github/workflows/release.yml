@@ -53,6 +53,9 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
 
       - name: Install Android SDK packages
         run: |
@@ -74,9 +77,11 @@ jobs:
       - name: Build vendored CottenDns native clients
         run: |
           set -euo pipefail
-          make CottenDns \
+          BUILD_VERSION="$(sed -n 's/^commit=//p' third_party/CottenDns.UPSTREAM)" \
             NDK_HOST=linux-x86_64 \
-            NDK_ROOT="${ANDROID_HOME}/ndk/${CottenDns_ANDROID_NDK_VERSION}"
+            NDK_ROOT="${ANDROID_HOME}/ndk/${CottenDns_ANDROID_NDK_VERSION}" \
+            OUTPUT_DIR="$PWD/app/src/main/jniLibs" \
+            bash third_party/CottenDns/scripts/build-android-client.sh all
 
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest
