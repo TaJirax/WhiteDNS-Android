@@ -408,7 +408,13 @@ class CottenDnsConfigRendererTest {
                 settings = WhiteDnsSettings().applyCottenDnsConfigPreset(preset),
             )
 
-            assertTrue(preset, toml.contains("CONFIG_PRESET = \"$preset\""))
+            val engineBase = mapOf(
+                "speed" to "speed", "udp-only" to "speed",
+                "survival" to "survival", "tcp-survival" to "tcp-survival",
+                "iran" to "survival", "china" to "survival", "russia" to "survival",
+                "venezuela" to "survival", "cuba" to "survival", "low-bandwidth" to "survival",
+            ).getValue(preset)
+            assertTrue(preset, toml.contains("CONFIG_PRESET = \"$engineBase\""))
             assertTrue(preset, toml.contains("RESOLVER_TRANSPORT = \"${values.first}\""))
             assertTrue(preset, toml.contains("QUERY_TYPES = ${values.second}"))
             assertTrue(preset, toml.contains("MTU_MAX_LOSS = ${values.third}"))
@@ -432,7 +438,7 @@ class CottenDnsConfigRendererTest {
                 ),
         )
 
-        assertTrue(toml.contains("CONFIG_PRESET = \"iran\""))
+        assertTrue(toml.contains("CONFIG_PRESET = \"survival\""))
         assertTrue(toml.contains("RESOLVER_TRANSPORT = \"tcp\""))
         assertTrue(toml.contains("QUERY_TYPES = [\"TXT\", \"HTTPS\"]"))
         assertTrue(toml.contains("QNAME_LABEL_LENGTH = 32"))
@@ -471,7 +477,7 @@ class CottenDnsConfigRendererTest {
             settings = settings.selectAdvancedProfile(tcpProfile.id),
         )
 
-        assertTrue(udpToml.contains("CONFIG_PRESET = \"udp-only\""))
+        assertTrue(udpToml.contains("CONFIG_PRESET = \"speed\""))
         assertTrue(udpToml.contains("RESOLVER_TRANSPORT = \"udp\""))
         assertTrue(udpToml.contains("QUERY_TYPES = [\"TXT\"]"))
         assertTrue(udpToml.contains("QNAME_LABEL_LENGTH = 63"))

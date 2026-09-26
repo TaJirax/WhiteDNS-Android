@@ -173,8 +173,11 @@ object CottenDnsConfigRenderer {
             return "default"
         }
         return when (preset) {
-            "speed", "udp-only", "survival", "tcp-survival",
-            "iran", "china", "russia", "venezuela", "cuba", "low-bandwidth" -> preset
+            "speed", "survival", "tcp-survival" -> preset
+            "udp-only" -> "speed"
+            // Regional profiles remain app presets with explicit runtime
+            // overrides. The pinned core accepts only its four base presets.
+            "iran", "china", "russia", "venezuela", "cuba", "low-bandwidth" -> "survival"
             else -> "default" // "default" and "master-storm"
         }
     }
